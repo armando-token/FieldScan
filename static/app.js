@@ -139,6 +139,9 @@ const state = {
   modbusHealthy: false,
   wasModbusHealthy: false,
   emeraldVerifyUntil: 0,
+  occlusionFiltered: false,
+  handDetected: false,
+  toolDetected: false,
 };
 
 /* ==========================================================================
@@ -172,6 +175,7 @@ const dom = {
   videoStream: document.getElementById('videoStream'),
   videoFallbackCanvas: document.getElementById('videoFallbackCanvas'),
   hudSensorId: document.getElementById('hudSensorId'),
+  hudIsolationPill: document.getElementById('hudIsolationPill'),
   hudStatusTag: document.getElementById('hudStatusTag'),
   scanDimVal: document.getElementById('scanDimVal'),
   scanCoverageVal: document.getElementById('scanCoverageVal'),
@@ -187,6 +191,7 @@ const dom = {
   dipSwitchesRow: document.getElementById('dipSwitchesRow'),
   dipPinSummary: document.getElementById('dipPinSummary'),
 
+  isolationGuardBadge: document.getElementById('isolationGuardBadge'),
   twinMatchBadge: document.getElementById('twinMatchBadge'),
   btnModeSolid: document.getElementById('btnModeSolid'),
   btnModeWireframe: document.getElementById('btnModeWireframe'),
@@ -2068,9 +2073,42 @@ function applyTelemetryPayload(data) {
     dom.pillLatencyText.textContent = `${Math.round(Number(latMs))} ms${tpsText}`;
   }
 
-  // 4. Scanner Angle, Metrology & Multi-Angle Scan Coverage Progress
+  // 4. Operator Hand & Screwdriver Spatial Exclusion Filter + Scanner Angle & Metrology
+  const handDet = Boolean(vision.hand_detected);
+  const toolDet = Boolean(vision.tool_detected);
+  const occActive = Boolean(vision.occlusion_filtered || handDet || toolDet);
+  state.handDetected = handDet;
+  state.toolDetected = toolDet;
+  state.occlusionFiltered = occActive;
+
+  if (dom.isolationGuardBadge) {
+    dom.isolationGuardBadge.classList.toggle('is-filtering', occActive);
+    if (handDet && toolDet) {
+      dom.isolationGuardBadge.textContent = 'HAND + TOOL MASKED · SENSOR ONLY';
+    } else if (handDet) {
+      dom.isolationGuardBadge.textContent = 'HAND MASKED · SENSOR ONLY';
+    } else if (toolDet) {
+      dom.isolationGuardBadge.textContent = 'TOOL MASKED · SENSOR ONLY';
+    } else {
+      dom.isolationGuardBadge.textContent = '3D LOCK: SENSOR ONLY';
+    }
+  }
+
+  if (dom.hudIsolationPill) {
+    dom.hudIsolationPill.hidden = !occActive;
+    if (handDet && toolDet) {
+      dom.hudIsolationPill.textContent = 'HAND + SCREWDRIVER IGNORED IN 3D';
+    } else if (handDet) {
+      dom.hudIsolationPill.textContent = 'OPERATOR HAND IGNORED IN 3D';
+    } else if (toolDet) {
+      dom.hudIsolationPill.textContent = 'SCREWDRIVER / TOOL IGNORED IN 3D';
+    }
+  }
+
   if (typeof vision.angle_deg === 'number') {
-    state.cameraAngleDeg = vision.angle_deg;
+    if (!occActive) {
+      state.cameraAngleDeg = vision.angle_deg;
+    }
     dom.scanAngleVal.textContent = `${vision.angle_deg.toFixed(1)}°`;
 
     state.scanFramesObserved += 1;
@@ -2214,10 +2252,15 @@ async function switchCameraMode(mode) {
   state.activeCameraMode = mode;
   state.lastDiagnosisFaultLock = false;
 
-  if (mode === 'sim_open_dip') {
+  if (mode === 'sim_open_dip' || mode === 'sim_hand_screwdriver') {
     state.dipPipDismissed = false;
     setExplodedState(true, { zoomDip: true });
-    setFaultHighlight('upper_barrel_dip', 'Open housing detected exposing internal SW1 DIP-8 block.');
+    setFaultHighlight(
+      'upper_barrel_dip',
+      mode === 'sim_hand_screwdriver'
+        ? 'Open housing DIP-8 detected while masking out operator hand & screwdriver from 3D view.'
+        : 'Open housing detected exposing internal SW1 DIP-8 block.'
+    );
     setManualPage(5, { flash: true });
   } else if (mode === 'sim_normal') {
     setExplodedState(false);

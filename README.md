@@ -4,8 +4,9 @@ A **100% On-Device / Offline (Airplane Mode)** industrial field engineering and 
 
 ## Architecture v2.0 (~3.0 GB Total RAM · Zero Internet · Zero External CDNs)
 
-1. **Real-Time Optical Video Scanner (`OpenCV` @ `30 FPS`, `< 4 ms/frame`)**:
+1. **Real-Time Optical Video Scanner & Hand/Tool Spatial Exclusion (`OpenCV` @ `30 FPS`, `< 4 ms/frame`)**:
    - Live USB UVC capture (`Acer 4K` via `CAP_V4L2` on Linux and `CAP_AVFOUNDATION` on macOS) paired with a deterministic industrial bench simulator backed by authentic `Tzone TZ THT-02` datasheet photography.
+   - **3D Sensor-Only Spatial Lock**: Dual-space `YCrCb + HSV` human skin locus filtering and morphological thin-shaft tool rejection automatically detect and mask out **operator hands and precision screwdrivers** (`Cam: Hand + Screwdriver (Masked)` & live USB), ensuring `Three.js` strictly reconstructs only the `TZ THT-02` sensor and never misclassifies a red screwdriver handle as a physical fault.
 2. **100% Offline English Multimodal & Voice AI Stack (`llama.cpp` + `Piper Neural TTS`)**:
    - **`LiquidAI/LFM3-VL-2B-GGUF`** on `127.0.0.1:8091` (`--reasoning off --reasoning-budget 0 --image-max-tokens 128`) for visual fault localization, `DIP-8` inspection, and 2D PDF blueprint cross-referencing.
    - **`LiquidAI/LFM3-Audio-2B-GGUF`** on `127.0.0.1:8092` for offline **English** Automatic Speech Recognition (`16 kHz` mono PCM WAV normalized in-memory via `ffmpeg`).

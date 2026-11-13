@@ -44,6 +44,7 @@ SIM_MODES: tuple[str, ...] = (
     "sim_strainer_patch",
     "sim_open_dip",
     "sim_gland_fault",
+    "sim_hand_screwdriver",
 )
 
 VALID_MODES: tuple[str, ...] = (
@@ -405,9 +406,109 @@ class _WorkbenchSynthesizer:
         cv2.line(alpha, (fx0 + 2, cy + 4), (x0 + 3, cy + 12), 255, 4)
         return bgr, alpha
 
+    @staticmethod
+    def _composite_hand_and_screwdriver(
+        frame: np.ndarray, tx: float, ty: float, angle_deg: float, t_sec: float
+    ) -> None:
+        """Composite a realistic human hand holding a red-handled precision screwdriver at the DIP-8 switch."""
+        h, w = frame.shape[:2]
+        rad = math.radians(angle_deg)
+        # DIP-8 block sits ~72px ahead of sensor midpoint along the probe axis
+        dip_x = tx + 72.0 * math.cos(rad)
+        dip_y = ty - 72.0 * math.sin(rad)
+
+        # Natural micro-motion as the technician's hand & screwdriver approach Pin 8
+        jx = 5.0 * math.sin(t_sec * 1.9)
+        jy = 4.0 * math.cos(t_sec * 2.4)
+        tip_x = int(round(dip_x + 14.0 + jx))
+        tip_y = int(round(dip_y + 8.0 + jy))
+
+        overlay = frame.copy()
+        fg_alpha = np.zeros((h, w), dtype=np.float32)
+
+        # 1. Metallic steel screwdriver shaft (thin 5px specular chrome rod at ~52 deg angle)
+        shaft_end_x = tip_x + 56
+        shaft_end_y = tip_y + 68
+        cv2.line(overlay, (tip_x, tip_y), (shaft_end_x, shaft_end_y), (206, 212, 218), 5, cv2.LINE_AA)
+        cv2.line(overlay, (tip_x + 1, tip_y), (shaft_end_x + 1, shaft_end_y), (242, 246, 250), 2, cv2.LINE_AA)
+        cv2.line(fg_alpha, (tip_x, tip_y), (shaft_end_x, shaft_end_y), 0.96, 6, cv2.LINE_AA)
+
+        # 2. Vivid crimson-red insulated precision screwdriver handle (tests false-red rejection!)
+        hdl_end_x = shaft_end_x + 76
+        hdl_end_y = shaft_end_y + 92
+        cv2.line(overlay, (shaft_end_x, shaft_end_y), (hdl_end_x, hdl_end_y), (26, 38, 228), 22, cv2.LINE_AA)
+        cv2.line(overlay, (shaft_end_x + 4, shaft_end_y + 5), (hdl_end_x - 6, hdl_end_y - 7), (42, 72, 248), 7, cv2.LINE_AA)
+        # Yellow torque collar at top of screwdriver handle
+        cv2.line(
+            overlay,
+            (shaft_end_x, shaft_end_y),
+            (shaft_end_x + 14, shaft_end_y + 17),
+            (28, 205, 245),
+            20,
+            cv2.LINE_AA,
+        )
+        cv2.line(fg_alpha, (shaft_end_x, shaft_end_y), (hdl_end_x, hdl_end_y), 0.98, 24, cv2.LINE_AA)
+
+        # 3. Realistic warm human skin hand + thumb/index fingers entering from bottom-right border
+        #    BGR = (126, 158, 208) -> YCrCb Cr ~ 153, Cb ~ 106 (canonical human skin locus!)
+        palm_pts = np.array(
+            [
+                [shaft_end_x + 18, shaft_end_y + 10],
+                [shaft_end_x + 92, shaft_end_y - 6],
+                [w - 22, h - 75],
+                [w - 18, h - 1],
+                [shaft_end_x + 52, h - 1],
+                [shaft_end_x + 8, shaft_end_y + 62],
+            ],
+            dtype=np.int32,
+        )
+        cv2.fillConvexPoly(overlay, palm_pts, (124, 156, 206), lineType=cv2.LINE_AA)
+        cv2.fillConvexPoly(fg_alpha, palm_pts, 0.97)
+
+        # Thumb & index finger gripping the screwdriver handle
+        cv2.line(
+            overlay,
+            (shaft_end_x + 42, shaft_end_y + 24),
+            (shaft_end_x - 4, shaft_end_y + 18),
+            (132, 166, 216),
+            22,
+            cv2.LINE_AA,
+        )
+        cv2.line(
+            fg_alpha,
+            (shaft_end_x + 42, shaft_end_y + 24),
+            (shaft_end_x - 4, shaft_end_y + 18),
+            0.98,
+            23,
+            cv2.LINE_AA,
+        )
+        cv2.line(
+            overlay,
+            (shaft_end_x + 56, shaft_end_y + 4),
+            (shaft_end_x + 8, shaft_end_y - 6),
+            (118, 150, 200),
+            20,
+            cv2.LINE_AA,
+        )
+        cv2.line(
+            fg_alpha,
+            (shaft_end_x + 56, shaft_end_y + 4),
+            (shaft_end_x + 8, shaft_end_y - 6),
+            0.98,
+            21,
+            cv2.LINE_AA,
+        )
+
+        fg_alpha = cv2.GaussianBlur(fg_alpha, (5, 5), 1.1)
+        m = fg_alpha > 0.01
+        a3 = fg_alpha[m][:, None]
+        frame[m] = np.clip(frame[m].astype(np.float32) * (1.0 - a3) + overlay[m].astype(np.float32) * a3, 0, 255).astype(
+            np.uint8
+        )
+
     def render_frame(self, mode: str, t_sec: float) -> np.ndarray:
         """Render a realistic handheld/bench camera frame with smooth ±4° micro-motion + noise."""
-        if mode == "sim_open_dip":
+        if mode in ("sim_open_dip", "sim_hand_screwdriver"):
             sp_bgr, sp_alpha = self.open_bgr, self.open_alpha
         elif mode == "sim_strainer_patch":
             sp_bgr, sp_alpha = self.strainer_bgr, self.strainer_alpha
@@ -472,6 +573,9 @@ class _WorkbenchSynthesizer:
         noise = (((np.arange(rh)[:, None] * 131 + np.arange(rw)[None, :] * 17 + phase * 53) & 7) - 3.5) * 0.8
         blended = np.clip(blended + noise[:, :, None], 0, 255).astype(np.uint8)
         frame[ry0:ry1, rx0:rx1] = blended
+
+        if mode == "sim_hand_screwdriver":
+            self._composite_hand_and_screwdriver(frame, tx, ty, angle_deg, t_sec)
         return frame
 
 
@@ -503,6 +607,7 @@ class VisionScanner:
         self._latest_hud_jpeg: bytes = b""
         self._latest_raw_jpeg: bytes = b""
         self._latest_telemetry: dict[str, Any] = {}
+        self._locked_pose: dict[str, Any] | None = None
         self._frame_seq = 0
         self._fps_ema = 28.0
         self._last_tick = time.perf_counter()
@@ -672,6 +777,7 @@ class VisionScanner:
             {"id": "sim_strainer_patch", "label": "Sim: Strainer Red X-Patch (+56 mm)"},
             {"id": "sim_open_dip", "label": "Sim: Unscrewed Blue DIP PCB (+18 mm)"},
             {"id": "sim_gland_fault", "label": "Sim: Gland / RS-485 Wire Fault (-60 mm)"},
+            {"id": "sim_hand_screwdriver", "label": "Sim: Hand + Screwdriver on DIP-8 (Masked)"},
         ]
 
     def _acquire_raw_frame(self) -> tuple[np.ndarray, str, str]:
@@ -699,6 +805,158 @@ class VisionScanner:
         frame = self.synth.render_frame(sim_mode, time.perf_counter())
         return frame, sim_mode, cam_src
 
+    @staticmethod
+    def _detect_hand_and_tool_masks(
+        small_bgr: np.ndarray,
+        hsv: np.ndarray,
+        val_ch: np.ndarray,
+        sat_ch: np.ndarray,
+        warm_patch_full: np.ndarray,
+        inv_scale: float,
+        orig_w: int,
+        orig_h: int,
+    ) -> tuple[bool, bool, np.ndarray, np.ndarray, list[int] | None, list[int] | None]:
+        """Detect operator hands (YCrCb+HSV skin locus) & handheld tools/screwdrivers so they are NEVER drawn in 3D."""
+        ph, pw = small_bgr.shape[:2]
+        ycrcb = cv2.cvtColor(small_bgr, cv2.COLOR_BGR2YCrCb)
+
+        # 1. Dual-space human skin locus (YCrCb Cr in [133, 174], Cb in [77, 127] + moderate HSV saturation
+        #    S in [24, 168] so vivid industrial red/orange fault tape S >= 195 is NEVER mistaken for skin!)
+        skin_ycrcb = cv2.inRange(ycrcb, (55, 133, 77), (255, 174, 127))
+        skin_hsv = cv2.bitwise_and(
+            cv2.bitwise_or(
+                cv2.inRange(hsv, (0, 24, 60), (25, 168, 255)),
+                cv2.inRange(hsv, (166, 24, 60), (180, 168, 255)),
+            ),
+            skin_ycrcb,
+        )
+        skin_clean = cv2.morphologyEx(
+            skin_hsv, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        )
+        skin_clean = cv2.morphologyEx(
+            skin_clean, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        )
+
+        hand_mask = np.zeros((ph, pw), dtype=np.uint8)
+        hand_detected = False
+        hand_bbox: list[int] | None = None
+
+        num_s, lbl_s, stats_s, _ = cv2.connectedComponentsWithStats(skin_clean)
+        min_hand_area = max(90, int((pw * ph) * 0.011))
+        border_band_Area = max(48, int((pw * ph) * 0.0055))
+        bx_min, by_min, bx_max, by_max = pw, ph, 0, 0
+
+        for idx in range(1, num_s):
+            area = int(stats_s[idx, cv2.CC_STAT_AREA])
+            x, y, w_c, h_c = (
+                int(stats_s[idx, cv2.CC_STAT_LEFT]),
+                int(stats_s[idx, cv2.CC_STAT_TOP]),
+                int(stats_s[idx, cv2.CC_STAT_WIDTH]),
+                int(stats_s[idx, cv2.CC_STAT_HEIGHT]),
+            )
+            touches_border = (
+                x <= int(pw * 0.08)
+                or y <= int(ph * 0.08)
+                or (x + w_c) >= int(pw * 0.92)
+                or (y + h_c) >= int(ph * 0.92)
+            )
+            if area >= min_hand_area or (area >= border_band_Area and touches_border):
+                hand_detected = True
+                hand_mask[lbl_s == idx] = 255
+                bx_min = min(bx_min, x)
+                by_min = min(by_min, y)
+                bx_max = max(bx_max, x + w_c)
+                by_max = max(by_max, y + h_c)
+
+        if hand_detected:
+            hand_bbox = [
+                max(0, int(round(bx_min * inv_scale))),
+                max(0, int(round(by_min * inv_scale))),
+                min(orig_w, int(round((bx_max - bx_min) * inv_scale))),
+                min(orig_h, int(round((by_max - by_min) * inv_scale))),
+            ]
+
+        # 2. Handheld Tool / Precision Screwdriver Detector (Plastic Grip + Thin Metallic Shaft)
+        tool_mask = np.zeros((ph, pw), dtype=np.uint8)
+        tool_detected = False
+        tool_bbox: list[int] | None = None
+
+        # Separate thin bright metallic rods/shafts (< 11px wide at half-res) from the thick TZ THT-02 barrel!
+        bright_raw = (val_ch > 130).astype(np.uint8) * 255
+        thick_barrel_core = cv2.morphologyEx(
+            bright_raw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        )
+        thick_guard = cv2.dilate(
+            thick_barrel_core, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        )
+        thin_metallic = cv2.bitwise_and(
+            bright_raw,
+            cv2.bitwise_and((sat_ch < 72).astype(np.uint8) * 255, cv2.bitwise_not(thick_guard)),
+        )
+
+        # High-saturation tool handle candidates (red, orange, yellow, green insulated grips)
+        vivid_grip = cv2.bitwise_or(
+            warm_patch_full,
+            cv2.inRange(hsv, (20, 130, 85), (88, 255, 255)),
+        )
+
+        if hand_detected:
+            hand_reach = cv2.dilate(
+                hand_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))
+            )
+            # 2A. Any colored grip physically held by / adjacent to the operator's hand
+            num_g, lbl_g, stats_g, _ = cv2.connectedComponentsWithStats(vivid_grip)
+            for idx in range(1, num_g):
+                if int(stats_g[idx, cv2.CC_STAT_AREA]) < 16:
+                    continue
+                comp = (lbl_g == idx).astype(np.uint8) * 255
+                if cv2.countNonZero(cv2.bitwise_and(comp, hand_reach)) > 0:
+                    tool_mask = cv2.bitwise_or(tool_mask, comp)
+                    tool_detected = True
+
+            # 2B. Any thin metallic screwdriver shaft extending from the hand or gripped handle
+            grip_reach = cv2.dilate(
+                cv2.bitwise_or(hand_mask, tool_mask),
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (19, 19)),
+            )
+            num_m, lbl_m, stats_m, _ = cv2.connectedComponentsWithStats(thin_metallic)
+            for idx in range(1, num_m):
+                if int(stats_m[idx, cv2.CC_STAT_AREA]) < 10:
+                    continue
+                comp = (lbl_m == idx).astype(np.uint8) * 255
+                if cv2.countNonZero(cv2.bitwise_and(comp, grip_reach)) > 0:
+                    tool_mask = cv2.bitwise_or(tool_mask, comp)
+                    tool_detected = True
+        else:
+            # 2C. Gloved hand / standalone oblique screwdriver entering from frame border
+            cnts_m, _ = cv2.findContours(thin_metallic, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in cnts_m:
+                if cv2.contourArea(cnt) < 28:
+                    continue
+                (_, _), (rw_t, rh_t), ang_t = cv2.minAreaRect(cnt)
+                maj_t, min_t = max(rw_t, rh_t), max(1.0, min(rw_t, rh_t))
+                if maj_t >= 24.0 and (maj_t / min_t) >= 3.8:
+                    e_pts = cv2.boxPoints(((0.0, 0.0), (rw_t, rh_t), ang_t))
+                    d01, d12 = e_pts[1] - e_pts[0], e_pts[2] - e_pts[1]
+                    t_vec = d01 if np.linalg.norm(d01) >= np.linalg.norm(d12) else d12
+                    t_ang = abs(math.degrees(math.atan2(float(t_vec[1]), float(t_vec[0]))))
+                    if 25.0 <= t_ang <= 155.0:
+                        cv2.drawContours(tool_mask, [cnt], -1, 255, -1)
+                        tool_detected = True
+
+        if tool_detected:
+            ys_t, xs_t = np.where(tool_mask > 0)
+            if len(xs_t) > 0:
+                tx0, ty0, tx1, ty1 = int(xs_t.min()), int(ys_t.min()), int(xs_t.max()), int(ys_t.max())
+                tool_bbox = [
+                    max(0, int(round(tx0 * inv_scale))),
+                    max(0, int(round(ty0 * inv_scale))),
+                    min(orig_w, int(round((tx1 - tx0 + 1) * inv_scale))),
+                    min(orig_h, int(round((ty1 - ty0 + 1) * inv_scale))),
+                ]
+
+        return hand_detected, tool_detected, hand_mask, tool_mask, hand_bbox, tool_bbox
+
     def analyze_frame(
         self,
         frame_bgr: np.ndarray,
@@ -706,11 +964,11 @@ class VisionScanner:
         camera_source: str = "simulator:sim_normal",
         fps: float = 28.0,
     ) -> tuple[np.ndarray, dict[str, Any]]:
-        """Execute genuine <4ms OpenCV segmentation, metrology, anomaly mapping & HUD overlay."""
+        """Execute genuine <4ms OpenCV segmentation, hand/tool masking, metrology & HUD overlay."""
         t0 = time.perf_counter()
         orig_h, orig_w = frame_bgr.shape[:2]
 
-        # Downscale 2x during CV mask computation so even 1280x720 runs in < 2.2 ms!
+        # Downscale 2x during CV mask computation so even 1280x720 runs in < 2.5 ms!
         proc_scale = 0.5 if orig_w >= 800 else 1.0
         if proc_scale < 1.0:
             pw, ph = int(orig_w * proc_scale), int(orig_h * proc_scale)
@@ -724,24 +982,59 @@ class VisionScanner:
         val_ch = hsv[:, :, 2]
         sat_ch = hsv[:, :, 1]
 
-        # 1. Segment bright grey/metallic sensor body + any colored tape/PCB on dark bench surface:
-        #    - Grey metallic/PVC body has high brightness (V > 122), filtering out dark cable glints!
-        #    - Blue PCB (H in 92..138, S > 55, V > 40) and Red/Orange/Amber patches (S > 95, V > 95)
-        #      are INCLUDED in the unified silhouette so patches/unscrewed PCBs don't split the probe!
-        body_bright = (val_ch > 122).astype(np.uint8) * 255
-        body_bright = cv2.morphologyEx(
-            body_bright, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 7))
-        )
         pcb_blue_full = cv2.inRange(hsv, (92, 58, 42), (138, 255, 255))
         warm_patch_full = cv2.bitwise_or(
             cv2.inRange(hsv, (0, 105, 95), (26, 255, 255)),
             cv2.inRange(hsv, (166, 105, 95), (180, 255, 255)),
         )
-        # Keep frayed wire strands out of the cylinder's minAreaRect contour while keeping patch body in
-        warm_body = cv2.morphologyEx(
-            warm_patch_full, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9))
+
+        # 0. Spatial Exclusion Filter: Detect & mask out Operator Hands + Screwdrivers/Tools FIRST
+        #    so Three.js ONLY reconstructs the TZ THT-02 sensor and ignores hands/tools!
+        (
+            hand_detected,
+            tool_detected,
+            hand_mask,
+            tool_mask,
+            hand_bbox,
+            tool_bbox,
+        ) = self._detect_hand_and_tool_masks(
+            small, hsv, val_ch, sat_ch, warm_patch_full, inv_scale, orig_w, orig_h
         )
-        fg_mask = cv2.bitwise_or(body_bright, pcb_blue_full)
+        occlusion_filtered = bool(hand_detected or tool_detected)
+
+        if occlusion_filtered:
+            exclusion_mask = cv2.dilate(
+                cv2.bitwise_or(hand_mask, tool_mask),
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)),
+            )
+            keep_sensor = cv2.bitwise_not(exclusion_mask)
+        else:
+            keep_sensor = None
+
+        # 1. Segment bright grey/metallic sensor body + any colored tape/PCB on dark bench surface
+        body_bright = (val_ch > 122).astype(np.uint8) * 255
+        if keep_sensor is not None:
+            body_bright = cv2.bitwise_and(body_bright, keep_sensor)
+        body_bright = cv2.morphologyEx(
+            body_bright, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 7))
+        )
+
+        warm_sensor_only = (
+            cv2.bitwise_and(warm_patch_full, keep_sensor)
+            if keep_sensor is not None
+            else warm_patch_full
+        )
+        warm_body = cv2.morphologyEx(
+            warm_sensor_only, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9))
+        )
+        # Keep internal blue DIP-8 PCB visible even when screwdriver tip touches DIP pins
+        pcb_sensor_only = (
+            cv2.bitwise_and(pcb_blue_full, cv2.bitwise_not(hand_mask))
+            if hand_detected
+            else pcb_blue_full
+        )
+
+        fg_mask = cv2.bitwise_or(body_bright, pcb_sensor_only)
         fg_mask = cv2.bitwise_or(fg_mask, warm_body)
 
         # Ignore outer 2% border ruler ticks
@@ -784,8 +1077,7 @@ class VisionScanner:
             major = max(rw, rh)
             minor = max(1.0, min(rw, rh))
             ratio = major / minor
-            # elongated cylindrical sensor preference (ratio ~ 3.5 .. 16.0)
-            if 2.6 <= ratio <= 18.0:
+            if 2.2 <= ratio <= 18.0:
                 score = area * min(ratio, 10.0)
                 if score > best_score:
                     best_score = score
@@ -796,6 +1088,19 @@ class VisionScanner:
         if best_cnt is not None:
             detected = True
             (cx_s, cy_s), (rw_s, rh_s), rect_ang = cv2.minAreaRect(best_cnt)
+
+            # If hand/tool partially occludes part of the sensor barrel, stabilize dimensions & pose
+            # using the clean pre-occlusion sensor anchor so the 3D Twin NEVER shrinks or jumps!
+            if occlusion_filtered and self._locked_pose is not None:
+                cur_maj = max(rw_s, rh_s)
+                lock_maj = float(self._locked_pose["maj_s"])
+                if cur_maj < lock_maj * 0.88:
+                    cx_s = 0.35 * cx_s + 0.65 * float(self._locked_pose["cx_s"])
+                    cy_s = 0.35 * cy_s + 0.65 * float(self._locked_pose["cy_s"])
+                    rw_s = float(self._locked_pose["rw_s"])
+                    rh_s = float(self._locked_pose["rh_s"])
+                    rect_ang = float(self._locked_pose["rect_ang"])
+
             box_pts_s = cv2.boxPoints(((cx_s, cy_s), (rw_s, rh_s), rect_ang))
             box_pts = box_pts_s * inv_scale
 
@@ -804,11 +1109,8 @@ class VisionScanner:
             minor_px = max(1.0, min(rw_s, rh_s) * inv_scale)
             measured_ratio = round(float(major_px / minor_px), 2)
 
-            # Calibrated physical dimensions anchored to TZ THT-02 nominal geometry (140mm x 16mm)
-            # Uses measured aspect ratio compensated for morphological closing rim (~1.074x)
             est_diameter_mm = round(NOMINAL_DIAMETER_MM, 1)
             raw_len = est_diameter_mm * (major_px / minor_px) * 1.074
-            # Clamp gently for realistic metrology readout
             est_length_mm = round(float(max(115.0, min(162.0, raw_len))), 1)
 
             bx, by, bw, bh = cv2.boundingRect(box_pts.astype(np.int32))
@@ -819,22 +1121,16 @@ class VisionScanner:
                 min(orig_h, int(bh)),
             ]
 
-            # Determine canonical major-axis unit vector `u` pointing from
-            # Waterproof Gland (-70 mm) -> Stainless Steel Strainer (+70 mm)
-            # Identify longest edge of box_pts_s
             e01 = box_pts_s[1] - box_pts_s[0]
             e12 = box_pts_s[2] - box_pts_s[1]
             u_vec = e01 if np.linalg.norm(e01) >= np.linalg.norm(e12) else e12
             u_norm = float(np.linalg.norm(u_vec))
             u_vec = u_vec / max(1e-6, u_norm)
 
-            # Canonical disambiguation: gland/cable is on left (smaller x) in bench orientation;
-            # if nearly vertical, check dark cable lead just outside the two ends!
             if abs(float(u_vec[0])) > 0.22:
                 if u_vec[0] < 0:
                     u_vec = -u_vec
             else:
-                # Sample brightness just beyond -u end vs +u end for dark black cable tail
                 half_maj_s = 0.5 * max(rw_s, rh_s)
                 p_neg = np.array([cx_s, cy_s]) - u_vec * (half_maj_s + 8.0)
                 p_pos = np.array([cx_s, cy_s]) + u_vec * (half_maj_s + 8.0)
@@ -850,7 +1146,18 @@ class VisionScanner:
             angle_deg = round(float(math.degrees(math.atan2(float(u_vec[1]), float(u_vec[0])))), 2)
             v_vec = np.array([-u_vec[1], u_vec[0]], dtype=np.float32)
 
-            # Build tight rotated sensor ROI mask (slightly dilated at gland end to catch frayed wires)
+            if not occlusion_filtered:
+                self._locked_pose = {
+                    "cx_s": cx_s,
+                    "cy_s": cy_s,
+                    "rw_s": rw_s,
+                    "rh_s": rh_s,
+                    "maj_s": max(rw_s, rh_s),
+                    "rect_ang": rect_ang,
+                    "angle_deg": angle_deg,
+                }
+
+            # Build tight rotated sensor ROI mask
             sensor_poly_mask = np.zeros((ph, pw), dtype=np.uint8)
             half_maj_s = 0.5 * max(rw_s, rh_s)
             half_min_s = 0.5 * min(rw_s, rh_s) * 1.28
@@ -867,23 +1174,21 @@ class VisionScanner:
             cv2.fillConvexPoly(sensor_poly_mask, roi_quad, 255)
 
             # 2A. Check for exposed internal Blue 8-pin DIP Switch PCB inside middle barrel ROI
-            blue_in_roi = cv2.bitwise_and(pcb_blue_full, sensor_poly_mask)
+            blue_in_roi = cv2.bitwise_and(pcb_sensor_only, sensor_poly_mask)
             blue_ys, blue_xs = np.where(blue_in_roi > 0)
-            min_pcb_px = max(18, int(half_maj_s * half_min_s * 0.045))
+            min_pcb_px = max(14, int(half_maj_s * half_min_s * 0.04))
 
-            # 2B. Check for Red / Orange / Amber fault tape / X-patch / wire fault inside sensor ROI
-            warm_in_roi = cv2.bitwise_and(warm_patch_full, sensor_poly_mask)
+            # 2B. Check for Red / Orange / Amber fault tape strictly on the ISOLATED sensor (excluding screwdriver/hand!)
+            warm_in_roi = cv2.bitwise_and(warm_sensor_only, sensor_poly_mask)
             warm_ys, warm_xs = np.where(warm_in_roi > 0)
             min_warm_px = max(14, int(half_maj_s * half_min_s * 0.032))
 
             if len(blue_xs) >= min_pcb_px:
-                # Project PCB pixel centroid onto longitudinal major axis -> z_mm in [-70, +70]
                 rel_x = blue_xs.astype(np.float32) - cx_s
                 rel_y = blue_ys.astype(np.float32) - cy_s
                 proj_s = rel_x * float(u_vec[0]) + rel_y * float(u_vec[1])
                 mean_proj = float(np.median(proj_s))
                 norm_pos = np.clip(mean_proj / max(1.0, half_maj_s), -1.0, 1.0)
-                # Verify it resides inside middle barrel region (-25..+42 mm)
                 z_val = float(norm_pos * 70.0)
                 if -25.0 <= z_val <= 42.0:
                     pcb_open_detected = True
@@ -898,7 +1203,6 @@ class VisionScanner:
                     anomaly_world_pt = (int(round(ax_s * inv_scale)), int(round(ay_s * inv_scale)))
 
             if len(warm_xs) >= min_warm_px and not pcb_open_detected:
-                # Find largest contiguous warm cluster so stray single pixels never skew z_mm
                 num_lbl, lbl_im, stats, centroids = cv2.connectedComponentsWithStats(warm_in_roi)
                 best_lbl = -1
                 best_area_w = 0
@@ -927,16 +1231,13 @@ class VisionScanner:
 
             # 3. Render Industrial HUD Overlay on full-resolution BGR frame
             box_i32 = box_pts.astype(np.int32)
-            box_color = (0, 225, 255) if anomaly_detected else (235, 215, 0)  # Cyan / Amber-Cyan
             cv2.polylines(hud, [box_i32], isClosed=True, color=(235, 215, 0), thickness=2, lineType=cv2.LINE_AA)
 
-            # Corner brackets on bounding box
             half_maj_full = 0.5 * major_px
             c_full = np.array([cx, cy], dtype=np.float32)
             p_gland = c_full - u_vec * half_maj_full
             p_tip = c_full + u_vec * half_maj_full
 
-            # Longitudinal centerline axis (-70mm -> +70mm) + zone tick marks
             cv2.line(
                 hud,
                 (int(p_gland[0]), int(p_gland[1])),
@@ -979,7 +1280,6 @@ class VisionScanner:
                 cv2.LINE_AA,
             )
 
-            # Dimension callout cleanly below sensor so upper space stays clear for fault tags
             dim_pt = c_full + v_vec * (minor_px * 0.95 + 42.0)
             cv2.putText(
                 hud,
@@ -992,16 +1292,11 @@ class VisionScanner:
                 cv2.LINE_AA,
             )
 
-            # Pulsing red/magenta target reticle + callout badge on detected fault or exposed PCB
             if anomaly_detected and anomaly_world_pt is not None:
                 ax, ay = anomaly_world_pt
                 pulse = int(4.0 * abs(math.sin(time.perf_counter() * 5.5)))
                 ret_r = int(max(18, minor_px * 0.62)) + pulse
-                ret_col = (255, 120, 0) if pcb_open_detected else (36, 48, 255)  # Electric blue-cyan or vivid red
-                if not pcb_open_detected:
-                    ret_col = (32, 42, 255)
-                else:
-                    ret_col = (40, 140, 255)  # Vivid orange-red alert reticle so it pops over blue PCB!
+                ret_col = (40, 140, 255) if pcb_open_detected else (32, 42, 255)
 
                 cv2.circle(hud, (ax, ay), ret_r, ret_col, 2, cv2.LINE_AA)
                 cv2.circle(hud, (ax, ay), 4, (60, 240, 255), -1, cv2.LINE_AA)
@@ -1010,7 +1305,6 @@ class VisionScanner:
                 cv2.line(hud, (ax, ay - ret_r - 7), (ax, ay - ret_r + 5), ret_col, 2, cv2.LINE_AA)
                 cv2.line(hud, (ax, ay + ret_r - 5), (ax, ay + ret_r + 7), ret_col, 2, cv2.LINE_AA)
 
-                # Leader line + crisp alert tag
                 lx = min(orig_w - 330, max(16, ax - 90))
                 ly = max(78, ay - ret_r - 24)
                 cv2.line(hud, (ax, ay - ret_r), (lx + 24, ly + 6), ret_col, 1, cv2.LINE_AA)
@@ -1033,20 +1327,57 @@ class VisionScanner:
                     cv2.LINE_AA,
                 )
 
+        # 3B. Render Operator Hand & Screwdriver Exclusion Brackets (showing they are IGNORED in 3D!)
+        for ex_bbox, ex_label, ex_col in (
+            (tool_bbox, "SCREWDRIVER / TOOL MASKED [IGNORED IN 3D]", (255, 195, 45)),
+            (hand_bbox, "OPERATOR HAND MASKED [IGNORED IN 3D]", (190, 145, 255)),
+        ):
+            if ex_bbox is None:
+                continue
+            ex_x, ex_y, ex_w, ex_h = ex_bbox
+            ex_x1 = min(orig_w - 4, ex_x + ex_w)
+            ex_y1 = min(orig_h - 4, ex_y + ex_h)
+            c_len = max(12, min(26, min(ex_w, ex_h) // 3))
+            for px, py, sx, sy in (
+                (ex_x, ex_y, 1, 1),
+                (ex_x1, ex_y, -1, 1),
+                (ex_x, ex_y1, 1, -1),
+                (ex_x1, ex_y1, -1, -1),
+            ):
+                cv2.line(hud, (px, py), (px + sx * c_len, py), ex_col, 2, cv2.LINE_AA)
+                cv2.line(hud, (px, py), (px, py + sy * c_len), ex_col, 2, cv2.LINE_AA)
+
+            (tw_e, th_e), _ = cv2.getTextSize(ex_label, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+            lbl_x = max(10, min(orig_w - tw_e - 16, ex_x))
+            lbl_y = max(56, ex_y - 8)
+            cv2.rectangle(hud, (lbl_x, lbl_y - th_e - 5), (lbl_x + tw_e + 10, lbl_y + 5), (16, 20, 28), -1)
+            cv2.rectangle(hud, (lbl_x, lbl_y - th_e - 5), (lbl_x + tw_e + 10, lbl_y + 5), ex_col, 1)
+            cv2.putText(
+                hud,
+                ex_label,
+                (lbl_x + 5, lbl_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                ex_col,
+                1,
+                cv2.LINE_AA,
+            )
+
         proc_ms = (time.perf_counter() - t0) * 1000.0
 
         # Top HUD status bar
         cv2.rectangle(hud, (0, 0), (orig_w, 36), (16, 20, 24), -1)
         cv2.line(hud, (0, 36), (orig_w, 36), (70, 95, 105), 1)
+        mask_tag = " | 3D MASK: HAND+TOOL REJECTED" if occlusion_filtered else ""
         status_txt = (
-            f"FIELDSCAN CV | {camera_source.upper()} | {fps:.1f} FPS | CV {proc_ms:.2f}ms"
+            f"FIELDSCAN CV | {camera_source.upper()} | {fps:.1f} FPS | CV {proc_ms:.2f}ms{mask_tag}"
         )
         cv2.putText(
             hud,
             status_txt,
             (14, 24),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.48,
+            0.46,
             (160, 235, 245),
             1,
             cv2.LINE_AA,
@@ -1082,6 +1413,12 @@ class VisionScanner:
             "anomaly_z_mm": anomaly_z_mm,
             "anomaly_confidence": anomaly_confidence,
             "pcb_open_detected": pcb_open_detected,
+            "hand_detected": hand_detected,
+            "tool_detected": tool_detected,
+            "occlusion_filtered": occlusion_filtered,
+            "hand_bbox": hand_bbox,
+            "tool_bbox": tool_bbox,
+            "isolated_3d_target": "TZ-THT-02_SENSOR_ONLY",
             "dip_focus_pt": list(anomaly_world_pt) if (pcb_open_detected and anomaly_world_pt) else None,
             "scan_coverage_pct": 94 if detected else 28,
             "sim_mode": sim_mode,

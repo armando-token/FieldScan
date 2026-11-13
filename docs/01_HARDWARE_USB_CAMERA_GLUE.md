@@ -63,3 +63,18 @@ cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 - **Live Fault Demonstrations in Front of Judges**:
   - Apply a **small red or orange tape marker** onto the slotted sintered stainless tip (`strainer_head`) or rear cable gland (`waterproof_gland_leads`), **or unscrew the middle housing barrel** (Manual Page 5, Step 2) to expose the internal **blue `DIP-8` switch PCB**.
 - `OpenCV` projects the fault stain or housing separation onto the unified longitudinal coordinate axis `[-70.0 mm, +70.0 mm]` in `< 4 ms/frame`, driving live **red fault stain comparison** on the `60 FPS` `Three.js v0.170` digital twin and triggering the **3-Tier Andon Stack Light (`Red / Amber / Green`)**.
+
+---
+
+## 5. Real-Time Operator Hand & Precision Screwdriver Spatial Exclusion (`3D Sensor Lock`)
+
+When an operator reaches into the optical field of view to unscrew the `TZ THT-02` barrel or toggle the internal `SW1 DIP-8` switches with a precision screwdriver, naive contour or HSV segmentation would erroneously merge the human hand or screwdriver shaft into the 3D bounding box — or misclassify a red/orange insulated screwdriver grip as a physical sensor fault.
+
+**Implemented Spatial Filter (`VisionScanner._detect_hand_and_tool_masks` in `src/fieldscan/vision_scanner.py`)**:
+1. **Dual-Space Human Skin Locus (`YCrCb` + Moderate-Saturation `HSV`)**:
+   - Segments skin pixels inside `Cr in [133, 174], Cb in [77, 127]` intersected with `HSV S in [24, 168]`. High-saturation (`S >= 195`) red/orange fault markers on the sensor remain untouched, while human fingers and palms are cleanly masked out (`hand_detected: true`).
+2. **Morphological Thin-Shaft & Coupled Grip Tool Filter**:
+   - Separates thin specular steel screwdriver shafts (`< 11 px` half-res width) from the thick `Ø16.0 mm` polycarbonate sensor barrel core via elliptical morphological opening, and masks out any vivid plastic screwdriver grip coupled to the operator's hand (`tool_detected: true`).
+3. **3D Reconstruction Lock (`TZ-THT-02_SENSOR_ONLY`)**:
+   - Both masks are dilated and subtracted prior to silhouette `minAreaRect` fitting and warm fault-patch localization, and `self._locked_pose` stabilizes longitudinal dimensions and tilt during partial hand occlusion so **`Three.js` strictly reconstructs only the `TZ THT-02` sensor and never draws hands or tools**.
+

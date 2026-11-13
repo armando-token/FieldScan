@@ -51,6 +51,7 @@
               <option value="usb">Cam: Live USB (/dev/video0)</option>
               <option value="sim_normal" selected>Cam: Nominal Sensor Sim</option>
               <option value="sim_open_dip">Cam: Open Housing DIP-8</option>
+              <option value="sim_hand_screwdriver">Cam: Hand + Screwdriver (Masked)</option>
               <option value="sim_strainer_patch">Cam: Strainer Tip Fault</option>
               <option value="sim_gland_fault">Cam: RS-485 Gland Fault</option>
             </select>
@@ -192,6 +193,7 @@
 
         <div class="camera-hud-top">
           <span class="hud-pill" id="hudSensorId">TZ THT-02 · <strong id="scanDimVal">140.0×16.0 mm</strong></span>
+          <span class="hud-pill hud-pill-isolation" id="hudIsolationPill" hidden>HAND / TOOL MASKED · 3D SENSOR ONLY</span>
           <span class="hud-pill hud-pill-nominal" id="hudStatusTag">NOMINAL</span>
         </div>
 
@@ -256,6 +258,13 @@
         </div>
 
         <div class="card-header-right">
+          <span
+            class="meta-badge meta-badge-isolation"
+            id="isolationGuardBadge"
+            title="Spatial filter excludes operator hands and screwdrivers so Three.js only reconstructs the TZ THT-02 sensor"
+          >
+            3D LOCK: SENSOR ONLY
+          </span>
           <span class="twin-verdict-badge is-nominal" id="twinMatchBadge">100% DIGITAL TWIN MATCH</span>
 
           <div class="segmented-bar" role="group" aria-label="3D Twin View Controls">

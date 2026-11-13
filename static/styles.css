@@ -585,6 +585,28 @@ svg.lucide {
   color: #6ee7b7;
 }
 
+.meta-badge-isolation {
+  background: rgba(14, 165, 233, 0.14);
+  border-color: rgba(56, 189, 248, 0.48);
+  color: #bae6fd;
+  gap: 5px;
+  transition: all 180ms ease;
+}
+
+.meta-badge-isolation.is-filtering {
+  background: linear-gradient(90deg, rgba(217, 119, 6, 0.34), rgba(14, 165, 233, 0.28));
+  border-color: var(--amber-bright);
+  color: #fef3c7;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.32);
+}
+
+.hud-pill-isolation {
+  background: rgba(120, 53, 15, 0.9);
+  border-color: var(--amber-bright);
+  color: #fef3c7;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
 .chip-btn {
   height: 24px;
   padding: 0 8px;

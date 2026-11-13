@@ -1489,6 +1489,19 @@ class VisionScanner:
         # Neutral polycarbonate/stainless cylinder hypothesis for split dark/bright backgrounds
         m_neutral = (((sat_ch < 46) & (val_ch > 122) & (val_ch < 224)).astype(np.uint8)) * 255
 
+        # Unified 3D CIE-Lab contrast hypothesis with dark-cable exclusion (L > 56):
+        # Bridges multi-tone grey housing + white nameplate sticker across medium-luminance
+        # backgrounds while cleanly severing attached black rubber cables at the gland neck.
+        dl1_i32 = dl1.astype(np.int32)
+        dl2_i32 = dl2.astype(np.int32)
+        dab1_i32 = dab1.astype(np.int32)
+        dab2_i32 = dab2.astype(np.int32)
+        dlab1_sq = dl1_i32 * dl1_i32 + 5 * dab1_i32 * dab1_i32
+        dlab2_sq = dl2_i32 * dl2_i32 + 5 * dab2_i32 * dab2_i32
+        m_dlab_nocable = (
+            (((dlab1_sq > 440) | (dlab2_sq > 520)) & (l_u8 > 56)).astype(np.uint8)
+        ) * 255
+
         m_edge_fine = ((grad_mag > 11).astype(np.uint8)) * 255
         m_edge_strong = ((grad_mag > 16).astype(np.uint8)) * 255
 
@@ -1498,13 +1511,18 @@ class VisionScanner:
         k_open7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
         k_close11 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
         k_close13 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+        k_close15 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
 
         keep_eroded = (
             cv2.erode(keep_sensor, k_open5) if keep_sensor is not None else None
         )
         rim = 3
 
-        def _prep_region_mask(raw_m: np.ndarray) -> np.ndarray:
+        def _prep_region_mask(
+            raw_m: np.ndarray,
+            k_op: np.ndarray = k_open3,
+            k_cl: np.ndarray = k_close13,
+        ) -> np.ndarray:
             m = cv2.bitwise_or(raw_m, aux_cues)
             if keep_sensor is not None:
                 m = cv2.bitwise_and(m, keep_sensor)
@@ -1512,8 +1530,8 @@ class VisionScanner:
             m[ph - rim :, :] = 0
             m[:, :rim] = 0
             m[:, pw - rim :] = 0
-            m = cv2.morphologyEx(m, cv2.MORPH_OPEN, k_open3)
-            return cv2.morphologyEx(m, cv2.MORPH_CLOSE, k_close13)
+            m = cv2.morphologyEx(m, cv2.MORPH_OPEN, k_op)
+            return cv2.morphologyEx(m, cv2.MORPH_CLOSE, k_cl)
 
         def _prep_edge_mask(raw_e: np.ndarray, k_cl: np.ndarray, k_op: np.ndarray) -> np.ndarray:
             m = cv2.bitwise_or(raw_e, aux_cues)
@@ -1532,6 +1550,7 @@ class VisionScanner:
             _prep_region_mask(m_chroma),
             _prep_region_mask(m_midtone),
             _prep_region_mask(m_neutral),
+            _prep_region_mask(m_dlab_nocable, k_open7, k_close15),
             _prep_edge_mask(m_edge_fine, k_close13, k_open5),
             _prep_edge_mask(m_edge_strong, k_close11, k_open7),
         ]
@@ -1750,9 +1769,12 @@ class VisionScanner:
                 "cv_ms": round(float(proc_ms), 2),
             }
 
-        # Normalize high-res 1080p/720p frames onto a consistent ~640px Lab pyramid grid for <18ms CV
+        # Normalize high-res 1080p/720p live frames onto a ~640px Lab pyramid grid (0.5x on 960x540 simulator)
         max_dim = max(orig_w, orig_h)
-        proc_scale = (640.0 / float(max_dim)) if max_dim >= 800 else 1.0
+        if sim_mode in SIM_MODES:
+            proc_scale = 0.5 if orig_w >= 800 else 1.0
+        else:
+            proc_scale = (640.0 / float(max_dim)) if max_dim >= 800 else 1.0
         if proc_scale < 1.0:
             pw = max(64, int(round(orig_w * proc_scale)))
             ph = max(64, int(round(orig_h * proc_scale)))
@@ -2034,7 +2056,7 @@ class VisionScanner:
             # 2A. Check for exposed internal Blue 8-pin DIP Switch PCB inside middle barrel ROI
             blue_in_roi = cv2.bitwise_and(pcb_sensor_only, sensor_poly_mask)
             blue_ys, blue_xs = np.where(blue_in_roi > 0)
-            min_pcb_px = max(14, int(half_maj_s * half_min_s * 0.04))
+            min_pcb_px = max(14, int(half_maj_s * half_min_s * 0.024))
 
             # 2B. Check for Red / Orange / Amber fault tape strictly on the ISOLATED sensor (excluding screwdriver/hand!)
             warm_in_roi = cv2.bitwise_and(warm_sensor_only, sensor_poly_mask)

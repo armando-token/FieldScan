@@ -10,7 +10,7 @@
   <title>FIELDSCAN CAD · DIGITAL TWIN — TZ THT-02 Industrial SCADA &amp; Repair HMI</title>
   <link rel="stylesheet" href="/static/vendor/open-props.min.css" />
   <link rel="stylesheet" href="/static/vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=20261113b" />
 </head>
 <body>
   <!-- =====================================================================
@@ -48,8 +48,8 @@
           <label class="select-shell" for="selectCameraMode" title="Select live USB optical camera or workbench fault simulation">
             <i data-lucide="camera"></i>
             <select id="selectCameraMode" aria-label="Camera Feed Mode">
-              <option value="usb">Cam: Live USB (/dev/video0)</option>
-              <option value="sim_normal" selected>Cam: Nominal Sensor Sim</option>
+              <option value="usb" selected>Cam: Live USB (/dev/video0)</option>
+              <option value="sim_normal">Cam: Nominal Sensor Sim</option>
               <option value="sim_open_dip">Cam: Open Housing DIP-8</option>
               <option value="sim_hand_screwdriver">Cam: Hand + Screwdriver (Masked)</option>
               <option value="sim_strainer_patch">Cam: Strainer Tip Fault</option>
@@ -172,10 +172,10 @@
             type="button"
             class="chip-btn chip-btn-cv active"
             id="btnCycleCvHud"
-            title="Cycle Real-Time Computer Vision Spatial HUD (Spatial / Minimal / Raw)"
+            title="Cycle AI Vision Overlay (AI HUD Full / Minimal / Pure Raw Camera)"
           >
             <i data-lucide="scan"></i>
-            <span id="cvHudModeLabel">CV HUD: SPATIAL</span>
+            <span id="cvHudModeLabel">AI HUD: ON</span>
           </button>
           <button
             type="button"
@@ -190,8 +190,8 @@
       </div>
 
       <div class="camera-stage" id="videoFrame">
-        <img id="videoStream" src="/api/video/stream?raw=1" alt="Live OpenCV 30 FPS optical sensor stream" />
-        <canvas id="videoFallbackCanvas" class="video-fallback-canvas" width="640" height="360" hidden></canvas>
+        <img id="videoStream" src="/api/video/stream?raw=1" alt="Live OpenCV Full-HD optical sensor stream" />
+        <canvas id="videoFallbackCanvas" class="video-fallback-canvas" width="960" height="540" hidden></canvas>
         <canvas id="cvSpatialHudCanvas" class="cv-spatial-hud-canvas" aria-hidden="true"></canvas>
 
         <div class="video-reticle" id="videoStaticReticle" aria-hidden="true">
@@ -201,10 +201,36 @@
           <span class="corner br"></span>
         </div>
 
-        <div class="camera-hud-top">
+        <div class="camera-hud-top" id="cameraHudTop">
           <span class="hud-pill" id="hudSensorId">TZ THT-02 · <strong id="scanDimVal">140.0×16.0 mm</strong></span>
           <span class="hud-pill hud-pill-isolation" id="hudIsolationPill" hidden>HAND / TOOL MASKED · 3D SENSOR ONLY</span>
           <span class="hud-pill hud-pill-nominal" id="hudStatusTag">NOMINAL</span>
+        </div>
+
+        <!-- LIVE OPTICAL ZOOM, AUTO-TRACK & PURE REAL-TIME CAMERA VERIFICATION BAR -->
+        <div class="camera-zoom-bar" id="cameraZoomBar" role="toolbar" aria-label="Live Optical Camera Zoom and Raw Feed Controls">
+          <span class="live-feed-proof" id="liveFeedProof" title="Real-time hardware frame counter from USB camera">
+            <span class="live-dot" id="liveFeedDot"></span>
+            <span id="liveFeedProofText">LIVE CAM</span>
+          </span>
+
+          <div class="zoom-pill-group" role="group" aria-label="Optical Zoom Level">
+            <button type="button" class="zoom-btn active" data-zoom-mode="auto" id="btnZoomAuto" title="Automatically zoom and track detected TZ THT-02 sensor">
+              AUTO 1.9×
+            </button>
+            <button type="button" class="zoom-btn" data-zoom-mode="1" title="Full 1.0x wide-angle camera view">1×</button>
+            <button type="button" class="zoom-btn" data-zoom-mode="2" title="2.0x Full-HD optical crop zoom (drag to pan)">2×</button>
+            <button type="button" class="zoom-btn" data-zoom-mode="3.5" title="3.5x close-up label & strainer inspection zoom (scroll wheel up to 5x)">3.5×</button>
+          </div>
+
+          <button
+            type="button"
+            class="raw-cam-btn"
+            id="btnRawLiveToggle"
+            title="Toggle pure unedited real-time camera video (hides all AI overlays to verify live optical feed)"
+          >
+            RAW LIVE CAM
+          </button>
         </div>
 
         <!-- AUTOMATIC PIN-FOCUS MACRO PIP (Appears automatically on DIP-8 inspection / Step 2) -->
@@ -680,6 +706,6 @@
 
   <script src="/static/vendor/lucide.min.js"></script>
   <script src="/static/vendor/uPlot.iife.min.js"></script>
-  <script type="module" src="/static/app.js"></script>
+  <script type="module" src="/static/app.js?v=20261113b"></script>
 </body>
 </html>

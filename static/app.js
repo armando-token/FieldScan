@@ -110,7 +110,9 @@ const state = {
   maxObservedAngle: 0,
   scanFramesObserved: 0,
 
-  activeCameraMode: 'sim_normal',
+  activeCameraMode: 'usb',
+  sensorDetected: false,
+  cameraOffline: false,
   activeModbusMode: 'auto',
   activeStep: 0,
   repairStage: 'IDLE_MONITORING',
@@ -144,6 +146,16 @@ const state = {
   toolDetected: false,
 
   cvHudMode: 'spatial', // 'spatial' | 'minimal' | 'raw'
+  camZoomMode: 'auto',  // 'auto' | 'manual'
+  camZoomTarget: 1.0,
+  camZoomCurrent: 1.0,
+  camPanTarget: [0.5, 0.5],
+  camPanCurrent: [0.5, 0.5],
+  camDragActive: false,
+  camDragLast: [0, 0],
+  lastLostSensorTs: 0,
+  snapshotRescueInFlight: false,
+  hasLiveSnapshotFallback: false,
   visionSpatial: null,
   fastVisionInFlight: false,
   spatialSmooth: {
@@ -193,6 +205,12 @@ const dom = {
   videoFallbackCanvas: document.getElementById('videoFallbackCanvas'),
   cvSpatialHudCanvas: document.getElementById('cvSpatialHudCanvas'),
   videoStaticReticle: document.getElementById('videoStaticReticle'),
+  cameraHudTop: document.getElementById('cameraHudTop'),
+  cameraZoomBar: document.getElementById('cameraZoomBar'),
+  liveFeedProof: document.getElementById('liveFeedProof'),
+  liveFeedProofText: document.getElementById('liveFeedProofText'),
+  btnZoomAuto: document.getElementById('btnZoomAuto'),
+  btnRawLiveToggle: document.getElementById('btnRawLiveToggle'),
   hudSensorId: document.getElementById('hudSensorId'),
   hudIsolationPill: document.getElementById('hudIsolationPill'),
   hudStatusTag: document.getElementById('hudStatusTag'),
@@ -1334,26 +1352,88 @@ function initCadStudio() {
 /* ==========================================================================
    STYLE 3 SPATIAL COMPUTER VISION HUD (60 FPS HIGH-DPI RETINA CANVAS)
    ========================================================================== */
-function cycleCvHudMode() {
-  const order = ['spatial', 'minimal', 'raw'];
-  const idx = order.indexOf(state.cvHudMode);
-  state.cvHudMode = order[(idx + 1) % order.length];
-
+function syncCvHudControls() {
   const labels = {
-    spatial: 'CV HUD: SPATIAL',
-    minimal: 'CV HUD: MINIMAL',
-    raw: 'CV HUD: RAW',
+    spatial: 'AI HUD: ON',
+    minimal: 'AI HUD: MIN',
+    raw: 'AI HUD: OFF',
   };
   if (dom.cvHudModeLabel) {
-    dom.cvHudModeLabel.textContent = labels[state.cvHudMode];
+    dom.cvHudModeLabel.textContent = labels[state.cvHudMode] || 'AI HUD: ON';
   }
   if (dom.btnCycleCvHud) {
     dom.btnCycleCvHud.classList.toggle('active', state.cvHudMode === 'spatial');
     dom.btnCycleCvHud.classList.toggle('is-minimal', state.cvHudMode === 'minimal');
   }
+  const isRaw = state.cvHudMode === 'raw';
   if (dom.videoStaticReticle) {
-    dom.videoStaticReticle.style.opacity = state.cvHudMode === 'raw' ? '0' : '1';
+    dom.videoStaticReticle.style.opacity = isRaw ? '0' : '1';
   }
+  if (dom.cameraHudTop) {
+    dom.cameraHudTop.style.opacity = isRaw ? '0' : '1';
+  }
+  if (dom.btnRawLiveToggle) {
+    dom.btnRawLiveToggle.classList.toggle('is-raw-active', isRaw);
+    dom.btnRawLiveToggle.textContent = isRaw ? 'RAW CAM: ACTIVE' : 'RAW LIVE CAM';
+  }
+}
+
+function cycleCvHudMode() {
+  const order = ['spatial', 'minimal', 'raw'];
+  const idx = order.indexOf(state.cvHudMode);
+  state.cvHudMode = order[(idx + 1) % order.length];
+  syncCvHudControls();
+}
+
+function togglePureRawCamera() {
+  state.cvHudMode = state.cvHudMode === 'raw' ? 'spatial' : 'raw';
+  syncCvHudControls();
+}
+
+function setCameraZoomPreset(modeStr) {
+  if (modeStr === 'auto') {
+    state.camZoomMode = 'auto';
+  } else {
+    const val = Math.max(1.0, Math.min(5.0, Number(modeStr) || 1.0));
+    state.camZoomMode = 'manual';
+    state.camZoomTarget = val;
+    if (val <= 1.01) {
+      state.camPanTarget = [0.5, 0.5];
+    } else if (state.visionSpatial?.detected && Array.isArray(state.visionSpatial.bbox)) {
+      const v = state.visionSpatial;
+      const fw = v.frame_size?.[0] || 1920;
+      const fh = v.frame_size?.[1] || 1080;
+      const vw = dom.videoFrame?.clientWidth || 480;
+      const vh = dom.videoFrame?.clientHeight || 300;
+      const cs = Math.max(vw / fw, vh / fh);
+      const ox = (vw - fw * cs) * 0.5;
+      const oy = (vh - fh * cs) * 0.5;
+      const cx = (ox + (v.bbox[0] + v.bbox[2] * 0.5) * cs) / vw;
+      const cy = (oy + (v.bbox[1] + v.bbox[3] * 0.5) * cs) / vh;
+      state.camPanTarget = [
+        Math.max(0.05, Math.min(0.95, cx)),
+        Math.max(0.05, Math.min(0.95, cy)),
+      ];
+    }
+  }
+  syncZoomButtonsUi();
+}
+
+function syncZoomButtonsUi() {
+  if (!dom.cameraZoomBar) return;
+  const btns = dom.cameraZoomBar.querySelectorAll('.zoom-btn');
+  btns.forEach((btn) => {
+    const m = btn.dataset.zoomMode;
+    if (m === 'auto') {
+      btn.classList.toggle('active', state.camZoomMode === 'auto');
+    } else {
+      const targetNum = Number(m);
+      btn.classList.toggle(
+        'active',
+        state.camZoomMode === 'manual' && Math.abs(state.camZoomTarget - targetNum) < 0.12
+      );
+    }
+  });
 }
 
 function lerpPt2(prev, target, alpha) {
@@ -1438,14 +1518,122 @@ function drawSpatialLeaderCallout(ctx, opts) {
   ctx.restore();
 }
 
+function rescueSnapshotToFallbackCanvas() {
+  if (state.snapshotRescueInFlight) return;
+  state.snapshotRescueInFlight = true;
+  const img = new Image();
+  img.onload = () => {
+    state.snapshotRescueInFlight = false;
+    state.hasLiveSnapshotFallback = true;
+    const canvas = dom.videoFallbackCanvas;
+    if (!canvas) return;
+    if (canvas.width !== img.naturalWidth && img.naturalWidth > 0) {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  };
+  img.onerror = () => {
+    state.snapshotRescueInFlight = false;
+  };
+  img.src = `/api/video/snapshot?raw=1&t=${Date.now()}`;
+}
+
 function renderSpatialVisionHud(nowMs, dt) {
   const canvas = dom.cvSpatialHudCanvas;
   const stage = dom.videoFrame;
   if (!canvas || !stage) return;
 
+  // Chromium never fires `load` on infinite multipart/x-mixed-replace streams;
+  // immediately unhide `#videoStream` as soon as its first JPEG frame decodes (`naturalWidth > 0`).
+  const hasStreamPixels = Boolean(dom.videoStream && dom.videoStream.naturalWidth > 0);
+  if (hasStreamPixels && (state.videoStreamFailed || dom.videoStream.hidden)) {
+    state.videoStreamFailed = false;
+    dom.videoFallbackCanvas.hidden = true;
+    dom.videoStream.hidden = false;
+  }
+
   const vw = stage.clientWidth;
   const vh = stage.clientHeight;
   if (!vw || !vh) return;
+
+  const v = state.visionSpatial;
+  const fw = (v && v.frame_size?.[0]) || dom.videoStream?.naturalWidth || 1920;
+  const fh = (v && v.frame_size?.[1]) || dom.videoStream?.naturalHeight || 1080;
+  const coverScale = Math.max(vw / fw, vh / fh);
+  const offX = (vw - fw * coverScale) * 0.5;
+  const offY = (vh - fh * coverScale) * 0.5;
+
+  // Update real-time hardware frame proof pill so operator sees live frame counter advancing
+  if (dom.liveFeedProofText && dom.liveFeedProof) {
+    const isOffline = Boolean(state.cameraOffline);
+    const srcStr = String(v?.camera_source || '').toLowerCase();
+    const isUsb = !isOffline && (srcStr.startsWith('uvc:') || state.activeCameraMode === 'usb');
+    dom.liveFeedProof.classList.toggle('is-standby', isOffline || !isUsb);
+    const resTag = fh >= 1000 ? '1080P' : `${fh}P`;
+    const seqNum = v?.frame_seq ? ` #${v.frame_seq}` : '';
+    dom.liveFeedProofText.textContent = isOffline
+      ? 'USB STANDBY'
+      : isUsb
+        ? `LIVE ${resTag}${seqNum}`
+        : `SIM${seqNum}`;
+  }
+
+  // Compute smooth 60 FPS Auto-Zoom & Pan onto detected TZ THT-02 sensor
+  if (state.camZoomMode === 'auto') {
+    if (v && v.detected && Array.isArray(v.bbox) && v.bbox[2] > 0 && v.bbox[3] > 0) {
+      state.lastLostSensorTs = 0;
+      const cxStage = (offX + (v.bbox[0] + v.bbox[2] * 0.5) * coverScale) / vw;
+      const cyStage = (offY + (v.bbox[1] + v.bbox[3] * 0.5) * coverScale) / vh;
+      const bwFrac = (v.bbox[2] * coverScale) / vw;
+      const bhFrac = (v.bbox[3] * coverScale) / vh;
+      const maxSpanFrac = Math.max(bwFrac, bhFrac, 0.12);
+      // Zoom in 1.85x-2.6x onto detected sensor body & printed label while keeping crisp framing
+      const desiredAutoZ = maxSpanFrac < 0.42
+        ? Math.min(2.6, 0.82 / maxSpanFrac)
+        : 1.85;
+      state.camZoomTarget = Math.max(1.80, Math.min(2.65, desiredAutoZ));
+      state.camPanTarget = [
+        Math.max(0.05, Math.min(0.95, cxStage)),
+        Math.max(0.05, Math.min(0.95, cyStage)),
+      ];
+    } else {
+      if (!state.lastLostSensorTs) state.lastLostSensorTs = nowMs;
+      // Hold framing briefly for 900ms against micro-glitches, then smoothly zoom out to 1.0x wide scan
+      if (nowMs - state.lastLostSensorTs > 900) {
+        state.camZoomTarget = 1.0;
+        state.camPanTarget = [0.5, 0.5];
+      }
+    }
+    if (dom.btnZoomAuto) {
+      dom.btnZoomAuto.textContent = `AUTO ${state.camZoomCurrent.toFixed(1)}×`;
+    }
+  } else if (dom.btnZoomAuto) {
+    dom.btnZoomAuto.textContent = 'AUTO';
+  }
+
+  const zoomSmooth = Math.min(1, dt * 6.5);
+  state.camZoomCurrent += (state.camZoomTarget - state.camZoomCurrent) * zoomSmooth;
+  if (Math.abs(state.camZoomTarget - state.camZoomCurrent) < 0.003) {
+    state.camZoomCurrent = state.camZoomTarget;
+  }
+  const panSmooth = state.camDragActive ? 1.0 : Math.min(1, dt * 7.5);
+  state.camPanCurrent[0] += (state.camPanTarget[0] - state.camPanCurrent[0]) * panSmooth;
+  state.camPanCurrent[1] += (state.camPanTarget[1] - state.camPanCurrent[1]) * panSmooth;
+
+  const z = Math.max(1.0, state.camZoomCurrent);
+  const focusX = state.camPanCurrent[0] * vw;
+  const focusY = state.camPanCurrent[1] * vh;
+  const tx = Math.min(0, Math.max(vw * (1 - z), vw * 0.5 - z * focusX));
+  const ty = Math.min(0, Math.max(vh * (1 - z), vh * 0.5 - z * focusY));
+
+  const xform = z > 1.004
+    ? `translate3d(${tx.toFixed(2)}px, ${ty.toFixed(2)}px, 0) scale(${z.toFixed(4)})`
+    : 'none';
+  if (dom.videoStream) dom.videoStream.style.transform = xform;
+  if (dom.videoFallbackCanvas) dom.videoFallbackCanvas.style.transform = xform;
+  stage.classList.toggle('is-zoomed', z > 1.03);
 
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const targetW = Math.round(vw * dpr);
@@ -1463,16 +1651,18 @@ function renderSpatialVisionHud(nowMs, dt) {
     return;
   }
 
-  const v = state.visionSpatial;
+  // Never draw detection overlays unless genuine optical video pixels are visible underneath
+  if (!hasStreamPixels && !state.hasLiveSnapshotFallback) {
+    return;
+  }
+
   if (!v || typeof v !== 'object') return;
 
   const isSpatialFull = state.cvHudMode === 'spatial';
-  const fw = v.frame_size?.[0] || 960;
-  const fh = v.frame_size?.[1] || 540;
-  const coverScale = Math.max(vw / fw, vh / fh);
-  const offX = (vw - fw * coverScale) * 0.5;
-  const offY = (vh - fh * coverScale) * 0.5;
-  const mapPt = (pt) => [offX + pt[0] * coverScale, offY + pt[1] * coverScale];
+  const mapPt = (pt) => [
+    tx + z * (offX + pt[0] * coverScale),
+    ty + z * (offY + pt[1] * coverScale),
+  ];
 
   const lerpAlpha = Math.min(1, dt * 16.0);
   const sm = state.spatialSmooth;
@@ -2008,6 +2198,10 @@ function updateTwinMatchBadge() {
   } else if (state.highlightedZone && ZONE_SPECS[state.highlightedZone]) {
     dom.twinMatchBadge.classList.add('is-deviation');
     dom.twinMatchBadge.textContent = `⚠️ TWIN DEVIATION: ${ZONE_SPECS[state.highlightedZone].shortLabel}`;
+  } else if (state.activeCameraMode === 'usb' && !state.sensorDetected) {
+    dom.twinMatchBadge.textContent = state.cameraOffline
+      ? 'AWAITING USB CAMERA'
+      : 'AWAITING SENSOR IN VIEW';
   } else {
     dom.twinMatchBadge.classList.add('is-nominal');
     dom.twinMatchBadge.textContent = '100% DIGITAL TWIN MATCH';
@@ -2052,7 +2246,11 @@ function setFaultHighlight(zoneId, reason = '') {
   } else {
     dom.scanZoneVal.textContent = 'NONE';
     dom.scanZoneVal.classList.remove('fault-active');
-    dom.hudStatusTag.textContent = 'NOMINAL';
+    if (state.activeCameraMode === 'usb' && !state.sensorDetected) {
+      dom.hudStatusTag.textContent = state.cameraOffline ? 'NO CAMERA' : 'SCANNING...';
+    } else {
+      dom.hudStatusTag.textContent = 'NOMINAL';
+    }
     dom.hudStatusTag.classList.remove('is-fault');
   }
   updateTwinMatchBadge();
@@ -2395,23 +2593,25 @@ function drawFallbackScannerFrame() {
     ctx.stroke();
   }
 
-  ctx.save();
-  ctx.translate(w / 2, h / 2);
-  ctx.rotate(THREE.MathUtils.degToRad(state.cameraAngleDeg));
-  ctx.fillStyle = '#94a3b8';
-  ctx.fillRect(-150, -18, 300, 36);
-  ctx.fillStyle = '#111827';
-  ctx.fillRect(62, -19, 12, 38);
-  if (state.activeCameraMode === 'sim_open_dip') {
-    ctx.fillStyle = '#0d4f8b';
-    ctx.fillRect(-20, -13, 64, 26);
+  if (state.activeCameraMode !== 'usb') {
+    ctx.save();
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate(THREE.MathUtils.degToRad(state.cameraAngleDeg));
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillRect(-150, -18, 300, 36);
+    ctx.fillStyle = '#111827';
+    ctx.fillRect(62, -19, 12, 38);
+    if (state.activeCameraMode === 'sim_open_dip') {
+      ctx.fillStyle = '#0d4f8b';
+      ctx.fillRect(-20, -13, 64, 26);
+    }
+    if (state.highlightedZone === 'strainer_head') {
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(75, -24, 82, 48);
+    }
+    ctx.restore();
   }
-  if (state.highlightedZone === 'strainer_head') {
-    ctx.strokeStyle = '#ef4444';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(75, -24, 82, 48);
-  }
-  ctx.restore();
 
   ctx.fillStyle = '#7dd3fc';
   ctx.font = '12px monospace';
@@ -2552,16 +2752,31 @@ function applyTelemetryPayload(data) {
   // 2. Camera FPS & Source
   const fps = vision.fps ?? data.fps;
   const camSrc = vision.camera_source || vision.sim_mode || state.activeCameraMode;
+  const srcStr = String(camSrc).toLowerCase();
+  const isUvcOffline = vision.sim_mode === 'uvc_offline' || srcStr.includes('offline');
+  const isRealUsb =
+    !isUvcOffline &&
+    (srcStr.startsWith('uvc:') || srcStr.includes('video') || camSrc === 'uvc' || camSrc === 'usb');
+  state.cameraOffline = isUvcOffline;
+  if (vision.detected !== undefined) {
+    state.sensorDetected = Boolean(vision.detected);
+  }
   if (fps !== undefined) {
-    const isRealUsb = String(camSrc).includes('video') || camSrc === 'uvc' || camSrc === 'usb';
-    dom.pillCamText.textContent = `${Number(fps).toFixed(0)} FPS`;
-    dom.camSourceBadge.textContent = isRealUsb ? 'LIVE USB CAM' : String(camSrc).toUpperCase();
+    dom.pillCamText.textContent = isUvcOffline ? 'STANDBY' : `${Number(fps).toFixed(0)} FPS`;
+    dom.camSourceBadge.textContent = isRealUsb
+      ? 'LIVE USB CAM'
+      : isUvcOffline
+        ? 'USB CAM STANDBY'
+        : String(camSrc).toUpperCase();
   }
 
   // Sync camera dropdown if changed externally
-  if (vision.mode && dom.selectCameraMode && dom.selectCameraMode.value !== vision.mode) {
-    const hasOpt = Array.from(dom.selectCameraMode.options).some((o) => o.value === vision.mode);
-    if (hasOpt) dom.selectCameraMode.value = vision.mode;
+  if (vision.mode) {
+    state.activeCameraMode = vision.mode;
+    if (dom.selectCameraMode && dom.selectCameraMode.value !== vision.mode) {
+      const hasOpt = Array.from(dom.selectCameraMode.options).some((o) => o.value === vision.mode);
+      if (hasOpt) dom.selectCameraMode.value = vision.mode;
+    }
   }
 
   // 3. AI Model, RAM & Latency
@@ -2615,28 +2830,35 @@ function applyTelemetryPayload(data) {
     }
   }
 
-  if (typeof vision.angle_deg === 'number') {
-    if (!occActive) {
-      state.cameraAngleDeg = vision.angle_deg;
+  if (vision.detected) {
+    if (typeof vision.angle_deg === 'number') {
+      if (!occActive) {
+        state.cameraAngleDeg = vision.angle_deg;
+      }
+      dom.scanAngleVal.textContent = `${vision.angle_deg.toFixed(1)}°`;
+
+      state.scanFramesObserved += 1;
+      state.minObservedAngle = Math.min(state.minObservedAngle, vision.angle_deg);
+      state.maxObservedAngle = Math.max(state.maxObservedAngle, vision.angle_deg);
+      const angularSpan = state.maxObservedAngle - state.minObservedAngle;
+      const coveragePct = Math.min(
+        100,
+        Math.round(36 + angularSpan * 4.5 + Math.min(46, state.scanFramesObserved * 1.4))
+      );
+      dom.scanCoverageVal.textContent = `${coveragePct}%`;
+      dom.scanCoverageFill.style.width = `${coveragePct}%`;
     }
-    dom.scanAngleVal.textContent = `${vision.angle_deg.toFixed(1)}°`;
 
-    state.scanFramesObserved += 1;
-    state.minObservedAngle = Math.min(state.minObservedAngle, vision.angle_deg);
-    state.maxObservedAngle = Math.max(state.maxObservedAngle, vision.angle_deg);
-    const angularSpan = state.maxObservedAngle - state.minObservedAngle;
-    const coveragePct = Math.min(
-      100,
-      Math.round(36 + angularSpan * 4.5 + Math.min(46, state.scanFramesObserved * 1.4))
-    );
-    dom.scanCoverageVal.textContent = `${coveragePct}%`;
-    dom.scanCoverageFill.style.width = `${coveragePct}%`;
-  }
-
-  const estL = vision.est_length_mm;
-  const estD = vision.est_diameter_mm;
-  if (typeof estL === 'number' && typeof estD === 'number') {
-    dom.scanDimVal.textContent = `${estL.toFixed(1)}×${estD.toFixed(1)} mm`;
+    const estL = vision.est_length_mm;
+    const estD = vision.est_diameter_mm;
+    if (typeof estL === 'number' && typeof estD === 'number') {
+      dom.scanDimVal.textContent = `${estL.toFixed(1)}×${estD.toFixed(1)} mm`;
+    }
+  } else if (vision.detected === false) {
+    dom.scanAngleVal.textContent = '--.-°';
+    dom.scanCoverageVal.textContent = '0%';
+    dom.scanCoverageFill.style.width = '0%';
+    dom.scanDimVal.textContent = isUvcOffline ? 'NO CAMERA' : 'SCANNING...';
   }
 
   // 5. Auto-Explode 3D Housing & DIP-8 Pin-Focus Macro PiP
@@ -2747,6 +2969,14 @@ async function pollTelemetry() {
   try {
     const data = await fetchJsonWithFallback(['/api/telemetry', '/api/status', '/api/health']);
     applyTelemetryPayload(data);
+    const noStreamPixels = !dom.videoStream || dom.videoStream.naturalWidth === 0;
+    if (state.videoStreamFailed || noStreamPixels) {
+      rescueSnapshotToFallbackCanvas();
+      if (Date.now() - (state.lastStreamRetryTs || 0) > 2200) {
+        state.lastStreamRetryTs = Date.now();
+        dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
+      }
+    }
     if (state.dipPipVisible) {
       refreshDipCropImage();
     }
@@ -2756,7 +2986,7 @@ async function pollTelemetry() {
 }
 
 async function pollVisionSpatialTelemetry() {
-  if (state.fastVisionInFlight || state.cvHudMode === 'raw') return;
+  if (state.fastVisionInFlight || (state.cvHudMode === 'raw' && state.camZoomMode !== 'auto')) return;
   state.fastVisionInFlight = true;
   try {
     const resp = await fetch('/api/video/telemetry', { cache: 'no-store' });
@@ -2796,7 +3026,7 @@ async function switchCameraMode(mode) {
         : 'Open housing detected exposing internal SW1 DIP-8 block.'
     );
     setManualPage(5, { flash: true });
-  } else if (mode === 'sim_normal') {
+  } else if (mode === 'sim_normal' || mode === 'usb') {
     setExplodedState(false);
     setFaultHighlight(null);
     reset3DCamera();
@@ -3109,9 +3339,12 @@ async function runStep1OpenInspection() {
     const res = await fetchJsonWithFallback(['/api/repair/step'], {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ step: 'inspect_open', sync_simulator: true }),
+      body: JSON.stringify({
+        step: 'inspect_open',
+        sync_simulator: state.activeCameraMode !== 'usb',
+      }),
     });
-    dom.videoStream.src = `/api/video/stream?t=${Date.now()}`;
+    dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
     handleCopilotResponse({ ...res, model: 'AI VOICE ENGINEER · STEP 1 INSPECTION' });
     pollTelemetry();
   } catch (_err) {
@@ -3177,7 +3410,7 @@ async function runStep3ConnectAndValidateModbus() {
         slave_id: targetSlave,
       }),
     });
-    dom.videoStream.src = `/api/video/stream?t=${Date.now()}`;
+    dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
     if (res.event_id) {
       state.seenRepairEventId = Math.max(state.seenRepairEventId, Number(res.event_id));
     }
@@ -3727,9 +3960,74 @@ function bindWorkstationEvents() {
   dom.btnStepConnect.addEventListener('click', runStep3ConnectAndValidateModbus);
   dom.btnStepSignoff.addEventListener('click', generateAndOpenEscalationPackage);
 
-  // Computer Vision Spatial HUD Mode Cycle & DIP-8 Macro PiP Toggle
+  // Computer Vision Spatial HUD Mode Cycle, Optical Zoom & Pure Raw Camera Verification
   if (dom.btnCycleCvHud) {
     dom.btnCycleCvHud.addEventListener('click', cycleCvHudMode);
+  }
+  if (dom.btnRawLiveToggle) {
+    dom.btnRawLiveToggle.addEventListener('click', togglePureRawCamera);
+  }
+  if (dom.cameraZoomBar) {
+    dom.cameraZoomBar.querySelectorAll('.zoom-btn').forEach((btn) => {
+      btn.addEventListener('click', () => setCameraZoomPreset(btn.dataset.zoomMode || 'auto'));
+    });
+  }
+
+  // Smooth mouse-wheel optical zoom (1.0x .. 5.0x) and click-drag panning inside camera stage
+  if (dom.videoFrame) {
+    dom.videoFrame.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.16 : 1 / 1.16;
+        const nextZ = Math.max(1.0, Math.min(5.0, state.camZoomCurrent * factor));
+        state.camZoomMode = 'manual';
+        state.camZoomTarget = nextZ;
+        if (nextZ <= 1.02) {
+          state.camPanTarget = [0.5, 0.5];
+        } else {
+          const rect = dom.videoFrame.getBoundingClientRect();
+          const mx = (e.clientX - rect.left) / Math.max(1, rect.width);
+          const my = (e.clientY - rect.top) / Math.max(1, rect.height);
+          state.camPanTarget = [
+            Math.max(0.05, Math.min(0.95, state.camPanTarget[0] + (mx - 0.5) * 0.18)),
+            Math.max(0.05, Math.min(0.95, state.camPanTarget[1] + (my - 0.5) * 0.18)),
+          ];
+        }
+        syncZoomButtonsUi();
+      },
+      { passive: false }
+    );
+
+    dom.videoFrame.addEventListener('pointerdown', (e) => {
+      if (state.camZoomCurrent <= 1.03) return;
+      if (e.target.closest('button') || e.target.closest('.dip-macro-pip')) return;
+      state.camDragActive = true;
+      state.camZoomMode = 'manual';
+      state.camDragLast = [e.clientX, e.clientY];
+      dom.videoFrame.classList.add('is-panning');
+      syncZoomButtonsUi();
+    });
+
+    window.addEventListener('pointermove', (e) => {
+      if (!state.camDragActive || !dom.videoFrame) return;
+      const vw = Math.max(1, dom.videoFrame.clientWidth);
+      const vh = Math.max(1, dom.videoFrame.clientHeight);
+      const dx = e.clientX - state.camDragLast[0];
+      const dy = e.clientY - state.camDragLast[1];
+      state.camDragLast = [e.clientX, e.clientY];
+      const z = Math.max(1.05, state.camZoomCurrent);
+      state.camPanTarget = [
+        Math.max(0.02, Math.min(0.98, state.camPanTarget[0] - dx / (vw * z))),
+        Math.max(0.02, Math.min(0.98, state.camPanTarget[1] - dy / (vh * z))),
+      ];
+    });
+
+    window.addEventListener('pointerup', () => {
+      if (!state.camDragActive) return;
+      state.camDragActive = false;
+      dom.videoFrame?.classList.remove('is-panning');
+    });
   }
 
   dom.btnToggleDipPip.addEventListener('click', () => {
@@ -3753,12 +4051,15 @@ function bindWorkstationEvents() {
     dom.dipCropImg.hidden = false;
   });
 
-  // Video Stream Fallback Handler
+  // Video Stream Fallback Handler (rescues with live camera snapshot so screen never turns black)
   dom.videoStream.addEventListener('error', () => {
     state.videoStreamFailed = true;
     dom.videoStream.hidden = true;
     dom.videoFallbackCanvas.hidden = false;
-    drawFallbackScannerFrame();
+    rescueSnapshotToFallbackCanvas();
+    if (!state.hasLiveSnapshotFallback) {
+      drawFallbackScannerFrame();
+    }
   });
   dom.videoStream.addEventListener('load', () => {
     state.videoStreamFailed = false;
@@ -3929,9 +4230,27 @@ function bindWorkstationEvents() {
 
 function bootstrap() {
   window.lucide?.createIcons();
-  initCadStudio();
+  let cadOk = false;
+  try {
+    initCadStudio();
+    cadOk = Boolean(cad.renderer);
+  } catch (_err) {
+    cadOk = false;
+  }
+  if (!cadOk) {
+    let prevHudTs = performance.now();
+    const fallbackHudTick = (now) => {
+      const dt = Math.min(0.05, Math.max(0.001, (now - prevHudTs) / 1000));
+      prevHudTs = now;
+      renderSpatialVisionHud(now, dt);
+      requestAnimationFrame(fallbackHudTick);
+    };
+    requestAnimationFrame(fallbackHudTick);
+  }
   initScadaChart();
   renderDipHud();
+  syncCvHudControls();
+  syncZoomButtonsUi();
   setManualPage(1);
   bindWorkstationEvents();
 

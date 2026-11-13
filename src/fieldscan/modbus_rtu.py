@@ -346,6 +346,8 @@ class ModbusRTUScanner:
         self._active_slave_id: int = self.target_slave_id
         self._active_baud: int = self.baud_bps
         self._poll_seq: int = 0
+        self._hw_miss_streak: int = 0
+        self._last_hw_success: dict[str, Any] | None = None
         self._breath_started_at: float = 0.0
         self._history: deque[dict[str, Any]] = deque(maxlen=36)
         self._latest_telemetry: dict[str, Any] = {}
@@ -383,6 +385,9 @@ class ModbusRTUScanner:
             raise ValueError(f"Unsupported Modbus mode '{mode}'. Valid: {MODBUS_MODES}")
         with self._lock:
             self._mode = clean
+            self._hw_miss_streak = 0
+            if clean not in ("auto", "hardware"):
+                self._last_hw_success = None
             if clean == "sim_breath_test":
                 self._breath_started_at = time.perf_counter()
             if target_slave_id is not None and 1 <= int(target_slave_id) <= 247:
@@ -404,7 +409,7 @@ class ModbusRTUScanner:
         return self.step_once()
 
     def _probe_single_serial(
-        self, port_name: str, slave_id: int, baud_bps: int, timeout_s: float = 0.085
+        self, port_name: str, slave_id: int, baud_bps: int, timeout_s: float = 0.18
     ) -> tuple[dict[str, Any] | None, str, str, float]:
         """Send Function 0x03 Read Holding Registers over real RS-485 serial port."""
         tx = build_read_registers_request(slave_id=slave_id, start_reg=0x0000, count=8)
@@ -425,9 +430,19 @@ class ModbusRTUScanner:
                 ser.flush()
                 # 8 registers response = 1(addr) + 1(func) + 1(byte_count=16) + 16(data) + 2(crc) = 21 bytes
                 rx = ser.read(21)
+                if rx and (len(rx) < 21 or not verify_crc16(rx)):
+                    waiting = ser.in_waiting
+                    if waiting > 0:
+                        rx += ser.read(min(16, waiting))
             rtt_ms = round((time.perf_counter() - t0) * 1000.0, 2)
             if not rx:
                 return None, tx_hex, "", rtt_ms
+            if len(rx) > 21 and not verify_crc16(rx):
+                for off in range(0, len(rx) - 20):
+                    cand = rx[off : off + 21]
+                    if verify_crc16(cand):
+                        rx = cand
+                        break
             decoded = decode_tht02_holding_response(rx)
             return decoded, tx_hex, format_hex(rx), rtt_ms
         except Exception:
@@ -461,7 +476,7 @@ class ModbusRTUScanner:
             for baud in bauds:
                 for sid in priority_slaves:
                     decoded, tx_hex, rx_hex, rtt_ms = self._probe_single_serial(
-                        dev, slave_id=sid, baud_bps=baud, timeout_s=0.075
+                        dev, slave_id=sid, baud_bps=baud, timeout_s=0.14
                     )
                     if decoded is not None:
                         with self._lock:
@@ -503,19 +518,71 @@ class ModbusRTUScanner:
 
         # 1. Hardware probing when mode is "hardware" or ("auto" with real USB-RS485 plugged in)
         if mode == "hardware" or (mode == "auto" and hw_present):
-            port_list = [active_port] + [p["device"] for p in ports if p["device"] != active_port]
-            port_list = [p for p in port_list if p]
+            avail_devs = [p["device"] for p in ports if p.get("device")]
+            port_list = (
+                ([active_port] if active_port in avail_devs else [])
+                + [d for d in avail_devs if d != active_port]
+            )
             slave_candidates = []
             for s in (active_sid, target_sid, 1, 176):
                 if 1 <= s <= 247 and s not in slave_candidates:
                     slave_candidates.append(s)
 
-            for dev in port_list:
-                for sid in slave_candidates:
+            # Fast locked-link probe with 220ms turnaround budget + 1 immediate retry
+            if active_port and active_port in avail_devs:
+                for attempt in range(2):
                     decoded, tx_hex, rx_hex, rtt_ms = self._probe_single_serial(
-                        dev, slave_id=sid, baud_bps=active_baud, timeout_s=0.08
+                        active_port, slave_id=active_sid, baud_bps=active_baud, timeout_s=0.22
                     )
                     if decoded is not None:
+                        with self._lock:
+                            self._hw_miss_streak = 0
+                            self._last_hw_success = {
+                                "port": active_port,
+                                "baud_bps": active_baud,
+                                "decoded": decoded,
+                                "tx_hex": tx_hex,
+                                "rx_hex": rx_hex,
+                                "rtt_ms": rtt_ms,
+                            }
+                        return self._record_telemetry(
+                            online=True,
+                            source=f"hardware:{active_port}",
+                            port=active_port,
+                            adapter_present=True,
+                            mode=mode,
+                            baud_bps=active_baud,
+                            decoded=decoded,
+                            tx_hex=tx_hex,
+                            rx_hex=rx_hex,
+                            roundtrip_ms=rtt_ms,
+                            status_label="SCADA ONLINE (7FFFH FAULT)"
+                            if decoded["sensor_abnormal_7fff"]
+                            else "SCADA ONLINE · VERIFIED",
+                        )
+                    if attempt == 0:
+                        time.sleep(0.015)
+
+            for dev in port_list:
+                for sid in slave_candidates:
+                    if dev == active_port and sid == active_sid:
+                        continue
+                    decoded, tx_hex, rx_hex, rtt_ms = self._probe_single_serial(
+                        dev, slave_id=sid, baud_bps=active_baud, timeout_s=0.16
+                    )
+                    if decoded is not None:
+                        with self._lock:
+                            self._active_port = dev
+                            self._active_slave_id = decoded["reported_slave_id"] or sid
+                            self._hw_miss_streak = 0
+                            self._last_hw_success = {
+                                "port": dev,
+                                "baud_bps": active_baud,
+                                "decoded": decoded,
+                                "tx_hex": tx_hex,
+                                "rx_hex": rx_hex,
+                                "rtt_ms": rtt_ms,
+                            }
                         return self._record_telemetry(
                             online=True,
                             source=f"hardware:{dev}",
@@ -532,6 +599,35 @@ class ModbusRTUScanner:
                             else "SCADA ONLINE · VERIFIED",
                         )
 
+            # Debounce isolated single-frame RS-485 collisions so UI/TTS never flicker
+            with self._lock:
+                prev_ok = self._last_hw_success
+                if prev_ok is not None and hw_present and prev_ok["port"] in avail_devs and self._hw_miss_streak < 3:
+                    self._hw_miss_streak += 1
+                    hold_ok = dict(prev_ok)
+                else:
+                    self._hw_miss_streak = 0
+                    self._last_hw_success = None
+                    hold_ok = None
+
+            if hold_ok is not None:
+                dec_hold = hold_ok["decoded"]
+                return self._record_telemetry(
+                    online=True,
+                    source=f"hardware:{hold_ok['port']}",
+                    port=hold_ok["port"],
+                    adapter_present=True,
+                    mode=mode,
+                    baud_bps=hold_ok["baud_bps"],
+                    decoded=dec_hold,
+                    tx_hex=hold_ok["tx_hex"],
+                    rx_hex=hold_ok["rx_hex"],
+                    roundtrip_ms=hold_ok["rtt_ms"],
+                    status_label="SCADA ONLINE (7FFFH FAULT)"
+                    if dec_hold["sensor_abnormal_7fff"]
+                    else "SCADA ONLINE · VERIFIED",
+                )
+
             # Hardware adapter present (or requested), but sensor unpowered / wrong DIP / disconnected
             tx_probe = build_read_registers_request(slave_id=target_sid, start_reg=0x0000, count=8)
             first_dev = port_list[0] if port_list else None
@@ -545,7 +641,7 @@ class ModbusRTUScanner:
                 decoded=None,
                 tx_hex=format_hex(tx_probe),
                 rx_hex="",
-                roundtrip_ms=80.0 if hw_present else 0.0,
+                roundtrip_ms=160.0 if hw_present else 0.0,
                 status_label="BUS TIMEOUT · NO RS-485 SIGNAL"
                 if hw_present
                 else "USB-RS485 ADAPTER DISCONNECTED",

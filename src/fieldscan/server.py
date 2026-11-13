@@ -38,7 +38,7 @@ OUTBOX_DIR = PROJECT_ROOT / "outbox"
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
 
-INITIAL_CAM_MODE = os.environ.get("FIELDSCAN_CAMERA_MODE", "sim_normal")
+INITIAL_CAM_MODE = os.environ.get("FIELDSCAN_CAMERA_MODE", "usb")
 INITIAL_MODBUS_MODE = os.environ.get("FIELDSCAN_MODBUS_MODE", "auto")
 
 _SCANNER = VisionScanner(initial_mode=INITIAL_CAM_MODE, auto_start=False)
@@ -299,16 +299,25 @@ async def api_video_stream(request: Request, raw: bool = False) -> StreamingResp
             if await request.is_disconnected():
                 break
             jpg = _SCANNER.get_raw_jpeg() if raw else _SCANNER.get_latest_jpeg()
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n"
-                b"Cache-Control: no-store\r\n\r\n" + jpg + b"\r\n"
-            )
-            await asyncio.sleep(1.0 / 28.0)
+            if jpg:
+                part_header = (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Cache-Control: no-store, no-cache, must-revalidate, max-age=0\r\n"
+                    + f"Content-Length: {len(jpg)}\r\n\r\n".encode("ascii")
+                )
+                yield part_header + jpg + b"\r\n"
+            await asyncio.sleep(1.0 / 26.0)
 
     return StreamingResponse(
         frame_generator(),
         media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

@@ -425,3 +425,63 @@ def test_closed_loop_live_repair_and_4angle_signoff_dossier() -> None:
         assert r_eml.status_code == 200
         eml_msg = email.message_from_bytes(r_eml.content)
         assert eml_msg["X-FieldScan-SignOff-Request"] == "TRUE"
+
+
+def test_live_camera_multi_background_all_angle_and_no_fake_fallback() -> None:
+    """Verify real-camera detector works across white/black/grey/colored/split backgrounds & 0-360 deg with zero fake frames."""
+    import cv2
+    import numpy as np
+
+    scanner = VisionScanner(initial_mode="sim_normal", auto_start=False)
+    standby = scanner._render_uvc_standby_frame(reason="AWAITING USB CAMERA")
+    _, tel_off = scanner.analyze_frame(standby, sim_mode="uvc_offline", camera_source="uvc:offline")
+    assert tel_off["detected"] is False
+    assert tel_off["mode"] == "usb"
+    assert tel_off["sim_mode"] == "uvc_offline"
+
+    sp_bgr, sp_alpha = scanner.synth.closed_bgr, scanner.synth.closed_alpha
+    sh, sw = sp_bgr.shape[:2]
+    rng = np.random.default_rng(7)
+
+    backgrounds = {
+        "white_wall": (240, 242, 244),
+        "isolum_wall": (198, 194, 189),
+        "black_surface": (26, 28, 30),
+        "grey_steel": (130, 134, 138),
+        "blue_machine": (172, 88, 28),
+        "red_cabinet": (42, 52, 188),
+        "yellow_guard": (38, 198, 236),
+    }
+
+    for idx, (bg_name, bgr_col) in enumerate(backgrounds.items()):
+        w, h = 1280, 720
+        bg = np.clip(
+            np.full((h, w, 3), bgr_col, np.float32) + rng.normal(0, 2.5, (h, w, 3)).astype(np.float32),
+            0,
+            255,
+        ).astype(np.uint8)
+
+        # Verify empty background yields zero false positives
+        scanner._locked_pose = None
+        _, tel_empty = scanner.analyze_frame(bg, sim_mode="live_uvc", camera_source="uvc:avfoundation:0")
+        assert tel_empty["detected"] is False, f"False positive on empty {bg_name}"
+
+        # Place real TZ THT-02 sprite at diverse 0-360 deg orientations (horizontal, vertical, oblique, inverted)
+        ang = [0.0, 90.0, -42.0, 180.0, 135.0, -78.0, 28.0][idx % 7]
+        rot_m = cv2.getRotationMatrix2D((sw * 0.5, hm := sh * 0.5), -ang, 0.80)
+        rot_m[0, 2] += w * 0.5 - sw * 0.5
+        rot_m[1, 2] += h * 0.5 - hm
+        wb = cv2.warpAffine(sp_bgr, rot_m, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        wa = cv2.warpAffine(sp_alpha, rot_m, (w, h), flags=cv2.INTER_LINEAR, borderValue=0).astype(np.float32) / 255.0
+        frame = bg.copy()
+        m = wa > 0.02
+        a3 = wa[m][:, None]
+        frame[m] = np.clip(frame[m].astype(np.float32) * (1.0 - a3) + wb[m].astype(np.float32) * a3, 0, 255).astype(
+            np.uint8
+        )
+
+        scanner._locked_pose = None
+        _, tel_pos = scanner.analyze_frame(frame, sim_mode="live_uvc", camera_source="uvc:avfoundation:0")
+        assert tel_pos["detected"] is True, f"Missed TZ THT-02 on {bg_name} at {ang} deg"
+        ang_err = abs(((tel_pos["angle_deg"] - ang + 180.0) % 360.0) - 180.0)
+        assert ang_err <= 5.0, f"Orientation error {ang_err} deg on {bg_name} (target {ang}, got {tel_pos['angle_deg']})"

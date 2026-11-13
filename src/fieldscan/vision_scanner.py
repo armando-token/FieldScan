@@ -13,13 +13,18 @@ Supports:
 
 from __future__ import annotations
 
+import atexit
 from collections import deque
 import math
 import os
 from pathlib import Path
+import struct
+import subprocess
+import sys
 import threading
 import time
 from typing import Any
+import weakref
 
 import cv2
 import numpy as np
@@ -588,7 +593,7 @@ class VisionScanner:
         self,
         initial_mode: str | None = None,
         target_fps: float = 28.0,
-        jpeg_quality: int = 82,
+        jpeg_quality: int = 88,
         auto_start: bool = False,
     ) -> None:
         self.assets_dir = _resolve_assets_dir()
@@ -596,10 +601,19 @@ class VisionScanner:
         self.target_fps = max(5.0, min(30.0, float(target_fps)))
         self.jpeg_quality = int(jpeg_quality)
 
+        self._step_lock = threading.Lock()
         self._lock = threading.Lock()
+        self._cap_lock = threading.Lock()
         self._running = False
         self._thread: threading.Thread | None = None
         self._cap: cv2.VideoCapture | None = None
+        self._mac_proc: subprocess.Popen[bytes] | None = None
+        self._mac_spawn_ts: float = 0.0
+        self._mac_latest_packet: tuple[np.ndarray, str, float] | None = None
+        self._last_uvc_frame: np.ndarray | None = None
+        self._uvc_fail_streak: int = 0
+        self._uvc_black_streak: int = 0
+        self._last_uvc_retry_ts: float = 0.0
 
         self._requested_mode = initial_mode or os.environ.get("FIELDSCAN_CAMERA_MODE", "auto")
         self._active_sim_mode = "sim_normal"
@@ -618,6 +632,18 @@ class VisionScanner:
         self._fps_ema = 28.0
         self._last_tick = time.perf_counter()
 
+        weak_self = weakref.ref(self)
+
+        def _cleanup_on_exit() -> None:
+            inst = weak_self()
+            if inst is not None:
+                try:
+                    inst.stop()
+                except Exception:
+                    pass
+
+        atexit.register(_cleanup_on_exit)
+
         # Initialize hardware/simulator mode and run one synchronous frame immediately
         # so callers never observe empty bytes or uninitialized telemetry.
         self._configure_source(self._requested_mode)
@@ -625,36 +651,193 @@ class VisionScanner:
         if auto_start:
             self.start()
 
-    def _try_open_uvc(self, preferred_device: str | None = None) -> tuple[cv2.VideoCapture | None, str]:
-        """Attempt to open a real USB UVC webcam (Linux V4L2 `/dev/video*` or macOS AVFoundation `0,1`)."""
-        import sys
+    @staticmethod
+    def _render_uvc_standby_frame(width: int = 960, height: int = 540, reason: str = "NO USB CAMERA SIGNAL") -> np.ndarray:
+        """Render a dark technical standby screen (never a fake sensor) when live USB camera is offline."""
+        frame = np.full((height, width, 3), (18, 22, 28), dtype=np.uint8)
+        for gx in range(0, width, 48):
+            cv2.line(frame, (gx, 0), (gx, height), (25, 31, 40), 1)
+        for gy in range(0, height, 48):
+            cv2.line(frame, (0, gy), (width, gy), (25, 31, 40), 1)
+        cx, cy = width // 2, height // 2
+        cv2.rectangle(frame, (cx - 250, cy - 58), (cx + 250, cy + 58), (24, 30, 40), -1)
+        cv2.rectangle(frame, (cx - 250, cy - 58), (cx + 250, cy + 58), (64, 92, 125), 1)
+        cv2.putText(
+            frame,
+            f"LIVE OPTICAL CAMERA: {reason}",
+            (cx - 224, cy - 12),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.58,
+            (180, 215, 245),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            "Connect USB camera or grant macOS Camera access (no simulated image shown)",
+            (cx - 224, cy + 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.40,
+            (130, 155, 180),
+            1,
+            cv2.LINE_AA,
+        )
+        return frame
 
-        if sys.platform == "darwin":
-            mac_indices = [0, 1]
-            if preferred_device and preferred_device.isdigit():
-                mac_indices = [int(preferred_device)] + [i for i in mac_indices if i != int(preferred_device)]
-            for idx in mac_indices:
-                cap: cv2.VideoCapture | None = None
-                try:
-                    cap = cv2.VideoCapture(idx, cv2.CAP_AVFOUNDATION)
-                    if not cap.isOpened():
-                        cap.release()
+    @staticmethod
+    def _discover_macos_uvc_indices() -> list[int]:
+        """Enumerate AVFoundation video indices and exclude Continuity iPhone/iPad & screen-capture devices."""
+        import re as _re
+        import shutil
+        import subprocess
+
+        root_dir = Path(__file__).resolve().parents[2]
+        local_ff = root_dir / "vendor" / "bin" / "ffmpeg"
+        ffmpeg_bin = str(local_ff) if local_ff.exists() else shutil.which("ffmpeg")
+        if ffmpeg_bin:
+            try:
+                proc = subprocess.run(
+                    [ffmpeg_bin, "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                    capture_output=True,
+                    text=True,
+                    timeout=1.5,
+                    check=False,
+                )
+                out = (proc.stderr or "") + "\n" + (proc.stdout or "")
+                in_video = False
+                usb_first: list[int] = []
+                other_real: list[int] = []
+                for line in out.splitlines():
+                    low = line.lower()
+                    if "avfoundation video devices" in low:
+                        in_video = True
                         continue
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                    cap.set(cv2.CAP_PROP_FPS, 30)
-                    ok, test_frame = cap.read()
-                    if ok and test_frame is not None and test_frame.size > 0:
-                        return cap, f"uvc:avfoundation:{idx}"
-                    cap.release()
-                except Exception:
-                    if cap is not None:
-                        try:
-                            cap.release()
-                        except Exception:
-                            pass
-            return None, ""
+                    if "avfoundation audio devices" in low:
+                        break
+                    if not in_video:
+                        continue
+                    m = _re.search(r"\[(\d+)\]\s+(.+)$", line.strip())
+                    if not m:
+                        continue
+                    idx = int(m.group(1))
+                    name_low = m.group(2).strip().lower()
+                    if any(
+                        skip in name_low
+                        for skip in ("iphone", "ipad", "continuity", "capture screen", "desk view", "virtual")
+                    ):
+                        continue
+                    if any(u in name_low for u in ("wbc", "uvc", "usb", "webcam", "logitech", "hd")):
+                        usb_first.append(idx)
+                    else:
+                        other_real.append(idx)
+                valid = usb_first + other_real
+                if valid:
+                    return valid
+            except Exception:
+                pass
+        return [0, 1]
 
+    @staticmethod
+    def _read_pipe_exact(pipe: Any, size: int) -> bytes:
+        chunks: list[bytes] = []
+        remaining = size
+        while remaining > 0:
+            chunk = pipe.read(remaining)
+            if not chunk:
+                return b""
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks) if len(chunks) > 1 else (chunks[0] if chunks else b"")
+
+    def _mac_reader_loop(self, proc: subprocess.Popen[bytes]) -> None:
+        """Read continuous raw BGR frames from isolated macOS AVFoundation worker subprocess."""
+        hdr_struct = struct.Struct("<4sHHHI")
+        pipe = proc.stdout
+        if pipe is None:
+            return
+        try:
+            while True:
+                hdr = self._read_pipe_exact(pipe, hdr_struct.size)
+                if len(hdr) != hdr_struct.size:
+                    break
+                magic, w, h, src_len, payload_len = hdr_struct.unpack(hdr)
+                if magic != b"FSCN" or w <= 0 or h <= 0 or w > 4096 or h > 4096 or payload_len != (w * h * 3):
+                    break
+                src_raw = self._read_pipe_exact(pipe, src_len) if src_len > 0 else b"uvc:avfoundation:0"
+                if src_len > 0 and len(src_raw) != src_len:
+                    break
+                payload = self._read_pipe_exact(pipe, payload_len)
+                if len(payload) != payload_len:
+                    break
+                bgr = np.frombuffer(payload, dtype=np.uint8).reshape((h, w, 3)).copy()
+                src_name = src_raw.decode("utf-8", errors="replace") or "uvc:avfoundation:0"
+                now_ts = time.perf_counter()
+                with self._lock:
+                    self._mac_latest_packet = (bgr, src_name, now_ts)
+                    if self._requested_mode not in SIM_MODES and self._requested_mode != "custom":
+                        self._active_sim_mode = "live_uvc"
+                        self._camera_source = src_name
+        except Exception:
+            pass
+        finally:
+            try:
+                pipe.close()
+            except Exception:
+                pass
+
+    def _stop_mac_worker_unlocked(self) -> None:
+        """Terminate macOS camera worker subprocess; caller must hold `self._cap_lock`."""
+        proc = self._mac_proc
+        self._mac_proc = None
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=0.4)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=0.3)
+            except Exception:
+                pass
+            if proc.stdout is not None:
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
+
+    def _spawn_mac_worker_unlocked(self, preferred_device: str | None = None) -> bool:
+        """Spawn isolated macOS AVFoundation worker; caller must hold `self._cap_lock`."""
+        self._stop_mac_worker_unlocked()
+        worker_script = str(Path(__file__).resolve().with_name("mac_uvc_worker.py"))
+        cmd = [sys.executable, "-u", worker_script]
+        if preferred_device and preferred_device.isdigit():
+            cmd.append(preferred_device)
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                bufsize=0,
+            )
+            self._mac_proc = proc
+            self._mac_spawn_ts = time.perf_counter()
+            self._last_uvc_retry_ts = self._mac_spawn_ts
+            reader = threading.Thread(
+                target=self._mac_reader_loop,
+                args=(proc,),
+                name="fieldscan-mac-uvc-pipe",
+                daemon=True,
+            )
+            reader.start()
+            return True
+        except Exception:
+            self._mac_proc = None
+            return False
+
+    def _try_open_uvc(self, preferred_device: str | None = None) -> tuple[cv2.VideoCapture | None, str]:
+        """Attempt to open a real Linux V4L2 USB UVC webcam (`/dev/video*`)."""
         candidates: list[int | str] = []
         if preferred_device and preferred_device.startswith("/dev/video"):
             candidates.append(preferred_device)
@@ -679,10 +862,14 @@ class VisionScanner:
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                 cap.set(cv2.CAP_PROP_FPS, 30)
-                ok, test_frame = cap.read()
-                if ok and test_frame is not None and test_frame.size > 0:
-                    src_name = f"uvc:{dev}"
-                    return cap, src_name
+                for _ in range(8):
+                    ok, test_frame = cap.read()
+                    if ok and test_frame is not None and test_frame.size > 0:
+                        self._last_uvc_frame = test_frame
+                        self._uvc_fail_streak = 0
+                        src_name = f"uvc:{dev}"
+                        return cap, src_name
+                    time.sleep(0.02)
                 cap.release()
             except Exception:
                 if cap is not None:
@@ -693,41 +880,123 @@ class VisionScanner:
         return None, ""
 
     def _release_cap(self) -> None:
+        """Release hardware capture handles; caller must hold `self._cap_lock`."""
+        self._stop_mac_worker_unlocked()
         if self._cap is not None:
             try:
                 self._cap.release()
             except Exception:
                 pass
             self._cap = None
+        self._uvc_fail_streak = 0
 
     def _configure_source(self, mode: str) -> None:
+        """Configure camera or simulator source without ever nesting `_lock` and `_cap_lock`."""
         mode_clean = (mode or "auto").strip().lower()
-        self._requested_mode = mode_clean
 
         if mode_clean in SIM_MODES:
-            self._release_cap()
-            self._active_sim_mode = mode_clean
-            self._camera_source = f"simulator:{mode_clean}"
+            if sys.platform != "darwin":
+                with self._cap_lock:
+                    self._release_cap()
+            with self._lock:
+                self._requested_mode = mode_clean
+                self._active_sim_mode = mode_clean
+                self._camera_source = f"simulator:{mode_clean}"
             return
 
-        if mode_clean == "custom" and self._custom_bgr is not None:
-            self._release_cap()
-            self._active_sim_mode = "custom"
-            self._camera_source = "custom:injected_frame"
+        with self._lock:
+            has_custom = self._custom_bgr is not None
+        if mode_clean == "custom" and has_custom:
+            if sys.platform != "darwin":
+                with self._cap_lock:
+                    self._release_cap()
+            with self._lock:
+                self._requested_mode = "custom"
+                self._active_sim_mode = "custom"
+                self._camera_source = "custom:injected_frame"
             return
 
-        # Try real UVC webcam ("auto", "uvc", "usb", "/dev/video0", "/dev/video1")
+        with self._lock:
+            self._requested_mode = mode_clean
+            existing_pkt = self._mac_latest_packet
+
+        # macOS dedicated AVFoundation worker subprocess path
+        if sys.platform == "darwin":
+            pref_idx = mode_clean if mode_clean.isdigit() else None
+            now_ts = time.perf_counter()
+            with self._cap_lock:
+                worker_alive = self._mac_proc is not None and self._mac_proc.poll() is None
+                if worker_alive and existing_pkt is not None and (now_ts - existing_pkt[2]) < 5.0 and pref_idx is None:
+                    already_streaming = True
+                else:
+                    already_streaming = False
+                    spawned = self._spawn_mac_worker_unlocked(preferred_device=pref_idx)
+
+            if already_streaming and existing_pkt is not None:
+                with self._lock:
+                    self._active_sim_mode = "live_uvc"
+                    self._camera_source = existing_pkt[1]
+                return
+
+            if not spawned:
+                with self._lock:
+                    self._mac_latest_packet = None
+                    self._active_sim_mode = "uvc_offline"
+                    self._camera_source = "uvc:offline"
+                return
+
+            # Wait up to 5.0s outside all locks for first live frame from hardware camera
+            deadline = time.perf_counter() + 5.0
+            while time.perf_counter() < deadline:
+                with self._lock:
+                    pkt = self._mac_latest_packet
+                if pkt is not None and (time.perf_counter() - pkt[2]) < 4.0:
+                    with self._lock:
+                        self._active_sim_mode = "live_uvc"
+                        self._camera_source = pkt[1]
+                    return
+                with self._cap_lock:
+                    proc_done = self._mac_proc is None or self._mac_proc.poll() is not None
+                if proc_done:
+                    break
+                time.sleep(0.025)
+
+            with self._lock:
+                pkt = self._mac_latest_packet
+                if pkt is not None and (time.perf_counter() - pkt[2]) < 4.0:
+                    self._active_sim_mode = "live_uvc"
+                    self._camera_source = pkt[1]
+                else:
+                    self._active_sim_mode = "uvc_offline"
+                    self._camera_source = "uvc:offline"
+            return
+
+        # Linux V4L2 direct capture path
         pref = mode_clean if mode_clean.startswith("/dev/video") else None
-        self._release_cap()
-        cap, src_name = self._try_open_uvc(preferred_device=pref)
-        if cap is not None:
-            self._cap = cap
-            self._active_sim_mode = "live_uvc"
-            self._camera_source = src_name
-        else:
-            # Clean hardware-free fallback to workbench simulator
-            self._active_sim_mode = "sim_normal"
-            self._camera_source = "simulator:sim_normal (uvc_fallback)"
+        with self._cap_lock:
+            if pref is None and self._cap is not None and self._cap.isOpened():
+                keep_open = True
+                cap_opened = True
+                src_name = "uvc:/dev/video0"
+            else:
+                keep_open = False
+                self._release_cap()
+                cap, src_name = self._try_open_uvc(preferred_device=pref)
+                self._last_uvc_retry_ts = time.perf_counter()
+                if cap is not None:
+                    self._cap = cap
+                    cap_opened = True
+                else:
+                    cap_opened = False
+
+        with self._lock:
+            if cap_opened:
+                self._active_sim_mode = "live_uvc"
+                if not keep_open:
+                    self._camera_source = src_name
+            else:
+                self._active_sim_mode = "uvc_offline"
+                self._camera_source = "uvc:offline"
 
     def start(self) -> None:
         """Start background 30 FPS capture & OpenCV telemetry thread."""
@@ -741,20 +1010,21 @@ class VisionScanner:
             self._thread.start()
 
     def stop(self) -> None:
-        """Stop background capture loop and release any V4L2 device handle."""
+        """Stop background capture loop and release any UVC/V4L2 device handle."""
         with self._lock:
             self._running = False
             thread = self._thread
             self._thread = None
         if thread is not None and thread.is_alive():
             thread.join(timeout=1.5)
-        with self._lock:
+        with self._cap_lock:
             self._release_cap()
+        with self._lock:
+            self._mac_latest_packet = None
 
     def set_mode(self, mode: str) -> dict[str, Any]:
-        """Switch between USB UVC camera and any of the 4 simulated workbench modes."""
-        with self._lock:
-            self._configure_source(mode)
+        """Switch between USB UVC camera and any of the simulated workbench modes."""
+        self._configure_source(mode)
         return self.step_once()
 
     def inject_custom_frame(self, image_bytes: bytes) -> dict[str, Any]:
@@ -768,8 +1038,10 @@ class VisionScanner:
         if w > 1280:
             nh = max(64, int(round(h * (1280.0 / w))))
             decoded = cv2.resize(decoded, (1280, nh), interpolation=cv2.INTER_AREA)
+        if sys.platform != "darwin":
+            with self._cap_lock:
+                self._release_cap()
         with self._lock:
-            self._release_cap()
             self._custom_bgr = decoded
             self._requested_mode = "custom"
             self._active_sim_mode = "custom"
@@ -778,7 +1050,7 @@ class VisionScanner:
 
     def list_modes(self) -> list[dict[str, Any]]:
         return [
-            {"id": "auto", "label": "Auto (USB UVC / Sim Fallback)"},
+            {"id": "usb", "label": "Live USB Camera (UVC / AVFoundation)"},
             {"id": "sim_normal", "label": "Sim: Clean TZ THT-02 Probe"},
             {"id": "sim_strainer_patch", "label": "Sim: Strainer Red X-Patch (+56 mm)"},
             {"id": "sim_open_dip", "label": "Sim: Unscrewed Blue DIP PCB (+18 mm)"},
@@ -788,22 +1060,93 @@ class VisionScanner:
 
     def _acquire_raw_frame(self) -> tuple[np.ndarray, str, str]:
         with self._lock:
-            cap = self._cap
             sim_mode = self._active_sim_mode
             cam_src = self._camera_source
             custom_bgr = self._custom_bgr
+            req_mode = self._requested_mode
+            mac_pkt = self._mac_latest_packet
 
-        if cap is not None:
-            ok, frame = cap.read()
-            if ok and frame is not None and frame.size > 0:
-                return frame, "live_uvc", cam_src
-            # USB webcam unplugged mid-session -> clean automatic fallback!
+        # macOS non-blocking pipe consumer (zero AVFoundation calls inside uvicorn process)
+        if sys.platform == "darwin" and req_mode not in SIM_MODES and req_mode != "custom":
+            now_t = time.perf_counter()
+            if mac_pkt is not None and (now_t - mac_pkt[2]) <= 5.5:
+                pkt_bgr, pkt_src, _ = mac_pkt
+                if sim_mode != "live_uvc" or cam_src != pkt_src:
+                    with self._lock:
+                        self._active_sim_mode = "live_uvc"
+                        self._camera_source = pkt_src
+                return pkt_bgr.copy(), "live_uvc", pkt_src
+
+            # Worker has not produced a frame within 5.5s; respawn asynchronously if exited
+            with self._cap_lock:
+                worker_dead = self._mac_proc is None or self._mac_proc.poll() is not None
+                if worker_dead and (now_t - self._last_uvc_retry_ts) >= 2.8:
+                    pref_idx = req_mode if req_mode.isdigit() else None
+                    self._spawn_mac_worker_unlocked(preferred_device=pref_idx)
+
             with self._lock:
-                self._release_cap()
-                self._active_sim_mode = "sim_normal"
-                self._camera_source = "simulator:sim_normal (uvc_disconnected)"
-                sim_mode = self._active_sim_mode
-                cam_src = self._camera_source
+                self._active_sim_mode = "uvc_offline"
+                self._camera_source = "uvc:offline"
+            return self._render_uvc_standby_frame(reason="AWAITING USB CAMERA"), "uvc_offline", "uvc:offline"
+
+        # Linux V4L2 capture path (zero nested locks)
+        if sim_mode == "live_uvc" or self._cap is not None:
+            got_frame: np.ndarray | None = None
+            with self._cap_lock:
+                cap = self._cap
+                if cap is not None:
+                    ok, frame = cap.read()
+                    if ok and frame is not None and frame.size > 0:
+                        if int(frame.max()) <= 2:
+                            self._uvc_black_streak += 1
+                            if self._uvc_black_streak >= 90:
+                                self._release_cap()
+                                self._last_uvc_retry_ts = 0.0
+                            elif self._last_uvc_frame is not None and int(self._last_uvc_frame.max()) > 2:
+                                got_frame = self._last_uvc_frame.copy()
+                            else:
+                                got_frame = frame
+                        else:
+                            self._uvc_black_streak = 0
+                            self._last_uvc_frame = frame
+                            self._uvc_fail_streak = 0
+                            got_frame = frame
+                    elif self._cap is not None:
+                        self._uvc_fail_streak += 1
+                        if self._uvc_fail_streak < 60 and self._last_uvc_frame is not None:
+                            got_frame = self._last_uvc_frame.copy()
+                        else:
+                            self._release_cap()
+                            self._last_uvc_retry_ts = time.perf_counter()
+            if got_frame is not None:
+                return got_frame, "live_uvc", cam_src
+            with self._lock:
+                self._active_sim_mode = "uvc_offline"
+                self._camera_source = "uvc:disconnected"
+                sim_mode = "uvc_offline"
+                cam_src = "uvc:disconnected"
+
+        if sim_mode == "uvc_offline":
+            now_t = time.perf_counter()
+            if (now_t - self._last_uvc_retry_ts) >= 2.5 and req_mode not in SIM_MODES and req_mode != "custom":
+                reopened_frame: np.ndarray | None = None
+                reopened_src = ""
+                with self._cap_lock:
+                    self._last_uvc_retry_ts = now_t
+                    pref = req_mode if req_mode.startswith("/dev/video") else None
+                    cap, src_name = self._try_open_uvc(preferred_device=pref)
+                    if cap is not None:
+                        self._cap = cap
+                        reopened_src = src_name
+                        if self._last_uvc_frame is not None:
+                            reopened_frame = self._last_uvc_frame.copy()
+                if reopened_src:
+                    with self._lock:
+                        self._active_sim_mode = "live_uvc"
+                        self._camera_source = reopened_src
+                    if reopened_frame is not None:
+                        return reopened_frame, "live_uvc", reopened_src
+            return self._render_uvc_standby_frame(reason="AWAITING USB CAMERA"), "uvc_offline", cam_src
 
         if sim_mode == "custom" and custom_bgr is not None:
             return custom_bgr.copy(), "custom", cam_src
@@ -826,13 +1169,13 @@ class VisionScanner:
         ph, pw = small_bgr.shape[:2]
         ycrcb = cv2.cvtColor(small_bgr, cv2.COLOR_BGR2YCrCb)
 
-        # 1. Dual-space human skin locus (YCrCb Cr in [133, 174], Cb in [77, 127] + moderate HSV saturation
-        #    S in [24, 168] so vivid industrial red/orange fault tape S >= 195 is NEVER mistaken for skin!)
-        skin_ycrcb = cv2.inRange(ycrcb, (55, 133, 77), (255, 174, 127))
+        # 1. Dual-space human skin locus (YCrCb Cr in [138, 174], Cb in [77, 121] + HSV saturation
+        #    S in [38, 168] so neutral/warm carpets S <= 34 and vivid red fault tape S >= 195 never match)
+        skin_ycrcb = cv2.inRange(ycrcb, (55, 138, 77), (255, 174, 121))
         skin_hsv = cv2.bitwise_and(
             cv2.bitwise_or(
-                cv2.inRange(hsv, (0, 24, 60), (25, 168, 255)),
-                cv2.inRange(hsv, (166, 24, 60), (180, 168, 255)),
+                cv2.inRange(hsv, (0, 38, 60), (25, 168, 255)),
+                cv2.inRange(hsv, (166, 38, 60), (180, 168, 255)),
             ),
             skin_ycrcb,
         )
@@ -848,8 +1191,8 @@ class VisionScanner:
         hand_bbox: list[int] | None = None
 
         num_s, lbl_s, stats_s, _ = cv2.connectedComponentsWithStats(skin_clean)
-        min_hand_area = max(90, int((pw * ph) * 0.011))
-        border_band_Area = max(48, int((pw * ph) * 0.0055))
+        max_hand_area = int((pw * ph) * 0.36)
+        border_band_area = max(56, int((pw * ph) * 0.0055))
         bx_min, by_min, bx_max, by_max = pw, ph, 0, 0
 
         for idx in range(1, num_s):
@@ -860,13 +1203,17 @@ class VisionScanner:
                 int(stats_s[idx, cv2.CC_STAT_WIDTH]),
                 int(stats_s[idx, cv2.CC_STAT_HEIGHT]),
             )
+            # Ignore full-frame warm-lit walls, full-width wooden desks, or beige cabinets
+            if area > max_hand_area or w_c >= int(pw * 0.82) or h_c >= int(ph * 0.88):
+                continue
             touches_border = (
                 x <= int(pw * 0.08)
                 or y <= int(ph * 0.08)
                 or (x + w_c) >= int(pw * 0.92)
                 or (y + h_c) >= int(ph * 0.92)
             )
-            if area >= min_hand_area or (area >= border_band_Area and touches_border):
+            # Real operator hands/arms enter from the camera frame boundary
+            if touches_border and area >= border_band_area:
                 hand_detected = True
                 hand_mask[lbl_s == idx] = 255
                 bx_min = min(bx_min, x)
@@ -934,21 +1281,31 @@ class VisionScanner:
                     tool_mask = cv2.bitwise_or(tool_mask, comp)
                     tool_detected = True
         else:
-            # 2C. Gloved hand / standalone oblique screwdriver entering from frame border
-            cnts_m, _ = cv2.findContours(thin_metallic, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for cnt in cnts_m:
-                if cv2.contourArea(cnt) < 28:
-                    continue
-                (_, _), (rw_t, rh_t), ang_t = cv2.minAreaRect(cnt)
-                maj_t, min_t = max(rw_t, rh_t), max(1.0, min(rw_t, rh_t))
-                if maj_t >= 24.0 and (maj_t / min_t) >= 3.8:
-                    e_pts = cv2.boxPoints(((0.0, 0.0), (rw_t, rh_t), ang_t))
-                    d01, d12 = e_pts[1] - e_pts[0], e_pts[2] - e_pts[1]
-                    t_vec = d01 if np.linalg.norm(d01) >= np.linalg.norm(d12) else d12
-                    t_ang = abs(math.degrees(math.atan2(float(t_vec[1]), float(t_vec[0]))))
-                    if 25.0 <= t_ang <= 155.0:
-                        cv2.drawContours(tool_mask, [cnt], -1, 255, -1)
-                        tool_detected = True
+            # 2C. Gloved hand / standalone oblique screwdriver entering from frame border:
+            #     Require adjacency to a colored insulated handle so bare vertical/diagonal
+            #     metallic sensors on walls or machinery are never masked out as tools.
+            grip_reach_2c = cv2.dilate(
+                vivid_grip, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
+            )
+            has_any_grip = cv2.countNonZero(grip_reach_2c) > 0
+            if has_any_grip:
+                cnts_m, _ = cv2.findContours(thin_metallic, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for cnt in cnts_m:
+                    if cv2.contourArea(cnt) < 28:
+                        continue
+                    (_, _), (rw_t, rh_t), ang_t = cv2.minAreaRect(cnt)
+                    maj_t, min_t = max(rw_t, rh_t), max(1.0, min(rw_t, rh_t))
+                    if maj_t >= 24.0 and (maj_t / min_t) >= 3.8:
+                        e_pts = cv2.boxPoints(((0.0, 0.0), (rw_t, rh_t), ang_t))
+                        d01, d12 = e_pts[1] - e_pts[0], e_pts[2] - e_pts[1]
+                        t_vec = d01 if np.linalg.norm(d01) >= np.linalg.norm(d12) else d12
+                        t_ang = abs(math.degrees(math.atan2(float(t_vec[1]), float(t_vec[0]))))
+                        if 25.0 <= t_ang <= 155.0:
+                            cnt_mask = np.zeros((ph, pw), dtype=np.uint8)
+                            cv2.drawContours(cnt_mask, [cnt], -1, 255, -1)
+                            if cv2.countNonZero(cv2.bitwise_and(cnt_mask, grip_reach_2c)) > 0:
+                                tool_mask = cv2.bitwise_or(tool_mask, cnt_mask)
+                                tool_detected = True
 
         if tool_detected:
             ys_t, xs_t = np.where(tool_mask > 0)
@@ -963,6 +1320,369 @@ class VisionScanner:
 
         return hand_detected, tool_detected, hand_mask, tool_mask, hand_bbox, tool_bbox
 
+    @staticmethod
+    def _filter_compact_cues(mask_u8: np.ndarray, max_area_px: int) -> np.ndarray:
+        """Keep only compact sensor-scale cues (<4.5% of frame) so colored walls/machines never flood masks."""
+        if cv2.countNonZero(mask_u8) == 0:
+            return mask_u8
+        num_c, lbl_c, stats_c, _ = cv2.connectedComponentsWithStats(mask_u8)
+        out = np.zeros_like(mask_u8)
+        for idx in range(1, num_c):
+            a_c = int(stats_c[idx, cv2.CC_STAT_AREA])
+            if 10 <= a_c <= max_area_px:
+                out[lbl_c == idx] = 255
+        return out
+
+    @staticmethod
+    def _refine_cylinder_contour(cnt: np.ndarray) -> np.ndarray:
+        """Fit outlier-resistant PCA axis & median cross-section bounds to trim shadow flares or cable stubs."""
+        rx, ry, rw_b, rh_b = cv2.boundingRect(cnt)
+        if rw_b < 4 or rh_b < 4:
+            return cnt
+        roi_m = np.zeros((rh_b, rw_b), dtype=np.uint8)
+        cv2.drawContours(roi_m, [cnt - np.array([[[rx, ry]]])], -1, 255, -1)
+        ys_l, xs_l = np.where(roi_m > 0)
+        if len(xs_l) < 25:
+            return cnt
+
+        pts_f = np.column_stack((xs_l.astype(np.float32) + rx, ys_l.astype(np.float32) + ry))
+        mean_pt = pts_f.mean(axis=0)
+        centered = pts_f - mean_pt
+        cov = (centered.T @ centered) / float(len(pts_f))
+        _, eigvecs = np.linalg.eigh(cov)
+        u_pca = eigvecs[:, 1].astype(np.float32)
+        v_pca = np.array([-u_pca[1], u_pca[0]], dtype=np.float32)
+
+        s_p = centered @ u_pca
+        v_p = centered @ v_pca
+        s_min0, s_max0 = float(s_p.min()), float(s_p.max())
+        span0 = max(1.0, s_max0 - s_min0)
+
+        bins16 = np.linspace(s_min0 + 0.12 * span0, s_max0 - 0.12 * span0, 17)
+        v_los: list[float] = []
+        v_his: list[float] = []
+        for bi in range(16):
+            sel = (s_p >= bins16[bi]) & (s_p < bins16[bi + 1])
+            if np.count_nonzero(sel) >= 4:
+                vv = v_p[sel]
+                v_los.append(float(np.percentile(vv, 2.0)))
+                v_his.append(float(np.percentile(vv, 98.0)))
+        if len(v_los) < 5:
+            return cnt
+
+        v_lo_med = float(np.median(v_los))
+        v_hi_med = float(np.median(v_his))
+        min_len = max(4.0, (v_hi_med - v_lo_med) / 0.96)
+
+        s_lo = float(np.percentile(s_p, 0.5))
+        s_hi = float(np.percentile(s_p, 99.5))
+        maj_len = max(min_len * 2.5, (s_hi - s_lo) / 0.99)
+        c_ref = mean_pt + u_pca * (0.5 * (s_lo + s_hi)) + v_pca * (0.5 * (v_lo_med + v_hi_med))
+        hu = u_pca * (0.5 * maj_len)
+        hv = v_pca * (0.5 * min_len)
+        corners = np.array(
+            [c_ref - hu - hv, c_ref + hu - hv, c_ref + hu + hv, c_ref - hu + hv],
+            dtype=np.float32,
+        )
+        return corners.reshape(4, 1, 2)
+
+    @classmethod
+    def _detect_industrial_cylinder(
+        cls,
+        small_bgr: np.ndarray,
+        val_ch: np.ndarray,
+        sat_ch: np.ndarray,
+        pcb_sensor_only: np.ndarray,
+        warm_body: np.ndarray,
+        keep_sensor: np.ndarray | None,
+    ) -> tuple[np.ndarray | None, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Detect cylindrical TZ THT-02 sensor at any 0-360 deg orientation on smooth or textured backgrounds."""
+        ph, pw = small_bgr.shape[:2]
+        blur3 = cv2.GaussianBlur(small_bgr, (3, 3), 0)
+        lab_crisp = cv2.cvtColor(blur3, cv2.COLOR_BGR2Lab)
+        l_crisp = lab_crisp[:, :, 0]
+        a_crisp = lab_crisp[:, :, 1]
+        b_crisp = lab_crisp[:, :, 2]
+
+        # Edge-preserving 7x7 median filter suppresses carpet/concrete/grain micro-texture while keeping cylinder walls sharp
+        smooth = cv2.medianBlur(small_bgr, 7)
+        lab_u8 = cv2.cvtColor(smooth, cv2.COLOR_BGR2Lab)
+        l_u8 = lab_u8[:, :, 0]
+        a_u8 = lab_u8[:, :, 1]
+        b_u8 = lab_u8[:, :, 2]
+
+        # Fast separable box-pyramid local surround in CIE Lab (<0.25ms on ARM64)
+        sw4, sh4 = max(16, pw // 4), max(12, ph // 4)
+        lab_q = cv2.resize(lab_u8, (sw4, sh4), interpolation=cv2.INTER_AREA)
+        k1 = max(7, int(min(sw4, sh4) * 0.22) | 1)
+        k2 = max(15, int(k1 * 2.1) | 1)
+        bg1 = cv2.resize(
+            cv2.blur(cv2.blur(lab_q, (k1, k1)), (k1, k1)), (pw, ph), interpolation=cv2.INTER_LINEAR
+        )
+        bg2 = cv2.resize(
+            cv2.blur(cv2.blur(lab_q, (k2, k2)), (k2, k2)), (pw, ph), interpolation=cv2.INTER_LINEAR
+        )
+
+        l_i16 = l_u8.astype(np.int16)
+        dl1 = l_i16 - bg1[:, :, 0].astype(np.int16)
+        dl2 = l_i16 - bg2[:, :, 0].astype(np.int16)
+        da1 = np.abs(a_u8.astype(np.int16) - bg1[:, :, 1].astype(np.int16))
+        db1 = np.abs(b_u8.astype(np.int16) - bg1[:, :, 2].astype(np.int16))
+        da2 = np.abs(a_u8.astype(np.int16) - bg2[:, :, 1].astype(np.int16))
+        db2 = np.abs(b_u8.astype(np.int16) - bg2[:, :, 2].astype(np.int16))
+        dab1 = da1 + db1
+        dab2 = da2 + db2
+
+        # Crisp Sobel derivatives for lateral cylinder-wall verification + texture-free derivatives for edge masks
+        glx = cv2.Sobel(l_crisp, cv2.CV_16S, 1, 0, ksize=3)
+        gly = cv2.Sobel(l_crisp, cv2.CV_16S, 0, 1, ksize=3)
+        gax = cv2.Sobel(a_crisp, cv2.CV_16S, 1, 0, ksize=3)
+        gay = cv2.Sobel(a_crisp, cv2.CV_16S, 0, 1, ksize=3)
+        gbx = cv2.Sobel(b_crisp, cv2.CV_16S, 1, 0, ksize=3)
+        gby = cv2.Sobel(b_crisp, cv2.CV_16S, 0, 1, ksize=3)
+
+        glx_s = cv2.Sobel(l_u8, cv2.CV_16S, 1, 0, ksize=3)
+        gly_s = cv2.Sobel(l_u8, cv2.CV_16S, 0, 1, ksize=3)
+        gax_s = cv2.Sobel(a_u8, cv2.CV_16S, 1, 0, ksize=3)
+        gay_s = cv2.Sobel(a_u8, cv2.CV_16S, 0, 1, ksize=3)
+        gbx_s = cv2.Sobel(b_u8, cv2.CV_16S, 1, 0, ksize=3)
+        gby_s = cv2.Sobel(b_u8, cv2.CV_16S, 0, 1, ksize=3)
+        grad_l = cv2.addWeighted(
+            cv2.convertScaleAbs(glx_s, alpha=0.25), 0.72, cv2.convertScaleAbs(gly_s, alpha=0.25), 0.72, 0
+        )
+        grad_c = cv2.max(
+            cv2.addWeighted(
+                cv2.convertScaleAbs(gax_s, alpha=0.25), 0.72, cv2.convertScaleAbs(gay_s, alpha=0.25), 0.72, 0
+            ),
+            cv2.addWeighted(
+                cv2.convertScaleAbs(gbx_s, alpha=0.25), 0.72, cv2.convertScaleAbs(gby_s, alpha=0.25), 0.72, 0
+            ),
+        )
+        grad_mag = cv2.max(grad_l, grad_c)
+
+        # Reject background-sized blue/red/yellow walls while preserving compact internal PCB or fault tape
+        max_cue_area = int((pw * ph) * 0.045)
+        local_pcb = cls._filter_compact_cues(pcb_sensor_only, max_cue_area)
+        local_warm = cls._filter_compact_cues(warm_body, max_cue_area)
+        aux_cues = cv2.bitwise_or(local_pcb, local_warm)
+        if keep_sensor is not None:
+            aux_cues = cv2.bitwise_and(aux_cues, keep_sensor)
+
+        # Complementary foreground hypotheses covering dark, white, grey, colored, split, textured & iso-luminant scenes
+        m_bright = (((dl1 > 9) | (dl2 > 11)).astype(np.uint8)) * 255
+        m_dark = (((dl1 < -9) | (dl2 < -11)).astype(np.uint8)) * 255
+        m_chroma = (((dab1 > 10) | (dab2 > 12)).astype(np.uint8)) * 255
+
+        bg2_l = bg2[:, :, 0]
+        mid_bg = (bg2_l > 55) & (bg2_l < 232)
+        m_midtone = (
+            (
+                mid_bg
+                & (
+                    (dl1 > 8)
+                    | (dl2 > 10)
+                    | (((dl1 < -14) | (dl2 < -16)) & (l_u8 < 182) & (sat_ch < 95))
+                )
+            ).astype(np.uint8)
+        ) * 255
+
+        # Neutral polycarbonate/stainless cylinder hypothesis for split dark/bright backgrounds
+        m_neutral = (((sat_ch < 46) & (val_ch > 122) & (val_ch < 224)).astype(np.uint8)) * 255
+
+        m_edge_fine = ((grad_mag > 11).astype(np.uint8)) * 255
+        m_edge_strong = ((grad_mag > 16).astype(np.uint8)) * 255
+
+        # Rotationally isotropic elliptical kernels prevent rectangular false-merges on curved cables/bezels
+        k_open3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        k_open5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        k_open7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        k_close11 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        k_close13 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+
+        keep_eroded = (
+            cv2.erode(keep_sensor, k_open5) if keep_sensor is not None else None
+        )
+        rim = 3
+
+        def _prep_region_mask(raw_m: np.ndarray) -> np.ndarray:
+            m = cv2.bitwise_or(raw_m, aux_cues)
+            if keep_sensor is not None:
+                m = cv2.bitwise_and(m, keep_sensor)
+            m[:rim, :] = 0
+            m[ph - rim :, :] = 0
+            m[:, :rim] = 0
+            m[:, pw - rim :] = 0
+            m = cv2.morphologyEx(m, cv2.MORPH_OPEN, k_open3)
+            return cv2.morphologyEx(m, cv2.MORPH_CLOSE, k_close13)
+
+        def _prep_edge_mask(raw_e: np.ndarray, k_cl: np.ndarray, k_op: np.ndarray) -> np.ndarray:
+            m = cv2.bitwise_or(raw_e, aux_cues)
+            if keep_eroded is not None:
+                m = cv2.bitwise_and(m, keep_eroded)
+            m[:rim, :] = 0
+            m[ph - rim :, :] = 0
+            m[:, :rim] = 0
+            m[:, pw - rim :] = 0
+            m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k_cl)
+            return cv2.morphologyEx(m, cv2.MORPH_OPEN, k_op)
+
+        candidate_masks = [
+            _prep_region_mask(m_bright),
+            _prep_region_mask(m_dark),
+            _prep_region_mask(m_chroma),
+            _prep_region_mask(m_midtone),
+            _prep_region_mask(m_neutral),
+            _prep_edge_mask(m_edge_fine, k_close13, k_open5),
+            _prep_edge_mask(m_edge_strong, k_close11, k_open7),
+        ]
+
+        min_area = max(250.0, (pw * ph) * 0.0015)
+        max_area = (pw * ph) * 0.28
+        min_minor = max(6.5, min(pw, ph) * 0.018)
+        max_minor = min(pw, ph) * 0.26
+        min_major = max(42.0, max(pw, ph) * 0.080)
+        max_major = max(pw, ph) * 0.94
+
+        best_cnt: np.ndarray | None = None
+        best_score = 0.0
+
+        s_fracs = np.linspace(-0.38, 0.38, 13, dtype=np.float32)
+        ax_fracs = np.linspace(-0.46, 0.46, 21, dtype=np.float32)
+
+        for cmask in candidate_masks:
+            cnts, _ = cv2.findContours(cmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in cnts:
+                area = cv2.contourArea(cnt)
+                if area < min_area or area > max_area:
+                    continue
+                (cx_c, cy_c), (rw, rh), r_ang = cv2.minAreaRect(cnt)
+                major = max(rw, rh)
+                minor = max(1.0, min(rw, rh))
+                if minor < min_minor or minor > max_minor:
+                    continue
+                if major < min_major or major > max_major:
+                    continue
+                ratio = major / minor
+                if ratio < 2.7 or ratio > 14.8:
+                    continue
+
+                extent = area / max(1.0, major * minor)
+                if extent < 0.48:
+                    continue
+                hull_area = cv2.contourArea(cv2.convexHull(cnt))
+                solidity = area / max(1.0, hull_area)
+                if solidity < 0.58:
+                    continue
+
+                b_pts = cv2.boxPoints(((cx_c, cy_c), (rw, rh), r_ang))
+                d01 = b_pts[1] - b_pts[0]
+                d12 = b_pts[2] - b_pts[1]
+                u_v = d01 if np.linalg.norm(d01) >= np.linalg.norm(d12) else d12
+                u_v = u_v / max(1e-6, float(np.linalg.norm(u_v)))
+                v_v = np.array([-u_v[1], u_v[0]], dtype=np.float32)
+                vx, vy = float(v_v[0]) * 0.25, float(v_v[1]) * 0.25
+
+                r = 0.5 * minor
+                s_arr = s_fracs * major
+
+                def _g_perp(n_offs: np.ndarray) -> np.ndarray:
+                    xs = np.clip(
+                        np.round(cx_c + s_arr[:, None] * u_v[0] + n_offs[None, :] * v_v[0]).astype(np.int32),
+                        0,
+                        pw - 1,
+                    )
+                    ys = np.clip(
+                        np.round(cy_c + s_arr[:, None] * u_v[1] + n_offs[None, :] * v_v[1]).astype(np.int32),
+                        0,
+                        ph - 1,
+                    )
+                    gp_l = glx[ys, xs].astype(np.float32) * vx + gly[ys, xs].astype(np.float32) * vy
+                    gp_a = gax[ys, xs].astype(np.float32) * vx + gay[ys, xs].astype(np.float32) * vy
+                    gp_b = gbx[ys, xs].astype(np.float32) * vx + gby[ys, xs].astype(np.float32) * vy
+                    return np.sqrt(gp_l * gp_l + gp_a * gp_a + gp_b * gp_b)
+
+                w_lo = max(1.5, 0.70 * r)
+                w_hi = max(r + 2.0, 1.25 * r)
+                wall_band = np.linspace(w_lo, w_hi, 5, dtype=np.float32)
+
+                edge_a = _g_perp(-wall_band).max(axis=1)
+                edge_b = _g_perp(wall_band).max(axis=1)
+                med_edge_a = float(np.median(edge_a))
+                med_edge_b = float(np.median(edge_b))
+                frac_a = float(np.mean(edge_a >= 9.0))
+                frac_b = float(np.mean(edge_b >= 9.0))
+                if min(med_edge_a, med_edge_b) < 9.0 or min(frac_a, frac_b) < 0.46:
+                    continue
+
+                # Sample 5 cross-section interior lines vs both exterior background flanks
+                n_in = np.array([-0.68 * r, -0.34 * r, 0.0, 0.34 * r, 0.68 * r], dtype=np.float32)
+                ext_d = max(r + 4.0, 1.55 * r)
+                n_ea = np.array([-ext_d - 1.5, -ext_d], dtype=np.float32)
+                n_eb = np.array([ext_d, ext_d + 1.5], dtype=np.float32)
+
+                def _sample_lab(n_offs: np.ndarray) -> np.ndarray:
+                    xs = np.clip(
+                        np.round(cx_c + s_arr[:, None] * u_v[0] + n_offs[None, :] * v_v[0]).astype(np.int32),
+                        0,
+                        pw - 1,
+                    )
+                    ys = np.clip(
+                        np.round(cy_c + s_arr[:, None] * u_v[1] + n_offs[None, :] * v_v[1]).astype(np.int32),
+                        0,
+                        ph - 1,
+                    )
+                    return lab_u8[ys, xs].astype(np.float32)
+
+                lab_in5 = _sample_lab(n_in)
+                lab_ea = _sample_lab(n_ea).mean(axis=1)
+                lab_eb = _sample_lab(n_eb).mean(axis=1)
+
+                # Use 2nd-highest of 5 interior cross-section lines so 3D cylinder highlight+shadow
+                # on a same-luminance wall still registers strong contrast
+                dist_a = np.sort(np.linalg.norm(lab_in5 - lab_ea[:, None, :], axis=2), axis=1)[:, 3]
+                dist_b = np.sort(np.linalg.norm(lab_in5 - lab_eb[:, None, :], axis=2), axis=1)[:, 3]
+                med_dist_a = float(np.median(dist_a))
+                med_dist_b = float(np.median(dist_b))
+                if min(med_dist_a, med_dist_b) < 8.0:
+                    continue
+
+                # Reject step-edge straddlers (where sharpest gradient sits along centerline between dark/light halves)
+                l_mid = lab_in5[:, 2, 0]
+                dl_ea = float(np.median(l_mid - lab_ea[:, 0]))
+                dl_eb = float(np.median(l_mid - lab_eb[:, 0]))
+                if dl_ea * dl_eb < -36.0:
+                    c_edge = float(np.median(_g_perp(np.array([-1.0, 0.0, 1.0], dtype=np.float32)).max(axis=1)))
+                    if c_edge > 0.90 * min(med_edge_a, med_edge_b):
+                        continue
+
+                # Verify longitudinal structure (gland/barrel/O-ring/strainer vs uniform flat trim strip)
+                s_ax = ax_fracs * major
+                xs_ax = np.clip(np.round(cx_c + s_ax * u_v[0]).astype(np.int32), 0, pw - 1)
+                ys_ax = np.clip(np.round(cy_c + s_ax * u_v[1]).astype(np.int32), 0, ph - 1)
+                axial_var = float(np.linalg.norm(lab_crisp[ys_ax, xs_ax].astype(np.float32).std(axis=0)))
+                if axial_var < 4.8:
+                    continue
+
+                ratio_fit = 1.0 - min(0.55, abs(ratio - 8.2) / 11.0)
+                edge_q = min(40.0, min(med_edge_a, med_edge_b))
+                contrast_q = min(50.0, min(med_dist_a, med_dist_b))
+                score = (
+                    area
+                    * extent
+                    * solidity
+                    * ratio_fit
+                    * (0.4 + 0.03 * edge_q)
+                    * (0.4 + 0.025 * contrast_q)
+                )
+                if score > best_score:
+                    best_score = score
+                    best_cnt = cnt
+
+        if best_cnt is not None:
+            best_cnt = cls._refine_cylinder_contour(best_cnt)
+
+        return best_cnt, l_crisp, bg2_l, local_pcb, local_warm
+
     def analyze_frame(
         self,
         frame_bgr: np.ndarray,
@@ -974,11 +1694,69 @@ class VisionScanner:
         t0 = time.perf_counter()
         orig_h, orig_w = frame_bgr.shape[:2]
 
-        # Downscale 2x during CV mask computation so even 1280x720 runs in < 2.5 ms!
-        proc_scale = 0.5 if orig_w >= 800 else 1.0
+        # Fast path when live USB camera is offline/disconnected: never invent or segment fake objects
+        if sim_mode == "uvc_offline":
+            hud = frame_bgr.copy()
+            proc_ms = (time.perf_counter() - t0) * 1000.0
+            cv2.rectangle(hud, (0, 0), (orig_w, 34), (13, 18, 25), -1)
+            cv2.line(hud, (0, 34), (orig_w, 34), (56, 140, 175), 1)
+            status_txt = f"SPATIAL CV | {camera_source.upper()} | STANDBY | 0 KPS | {proc_ms:.2f}ms"
+            cv2.putText(
+                hud, status_txt, (12, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (165, 235, 250), 1, cv2.LINE_AA
+            )
+            badge_txt = "NO USB CAMERA"
+            (bw_t, _), _ = cv2.getTextSize(badge_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
+            bx0 = orig_w - bw_t - 26
+            cv2.rectangle(hud, (bx0, 5), (orig_w - 10, 29), (52, 64, 86), -1)
+            cv2.putText(
+                hud, badge_txt, (bx0 + 8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (240, 245, 252), 1, cv2.LINE_AA
+            )
+            return hud, {
+                "detected": False,
+                "mode": "usb",
+                "frame_size": [orig_w, orig_h],
+                "angle_deg": 0.0,
+                "bbox": [0, 0, 0, 0],
+                "sensor_quad": None,
+                "sensor_axis": None,
+                "keypoints": [],
+                "measured_ratio": 0.0,
+                "est_length_mm": 0.0,
+                "est_diameter_mm": 0.0,
+                "anomaly_detected": False,
+                "anomaly_zone": None,
+                "anomaly_z_mm": None,
+                "anomaly_confidence": 0.0,
+                "anomaly_pt": None,
+                "pcb_open_detected": False,
+                "hand_detected": False,
+                "tool_detected": False,
+                "occlusion_filtered": False,
+                "hand_bbox": None,
+                "hand_contour": [],
+                "hand_center": None,
+                "hand_velocity_px_s": 0.0,
+                "hand_velocity_vec": [0.0, 0.0],
+                "hand_trail": [],
+                "tool_bbox": None,
+                "tool_shaft": None,
+                "tool_tip_pt": None,
+                "isolated_3d_target": "TZ-THT-02_SENSOR_ONLY",
+                "dip_focus_pt": None,
+                "scan_coverage_pct": 0,
+                "sim_mode": sim_mode,
+                "camera_source": camera_source,
+                "fps": round(float(fps), 1),
+                "cv_ms": round(float(proc_ms), 2),
+            }
+
+        # Normalize high-res 1080p/720p frames onto a consistent ~640px Lab pyramid grid for <18ms CV
+        max_dim = max(orig_w, orig_h)
+        proc_scale = (640.0 / float(max_dim)) if max_dim >= 800 else 1.0
         if proc_scale < 1.0:
-            pw, ph = int(orig_w * proc_scale), int(orig_h * proc_scale)
-            small = cv2.resize(frame_bgr, (pw, ph), interpolation=cv2.INTER_NEAREST)
+            pw = max(64, int(round(orig_w * proc_scale)))
+            ph = max(64, int(round(orig_h * proc_scale)))
+            small = cv2.resize(frame_bgr, (pw, ph), interpolation=cv2.INTER_AREA)
         else:
             pw, ph = orig_w, orig_h
             small = frame_bgr
@@ -989,9 +1767,10 @@ class VisionScanner:
         sat_ch = hsv[:, :, 1]
 
         pcb_blue_full = cv2.inRange(hsv, (92, 58, 42), (138, 255, 255))
+        warm_min_sat = 105 if sim_mode in SIM_MODES else 142
         warm_patch_full = cv2.bitwise_or(
-            cv2.inRange(hsv, (0, 105, 95), (26, 255, 255)),
-            cv2.inRange(hsv, (166, 105, 95), (180, 255, 255)),
+            cv2.inRange(hsv, (0, warm_min_sat, 95), (26, 255, 255)),
+            cv2.inRange(hsv, (166, warm_min_sat, 95), (180, 255, 255)),
         )
 
         # 0. Spatial Exclusion Filter: Detect & mask out Operator Hands + Screwdrivers/Tools FIRST
@@ -1017,21 +1796,13 @@ class VisionScanner:
         else:
             keep_sensor = None
 
-        # 1. Segment bright grey/metallic sensor body + any colored tape/PCB on dark bench surface
-        body_bright = (val_ch > 122).astype(np.uint8) * 255
-        if keep_sensor is not None:
-            body_bright = cv2.bitwise_and(body_bright, keep_sensor)
-        body_bright = cv2.morphologyEx(
-            body_bright, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 7))
-        )
-
         warm_sensor_only = (
             cv2.bitwise_and(warm_patch_full, keep_sensor)
             if keep_sensor is not None
             else warm_patch_full
         )
         warm_body = cv2.morphologyEx(
-            warm_sensor_only, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9))
+            warm_sensor_only, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
         )
         # Keep internal blue DIP-8 PCB visible even when screwdriver tip touches DIP pins
         pcb_sensor_only = (
@@ -1039,24 +1810,6 @@ class VisionScanner:
             if hand_detected
             else pcb_blue_full
         )
-
-        fg_mask = cv2.bitwise_or(body_bright, pcb_sensor_only)
-        fg_mask = cv2.bitwise_or(fg_mask, warm_body)
-
-        # Ignore outer 2% border ruler ticks
-        margin_x, margin_y = max(4, int(pw * 0.025)), max(4, int(ph * 0.03))
-        fg_mask[:margin_y, :] = 0
-        fg_mask[ph - margin_y :, :] = 0
-        fg_mask[:, :margin_x] = 0
-        fg_mask[:, pw - margin_x :] = 0
-
-        # Morphological open (denoise) + close (bridge strainer slots, black seal ring & DIP window)
-        k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (29, 9))
-        fg_clean = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, k_open)
-        fg_clean = cv2.morphologyEx(fg_clean, cv2.MORPH_CLOSE, k_close)
-
-        contours, _ = cv2.findContours(fg_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         detected = False
         angle_deg = 0.0
@@ -1073,21 +1826,53 @@ class VisionScanner:
         hud = frame_bgr.copy()
         best_cnt = None
         best_score = 0.0
+        live_l_ch: np.ndarray | None = None
+        live_bg_l: np.ndarray | None = None
 
-        min_area = (pw * ph) * 0.004
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area < min_area:
-                continue
-            (_, _), (rw, rh), _ = cv2.minAreaRect(cnt)
-            major = max(rw, rh)
-            minor = max(1.0, min(rw, rh))
-            ratio = major / minor
-            if 2.2 <= ratio <= 18.0:
-                score = area * min(ratio, 10.0)
-                if score > best_score:
-                    best_score = score
-                    best_cnt = cnt
+        if sim_mode in SIM_MODES:
+            # Exact fast workbench simulator segmentation path
+            body_bright = (val_ch > 122).astype(np.uint8) * 255
+            if keep_sensor is not None:
+                body_bright = cv2.bitwise_and(body_bright, keep_sensor)
+            body_bright = cv2.morphologyEx(
+                body_bright, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 7))
+            )
+            fg_mask = cv2.bitwise_or(body_bright, pcb_sensor_only)
+            fg_mask = cv2.bitwise_or(fg_mask, warm_body)
+
+            margin_x, margin_y = max(4, int(pw * 0.025)), max(4, int(ph * 0.03))
+            fg_mask[:margin_y, :] = 0
+            fg_mask[ph - margin_y :, :] = 0
+            fg_mask[:, :margin_x] = 0
+            fg_mask[:, pw - margin_x :] = 0
+
+            k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (29, 9))
+            fg_clean = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, k_open)
+            fg_clean = cv2.morphologyEx(fg_clean, cv2.MORPH_CLOSE, k_close)
+
+            contours, _ = cv2.findContours(fg_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            min_area = (pw * ph) * 0.004
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if area < min_area:
+                    continue
+                (_, _), (rw, rh), _ = cv2.minAreaRect(cnt)
+                major = max(rw, rh)
+                minor = max(1.0, min(rw, rh))
+                ratio = major / minor
+                if 2.2 <= ratio <= 18.0:
+                    score = area * min(ratio, 10.0)
+                    if score > best_score:
+                        best_score = score
+                        best_cnt = cnt
+        else:
+            # Real industrial camera / uploaded field photo: background-agnostic, 0-360 deg detector
+            best_cnt, live_l_ch, live_bg_l, pcb_sensor_only, warm_sensor_only = (
+                self._detect_industrial_cylinder(
+                    small, val_ch, sat_ch, pcb_sensor_only, warm_body, keep_sensor
+                )
+            )
 
         anomaly_world_pt: tuple[int, int] | None = None
 
@@ -1129,24 +1914,90 @@ class VisionScanner:
 
             e01 = box_pts_s[1] - box_pts_s[0]
             e12 = box_pts_s[2] - box_pts_s[1]
-            u_vec = e01 if np.linalg.norm(e01) >= np.linalg.norm(e12) else e12
+            u_vec = e01 if np.linalg.norm(e01) >= np.linalg.norm(d12 := e12) else d12
             u_norm = float(np.linalg.norm(u_vec))
             u_vec = u_vec / max(1e-6, u_norm)
 
-            if abs(float(u_vec[0])) > 0.22:
-                if u_vec[0] < 0:
-                    u_vec = -u_vec
+            if sim_mode in SIM_MODES:
+                if abs(float(u_vec[0])) > 0.22:
+                    if u_vec[0] < 0:
+                        u_vec = -u_vec
+                else:
+                    half_maj_s = 0.5 * max(rw_s, rh_s)
+                    p_neg = np.array([cx_s, cy_s]) - u_vec * (half_maj_s + 8.0)
+                    p_pos = np.array([cx_s, cy_s]) + u_vec * (half_maj_s + 8.0)
+
+                    def _sample_v(pt: np.ndarray) -> float:
+                        sx = int(np.clip(round(pt[0]), 2, pw - 3))
+                        sy = int(np.clip(round(pt[1]), 2, ph - 3))
+                        return float(val_ch[sy - 2 : sy + 3, sx - 2 : sx + 3].mean())
+
+                    if _sample_v(p_pos) < _sample_v(p_neg):
+                        u_vec = -u_vec
             else:
-                half_maj_s = 0.5 * max(rw_s, rh_s)
-                p_neg = np.array([cx_s, cy_s]) - u_vec * (half_maj_s + 8.0)
-                p_pos = np.array([cx_s, cy_s]) + u_vec * (half_maj_s + 8.0)
+                # 0-360 deg gland-to-tip orientation using dark polymer cable gland vs metallic strainer end
+                maj_s_cur = max(rw_s, rh_s)
+                min_s_cur = max(2.0, min(rw_s, rh_s))
+                v_tmp = np.array([-u_vec[1], u_vec[0]], dtype=np.float32)
+                lum_src = live_l_ch if live_l_ch is not None else val_ch.astype(np.float32)
 
-                def _sample_v(pt: np.ndarray) -> float:
-                    sx = int(np.clip(round(pt[0]), 2, pw - 3))
-                    sy = int(np.clip(round(pt[1]), 2, ph - 3))
-                    return float(val_ch[sy - 2 : sy + 3, sx - 2 : sx + 3].mean())
+                def _end_gland_score(sign: float) -> float:
+                    """Higher score means stronger dark polymer gland / narrow cable signature at `sign` end."""
+                    s_in = np.linspace(0.32 * maj_s_cur, 0.50 * maj_s_cur, 6, dtype=np.float32) * sign
+                    n_in_e = np.linspace(-0.18 * min_s_cur, 0.18 * min_s_cur, 5, dtype=np.float32)
+                    xs_i = np.clip(
+                        np.round(cx_s + s_in[:, None] * u_vec[0] + n_in_e[None, :] * v_tmp[0]).astype(np.int32),
+                        0,
+                        pw - 1,
+                    )
+                    ys_i = np.clip(
+                        np.round(cy_s + s_in[:, None] * u_vec[1] + n_in_e[None, :] * v_tmp[1]).astype(np.int32),
+                        0,
+                        ph - 1,
+                    )
+                    vi = lum_src[ys_i, xs_i].astype(np.float32)
+                    nw_i = warm_sensor_only[ys_i, xs_i] == 0
+                    p20_in = float(np.percentile(vi[nw_i] if np.any(nw_i) else vi.ravel(), 20))
 
-                if _sample_v(p_pos) < _sample_v(p_neg):
+                    # Also compare narrow cable core vs its own lateral flanks just past contour end (0.48..0.66)
+                    s_ex = np.linspace(0.48 * maj_s_cur, 0.66 * maj_s_cur, 7, dtype=np.float32) * sign
+                    n_fl = np.array([-1.25 * min_s_cur, -1.0 * min_s_cur, 1.0 * min_s_cur, 1.25 * min_s_cur], dtype=np.float32)
+                    xs_c = np.clip(
+                        np.round(cx_s + s_ex[:, None] * u_vec[0] + n_in_e[None, :] * v_tmp[0]).astype(np.int32),
+                        0,
+                        pw - 1,
+                    )
+                    ys_c = np.clip(
+                        np.round(cy_s + s_ex[:, None] * u_vec[1] + n_in_e[None, :] * v_tmp[1]).astype(np.int32),
+                        0,
+                        ph - 1,
+                    )
+                    xs_f = np.clip(
+                        np.round(cx_s + s_ex[:, None] * u_vec[0] + n_fl[None, :] * v_tmp[0]).astype(np.int32),
+                        0,
+                        pw - 1,
+                    )
+                    ys_f = np.clip(
+                        np.round(cy_s + s_ex[:, None] * u_vec[1] + n_fl[None, :] * v_tmp[1]).astype(np.int32),
+                        0,
+                        ph - 1,
+                    )
+                    core_l = float(np.percentile(lum_src[ys_c, xs_c].astype(np.float32), 5))
+                    flank_l = float(np.median(lum_src[ys_f, xs_f].astype(np.float32)))
+                    cable_dip = max(0.0, flank_l - core_l - 8.0)
+                    return (200.0 - p20_in) + 1.35 * cable_dip
+
+                g_neg = _end_gland_score(-1.0)
+                g_pos = _end_gland_score(1.0)
+                if abs(g_neg - g_pos) >= 12.0:
+                    if g_pos > g_neg:
+                        u_vec = -u_vec
+                elif self._locked_pose is not None:
+                    prev_rad = math.radians(float(self._locked_pose["angle_deg"]))
+                    prev_u = np.array([math.cos(prev_rad), math.sin(prev_rad)], dtype=np.float32)
+                    if float(np.dot(u_vec, prev_u)) < -0.2:
+                        u_vec = -u_vec
+                elif u_vec[0] < -0.15 or (abs(float(u_vec[0])) <= 0.15 and u_vec[1] > 0):
                     u_vec = -u_vec
 
             angle_deg = round(float(math.degrees(math.atan2(float(u_vec[1]), float(u_vec[0])))), 2)
@@ -1166,7 +2017,8 @@ class VisionScanner:
             # Build tight rotated sensor ROI mask
             sensor_poly_mask = np.zeros((ph, pw), dtype=np.uint8)
             half_maj_s = 0.5 * max(rw_s, rh_s)
-            half_min_s = 0.5 * min(rw_s, rh_s) * 1.28
+            roi_lat_scale = 1.28 if sim_mode in SIM_MODES else 0.84
+            half_min_s = 0.5 * min(rw_s, rh_s) * roi_lat_scale
             c_s = np.array([cx_s, cy_s], dtype=np.float32)
             roi_quad = np.array(
                 [
@@ -1495,6 +2347,7 @@ class VisionScanner:
 
         telemetry: dict[str, Any] = {
             "detected": detected,
+            "mode": "usb" if sim_mode in ("live_uvc", "uvc_offline") else sim_mode,
             "frame_size": [orig_w, orig_h],
             "angle_deg": angle_deg,
             "bbox": bbox,
@@ -1534,41 +2387,56 @@ class VisionScanner:
 
     def step_once(self) -> dict[str, Any]:
         """Acquire, analyze, and JPEG-encode a single frame synchronously."""
-        now = time.perf_counter()
-        dt = max(1e-4, now - self._last_tick)
-        self._last_tick = now
-        inst_fps = min(60.0, 1.0 / dt)
-        self._fps_ema = 0.85 * self._fps_ema + 0.15 * inst_fps if self._frame_seq > 0 else self.target_fps
+        with self._step_lock:
+            now = time.perf_counter()
+            dt = max(1e-4, now - self._last_tick)
+            self._last_tick = now
+            inst_fps = min(60.0, 1.0 / dt)
+            self._fps_ema = 0.85 * self._fps_ema + 0.15 * inst_fps if self._frame_seq > 0 else self.target_fps
 
-        raw_bgr, sim_mode, cam_src = self._acquire_raw_frame()
-        hud_bgr, telemetry = self.analyze_frame(
-            raw_bgr, sim_mode=sim_mode, camera_source=cam_src, fps=self._fps_ema
-        )
-
-        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
-        ok_hud, buf_hud = cv2.imencode(".jpg", hud_bgr, encode_params)
-        ok_raw, buf_raw = cv2.imencode(".jpg", raw_bgr, encode_params)
-
-        with self._lock:
-            self._frame_seq += 1
-            telemetry["frame_seq"] = self._frame_seq
-            telemetry["scan_coverage_pct"] = (
-                min(98, 86 + min(12, self._frame_seq)) if telemetry.get("detected") else 28
+            raw_bgr, sim_mode, cam_src = self._acquire_raw_frame()
+            hud_bgr, telemetry = self.analyze_frame(
+                raw_bgr, sim_mode=sim_mode, camera_source=cam_src, fps=self._fps_ema
             )
-            self._latest_raw_bgr = raw_bgr
-            if ok_hud:
-                self._latest_hud_jpeg = buf_hud.tobytes()
-            if ok_raw:
-                self._latest_raw_jpeg = buf_raw.tobytes()
-            self._latest_telemetry = telemetry
-            return dict(self._latest_telemetry)
+
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
+            ok_hud, buf_hud = cv2.imencode(".jpg", hud_bgr, encode_params)
+            ok_raw, buf_raw = cv2.imencode(".jpg", raw_bgr, encode_params)
+
+            with self._lock:
+                self._frame_seq += 1
+                telemetry["frame_seq"] = self._frame_seq
+                telemetry["scan_coverage_pct"] = (
+                    min(98, 86 + min(12, self._frame_seq)) if telemetry.get("detected") else 28
+                )
+                self._latest_raw_bgr = raw_bgr
+                if ok_hud:
+                    self._latest_hud_jpeg = buf_hud.tobytes()
+                if ok_raw:
+                    self._latest_raw_jpeg = buf_raw.tobytes()
+                self._latest_telemetry = telemetry
+                return dict(self._latest_telemetry)
 
     def _run_loop(self) -> None:
         frame_interval = 1.0 / self.target_fps
+        last_mac_pkt_ts = -1.0
         while True:
             with self._lock:
                 if not self._running:
                     break
+                sim_mode = self._active_sim_mode
+                pkt = self._mac_latest_packet
+            if (
+                sys.platform == "darwin"
+                and sim_mode == "live_uvc"
+                and pkt is not None
+                and pkt[2] == last_mac_pkt_ts
+                and (time.perf_counter() - pkt[2]) < 0.12
+            ):
+                time.sleep(0.006)
+                continue
+            if pkt is not None and sim_mode == "live_uvc":
+                last_mac_pkt_ts = pkt[2]
             t_start = time.perf_counter()
             try:
                 self.step_once()

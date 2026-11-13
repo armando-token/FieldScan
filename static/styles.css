@@ -664,6 +664,15 @@ svg.lucide {
   min-height: 0;
   background: #05080c;
   overflow: hidden;
+  user-select: none;
+}
+
+.camera-stage.is-zoomed {
+  cursor: grab;
+}
+
+.camera-stage.is-panning {
+  cursor: grabbing;
 }
 
 .camera-stage > img,
@@ -672,6 +681,131 @@ svg.lucide {
   height: 100%;
   object-fit: cover;
   display: block;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.camera-zoom-bar {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.live-feed-proof,
+.zoom-pill-group,
+.raw-cam-btn {
+  pointer-events: auto;
+}
+
+.live-feed-proof {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border-radius: var(--r-sm);
+  background: rgba(6, 12, 20, 0.86);
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #d1fae5;
+  backdrop-filter: blur(4px);
+  white-space: nowrap;
+}
+
+.live-feed-proof.is-standby {
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #fde68a;
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 7px #10b981;
+  animation: liveCamPulse 1.2s ease-in-out infinite;
+}
+
+.live-feed-proof.is-standby .live-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 6px #f59e0b;
+}
+
+@keyframes liveCamPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.42; transform: scale(0.82); }
+}
+
+.zoom-pill-group {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(6, 12, 20, 0.88);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  padding: 2px;
+  gap: 2px;
+  backdrop-filter: blur(4px);
+}
+
+.zoom-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #cbd5e1;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 3px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.zoom-btn:hover {
+  background: rgba(56, 189, 248, 0.16);
+  color: #ffffff;
+}
+
+.zoom-btn.active {
+  background: rgba(14, 165, 233, 0.34);
+  color: #e0f2fe;
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.65);
+}
+
+.raw-cam-btn {
+  appearance: none;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  background: rgba(8, 15, 26, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  color: #e2e8f0;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  white-space: nowrap;
+  transition: all 0.14s ease;
+}
+
+.raw-cam-btn:hover {
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.raw-cam-btn.is-raw-active {
+  background: rgba(6, 95, 70, 0.92);
+  border-color: #34d399;
+  color: #ecfdf5;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.35);
 }
 
 .cv-spatial-hud-canvas {
@@ -707,6 +841,7 @@ svg.lucide {
   top: 8px;
   left: 10px;
   right: 10px;
+  z-index: 5;
   display: flex;
   justify-content: space-between;
   gap: 8px;
@@ -741,7 +876,7 @@ svg.lucide {
 .dip-macro-pip {
   position: absolute;
   right: 10px;
-  bottom: 10px;
+  bottom: 40px;
   width: min(306px, calc(100% - 20px));
   background: rgba(12, 18, 27, 0.95);
   border: 1px solid var(--amber-bright);

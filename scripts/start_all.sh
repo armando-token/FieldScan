@@ -83,6 +83,7 @@ AUDIO_MODEL="${MODELS_DIR}/LFM3-Audio-2B-Q4_0.gguf"
 AUDIO_MMPROJ="${MODELS_DIR}/mmproj-LFM3-Audio-2B-Q4_0.gguf"
 export PIPER_VOICE_MODEL="${PIPER_VOICE_MODEL:-${VENDOR_ROOT}/piper/en/en_US/lessac/medium/en_US-lessac-medium.onnx}"
 export FIELDSCAN_PIPER_ONNX="${FIELDSCAN_PIPER_ONNX:-${PIPER_VOICE_MODEL}}"
+export FIELDSCAN_CAMERA_MODE="${FIELDSCAN_CAMERA_MODE:-usb}"
 
 mkdir -p "${PROJECT_ROOT}/logs"
 

@@ -1,0 +1,24 @@
+# Python virtual environments & caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Local downloaded model weights / llama.cpp binaries (root vendor only; keep static/vendor/ Three.js!)
+/vendor/
+!static/vendor/
+!static/vendor/**
+
+# Runtime logs & generated CAD/Outbox artifacts
+logs/
+exports/*
+!exports/.gitkeep
+outbox/*
+!outbox/.gitkeep
+
+# macOS / Editor
+.DS_Store
+.idea/
+.vscode/

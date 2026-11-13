@@ -485,3 +485,86 @@ def test_live_camera_multi_background_all_angle_and_no_fake_fallback() -> None:
         assert tel_pos["detected"] is True, f"Missed TZ THT-02 on {bg_name} at {ang} deg"
         ang_err = abs(((tel_pos["angle_deg"] - ang + 180.0) % 360.0) - 180.0)
         assert ang_err <= 5.0, f"Orientation error {ang_err} deg on {bg_name} (target {ang}, got {tel_pos['angle_deg']})"
+
+
+def test_open_two_half_sensor_rejects_white_stickers_and_locks_dip8_pins() -> None:
+    """Verify unscrewed two-half TZ THT-02 ignores white spec/barcode stickers and locks onto SW1 8-pin DIP switch."""
+    import math
+    import cv2
+    import numpy as np
+
+    w, h = 1920, 1080
+    rng = np.random.default_rng(42)
+    frame = np.clip(
+        np.full((h, w, 3), (88, 114, 142), np.float32) + rng.normal(0, 3.0, (h, w, 3)).astype(np.float32),
+        0,
+        255,
+    ).astype(np.uint8)
+
+    # Render an oblique (-132 deg) unscrewed two-half TZ THT-02 with white stickers + exposed teal PCB + 8-pin DIP switch
+    canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cx, cy = 960, 540
+
+    # Upper barrel half (grey housing + black O-ring + bright white specification sticker)
+    cv2.rectangle(canvas, (cx - 420, cy - 54), (cx - 58, cy + 54), (146, 150, 148), -1)
+    cv2.rectangle(mask, (cx - 420, cy - 54), (cx - 58, cy + 54), 255, -1)
+    cv2.rectangle(canvas, (cx - 300, cy - 56), (cx - 274, cy + 56), (34, 36, 38), -1)
+    upper_sticker_center_local = (cx - 185, cy)
+    cv2.rectangle(canvas, (cx - 255, cy - 50), (cx - 115, cy + 50), (226, 228, 224), -1)
+
+    # Exposed internal teal/petrol PCB + black SMD SW1 DIP-8 switch with 8 white rockers & 16 metallic leads
+    sw1_center_local = (cx, cy)
+    cv2.rectangle(canvas, (cx - 60, cy - 30), (cx + 85, cy + 30), (96, 82, 42), -1)
+    cv2.rectangle(mask, (cx - 60, cy - 30), (cx + 85, cy + 30), 255, -1)
+    cv2.rectangle(canvas, (cx - 42, cy - 19), (cx + 42, cy + 19), (36, 38, 40), -1)
+    for pin_i in range(8):
+        px = cx - 35 + pin_i * 10
+        cv2.rectangle(canvas, (px - 2, cy - 26), (px + 2, cy - 19), (205, 210, 212), -1)
+        cv2.rectangle(canvas, (px - 2, cy + 19), (px + 2, cy + 26), (205, 210, 212), -1)
+        ry0 = cy - 12 if pin_i == 7 else cy + 2
+        cv2.rectangle(canvas, (px - 2, ry0), (px + 2, ry0 + 9), (228, 232, 232), -1)
+
+    # Lower barrel half (bright white barcode sticker with black bars + grey PG7 gland)
+    lower_sticker_center_local = (cx + 145, cy)
+    cv2.rectangle(canvas, (cx + 84, cy - 54), (cx + 435, cy + 54), (140, 145, 142), -1)
+    cv2.rectangle(mask, (cx + 84, cy - 54), (cx + 435, cy + 54), 255, -1)
+    cv2.rectangle(canvas, (cx + 95, cy - 52), (cx + 195, cy + 52), (222, 225, 222), -1)
+    for bar_x in range(cx + 102, cx + 188, 7):
+        cv2.line(canvas, (bar_x, cy - 48), (bar_x, cy + 48), (42, 44, 46), 2)
+    cv2.rectangle(canvas, (cx + 385, cy - 38), (cx + 448, cy + 38), (92, 96, 95), -1)
+    cv2.rectangle(mask, (cx + 385, cy - 38), (cx + 448, cy + 38), 255, -1)
+
+    rot_deg = -48.0
+    rot_m = cv2.getRotationMatrix2D((float(cx), float(cy)), rot_deg, 1.0)
+    warped_bgr = cv2.warpAffine(canvas, rot_m, (w, h), flags=cv2.INTER_LINEAR)
+    warped_m = cv2.warpAffine(mask, rot_m, (w, h), flags=cv2.INTER_NEAREST) > 0
+    frame[warped_m] = warped_bgr[warped_m]
+
+    def _xform_pt(pt: tuple[int, int]) -> tuple[float, float]:
+        arr = np.array([[[float(pt[0]), float(pt[1])]]], dtype=np.float32)
+        out = cv2.transform(arr, rot_m)[0, 0]
+        return float(out[0]), float(out[1])
+
+    true_sw1 = _xform_pt(sw1_center_local)
+    true_up_sticker = _xform_pt(upper_sticker_center_local)
+    true_lo_sticker = _xform_pt(lower_sticker_center_local)
+
+    scanner = VisionScanner(initial_mode="sim_normal", auto_start=False)
+    scanner._locked_pose = None
+    scanner._dip_lock_ema = None
+    _, tel = scanner.analyze_frame(frame, sim_mode="live_uvc", camera_source="uvc:avfoundation:0")
+
+    assert tel["detected"] is True
+    assert tel["pcb_open_detected"] is True
+    assert tel["anomaly_zone"] == "upper_barrel_dip"
+    assert tel["dip_focus_pt"] is not None
+    fx, fy = tel["dip_focus_pt"]
+    assert math.hypot(fx - true_sw1[0], fy - true_sw1[1]) <= 24.0
+    assert math.hypot(fx - true_up_sticker[0], fy - true_up_sticker[1]) >= 120.0
+    assert math.hypot(fx - true_lo_sticker[0], fy - true_lo_sticker[1]) >= 95.0
+
+    scanner._latest_raw_bgr = frame
+    scanner._latest_telemetry = tel
+    crop_jpg = scanner.get_dip_focus_jpeg()
+    assert crop_jpg[:2] == b"\xff\xd8"

@@ -128,6 +128,7 @@ const state = {
   dipBits: [0, 0, 0, 0, 0, 0, 0, 1],
   dipPipVisible: false,
   dipPipDismissed: false,
+  wasPhysicalPcbOpen: false,
   dipCropFailed: false,
 
   autoSpeak: true,
@@ -500,7 +501,12 @@ function flyCameraTo(px, py, pz, tx, ty, tz) {
 }
 
 function focusDip3DCamera() {
-  // Internal Blue PCB sits at local z ~ +13 mm -> World X ~ +13 mm
+  if (cad.sensorRig) {
+    cad.sensorRig.updateMatrixWorld(true);
+    const dipWorld = new THREE.Vector3(0, 1.5, 13.0).applyMatrix4(cad.sensorRig.matrixWorld);
+    flyCameraTo(dipWorld.x, dipWorld.y + 28, dipWorld.z + 68, dipWorld.x, dipWorld.y, dipWorld.z);
+    return;
+  }
   flyCameraTo(13, 30, 68, 13, 1.5, 0);
 }
 
@@ -1587,9 +1593,21 @@ function renderSpatialVisionHud(nowMs, dt) {
         : `SIM${seqNum}`;
   }
 
-  // Compute smooth 60 FPS Auto-Zoom & Pan onto detected TZ THT-02 sensor
+  // Compute smooth 60 FPS Auto-Zoom & Pan onto detected TZ THT-02 sensor (or directly onto SW1 DIP-8 pins when open!)
+  const hasDipPinLock = Boolean(
+    v && v.detected && v.pcb_open_detected && Array.isArray(v.dip_focus_pt) && v.dip_focus_pt.length === 2
+  );
   if (state.camZoomMode === 'auto') {
-    if (v && v.detected && Array.isArray(v.bbox) && v.bbox[2] > 0 && v.bbox[3] > 0) {
+    if (hasDipPinLock) {
+      state.lastLostSensorTs = 0;
+      const pinCxStage = (offX + v.dip_focus_pt[0] * coverScale) / vw;
+      const pinCyStage = (offY + v.dip_focus_pt[1] * coverScale) / vh;
+      state.camZoomTarget = 2.85;
+      state.camPanTarget = [
+        Math.max(0.05, Math.min(0.95, pinCxStage)),
+        Math.max(0.05, Math.min(0.95, pinCyStage)),
+      ];
+    } else if (v && v.detected && Array.isArray(v.bbox) && v.bbox[2] > 0 && v.bbox[3] > 0) {
       state.lastLostSensorTs = 0;
       const cxStage = (offX + (v.bbox[0] + v.bbox[2] * 0.5) * coverScale) / vw;
       const cyStage = (offY + (v.bbox[1] + v.bbox[3] * 0.5) * coverScale) / vh;
@@ -1614,7 +1632,9 @@ function renderSpatialVisionHud(nowMs, dt) {
       }
     }
     if (dom.btnZoomAuto) {
-      dom.btnZoomAuto.textContent = `AUTO ${state.camZoomCurrent.toFixed(1)}×`;
+      dom.btnZoomAuto.textContent = hasDipPinLock
+        ? `AUTO ${state.camZoomCurrent.toFixed(1)}× PIN`
+        : `AUTO ${state.camZoomCurrent.toFixed(1)}×`;
     }
   } else if (dom.btnZoomAuto) {
     dom.btnZoomAuto.textContent = 'AUTO';
@@ -1632,8 +1652,10 @@ function renderSpatialVisionHud(nowMs, dt) {
   const z = Math.max(1.0, state.camZoomCurrent);
   const focusX = state.camPanCurrent[0] * vw;
   const focusY = state.camPanCurrent[1] * vh;
-  const tx = Math.min(0, Math.max(vw * (1 - z), vw * 0.5 - z * focusX));
-  const ty = Math.min(0, Math.max(vh * (1 - z), vh * 0.5 - z * focusY));
+  const screenAimX = state.camZoomMode === 'auto' && hasDipPinLock && state.dipPipVisible ? 0.31 : 0.5;
+  const screenAimY = state.camZoomMode === 'auto' && hasDipPinLock && state.dipPipVisible ? 0.37 : 0.5;
+  const tx = Math.min(0, Math.max(vw * (1 - z), vw * screenAimX - z * focusX));
+  const ty = Math.min(0, Math.max(vh * (1 - z), vh * screenAimY - z * focusY));
 
   const xform = z > 1.004
     ? `translate3d(${tx.toFixed(2)}px, ${ty.toFixed(2)}px, 0) scale(${z.toFixed(4)})`
@@ -1819,8 +1841,8 @@ function renderSpatialVisionHud(nowMs, dt) {
     sm.quad = null;
   }
 
-  // 2. PHYSICAL FAULT / OPEN DIP-8 DEVIATION RETICLE & LEADER CALLOUT
-  if (!state.modbusHealthy && v.anomaly_detected && Array.isArray(v.anomaly_pt)) {
+  // 2. PHYSICAL FAULT / OPEN SW1 DIP-8 PIN LOCK RETICLE & LEADER CALLOUT
+  if ((Boolean(v.pcb_open_detected) || !state.modbusHealthy) && v.anomaly_detected && Array.isArray(v.anomaly_pt)) {
     sm.anomalyPt = lerpPt2(sm.anomalyPt, mapPt(v.anomaly_pt), lerpAlpha);
     if (sm.anomalyPt) {
       const [ax, ay] = sm.anomalyPt;
@@ -1829,6 +1851,21 @@ function renderSpatialVisionHud(nowMs, dt) {
       const rOuter = 16 + 5 * pulse;
 
       ctx.save();
+      if (isDipOpen && Array.isArray(v.dip_quad) && v.dip_quad.length === 4) {
+        const dq = v.dip_quad.map(mapPt);
+        ctx.beginPath();
+        ctx.moveTo(dq[0][0], dq[0][1]);
+        for (let i = 1; i < 4; i += 1) ctx.lineTo(dq[i][0], dq[i][1]);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.14)';
+        ctx.fill();
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2.0;
+        ctx.shadowColor = '#38bdf8';
+        ctx.shadowBlur = 8;
+        ctx.stroke();
+      }
+
       ctx.strokeStyle = faultAccent;
       ctx.lineWidth = 1.8;
       ctx.shadowColor = faultAccent;
@@ -1851,13 +1888,15 @@ function renderSpatialVisionHud(nowMs, dt) {
         const zoneName = ZONE_SPECS[v.anomaly_zone]?.shortLabel || String(v.anomaly_zone || 'SENSOR').toUpperCase();
         drawSpatialLeaderCallout(ctx, {
           anchor: [ax, ay - rOuter],
-          boxX: Math.max(264, vw * 0.48),
+          boxX: Math.max(264, vw * 0.46),
           boxY: 44,
           accent: faultAccent,
           title: isDipOpen
-            ? `DIP-8 PCB EXPOSED · ${confPct}%`
+            ? `SW1 DIP-8 PIN LOCK · ${confPct}%`
             : `TWIN DEVIATION · ${zoneName} · ${confPct}%`,
-          sub: `${zStr} · OPTICAL VS DIGITAL TWIN MISMATCH`,
+          sub: isDipOpen
+            ? `${zStr} · 8-PIN SWITCH ISOLATED (STICKERS IGNORED)`
+            : `${zStr} · OPTICAL VS DIGITAL TWIN MISMATCH`,
           vw,
           vh,
         });
@@ -2870,8 +2909,14 @@ function applyTelemetryPayload(data) {
   }
 
   // 5. Auto-Explode 3D Housing & DIP-8 Pin-Focus Macro PiP
+  const physPcbNow = Boolean(vision.pcb_open_detected);
+  if (physPcbNow && !state.wasPhysicalPcbOpen) {
+    state.dipPipDismissed = false;
+  }
+  state.wasPhysicalPcbOpen = physPcbNow;
+
   const pcbOpen = Boolean(
-    vision.pcb_open_detected || data.explode_pcb || data.repair?.focus_dip
+    physPcbNow || data.explode_pcb || data.repair?.focus_dip
   );
   if (state.autoExplodeEnabled && pcbOpen !== state.exploded) {
     setExplodedState(pcbOpen, { zoomDip: pcbOpen });
@@ -2880,15 +2925,17 @@ function applyTelemetryPayload(data) {
     setDipPipVisibility(true);
   }
 
-  // 6. Real-Time Optical Anomaly -> 3D Red Fault Stain
-  if (!state.modbusHealthy) {
+  // 6. Real-Time Optical Anomaly -> 3D Red/Amber Fault Highlight
+  if (!state.modbusHealthy || physPcbNow) {
     if (vision.anomaly_detected && vision.anomaly_zone) {
       setFaultHighlight(
         vision.anomaly_zone,
         vision.anomaly_label ||
-          `Optical deviation localized on ${vision.anomaly_zone} (${(
-            Number(vision.anomaly_confidence || 0.92) * 100
-          ).toFixed(0)}% confidence)`
+          (physPcbNow
+            ? 'Physical SW1 DIP-8 switch exposed on camera — white stickers rejected, 8-pin block locked.'
+            : `Optical deviation localized on ${vision.anomaly_zone} (${(
+                Number(vision.anomaly_confidence || 0.92) * 100
+              ).toFixed(0)}% confidence)`)
       );
     } else if (vision.anomaly_detected === false && !state.lastDiagnosisFaultLock) {
       setFaultHighlight(null);
@@ -2909,9 +2956,11 @@ function applyTelemetryPayload(data) {
   // Rising edge: Sensor just came online on RS-485 Modbus!
   if (healthy && !state.wasModbusHealthy) {
     state.lastDiagnosisFaultLock = false;
-    setFaultHighlight(null);
+    if (!physPcbNow) {
+      setFaultHighlight(null);
+    }
     state.emeraldVerifyUntil = performance.now() + 2600;
-    if (state.exploded && state.autoExplodeEnabled) {
+    if (state.exploded && state.autoExplodeEnabled && !pcbOpen) {
       setExplodedState(false);
       reset3DCamera();
     }

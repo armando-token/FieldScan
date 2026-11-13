@@ -624,6 +624,7 @@ class VisionScanner:
         self._latest_raw_jpeg: bytes = b""
         self._latest_telemetry: dict[str, Any] = {}
         self._locked_pose: dict[str, Any] | None = None
+        self._dip_lock_ema: dict[str, Any] | None = None
         self._prev_hand_pt: tuple[float, float] | None = None
         self._prev_hand_ts: float = 0.0
         self._hand_vel_ema: tuple[float, float] = (0.0, 0.0)
@@ -1024,6 +1025,7 @@ class VisionScanner:
 
     def set_mode(self, mode: str) -> dict[str, Any]:
         """Switch between USB UVC camera and any of the simulated workbench modes."""
+        self._dip_lock_ema = None
         self._configure_source(mode)
         return self.step_once()
 
@@ -1043,6 +1045,8 @@ class VisionScanner:
                 self._release_cap()
         with self._lock:
             self._custom_bgr = decoded
+            self._locked_pose = None
+            self._dip_lock_ema = None
             self._requested_mode = "custom"
             self._active_sim_mode = "custom"
             self._camera_source = "custom:injected_frame"
@@ -1395,7 +1399,7 @@ class VisionScanner:
         pcb_sensor_only: np.ndarray,
         warm_body: np.ndarray,
         keep_sensor: np.ndarray | None,
-    ) -> tuple[np.ndarray | None, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray | None, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float | None]:
         """Detect cylindrical TZ THT-02 sensor at any 0-360 deg orientation on smooth or textured backgrounds."""
         ph, pw = small_bgr.shape[:2]
         blur3 = cv2.GaussianBlur(small_bgr, (3, 3), 0)
@@ -1564,6 +1568,8 @@ class VisionScanner:
 
         best_cnt: np.ndarray | None = None
         best_score = 0.0
+        cyl_candidates: list[tuple[float, np.ndarray, float, float, float, float, np.ndarray]] = []
+        bridged_minor_s: float | None = None
 
         s_fracs = np.linspace(-0.38, 0.38, 13, dtype=np.float32)
         ax_fracs = np.linspace(-0.46, 0.46, 21, dtype=np.float32)
@@ -1582,7 +1588,7 @@ class VisionScanner:
                 if major < min_major or major > max_major:
                     continue
                 ratio = major / minor
-                if ratio < 2.7 or ratio > 14.8:
+                if ratio < 2.35 or ratio > 14.8:
                     continue
 
                 extent = area / max(1.0, major * minor)
@@ -1683,6 +1689,8 @@ class VisionScanner:
                     continue
 
                 ratio_fit = 1.0 - min(0.55, abs(ratio - 8.2) / 11.0)
+                if ratio < 2.7:
+                    ratio_fit *= 0.68
                 edge_q = min(40.0, min(med_edge_a, med_edge_b))
                 contrast_q = min(50.0, min(med_dist_a, med_dist_b))
                 score = (
@@ -1693,14 +1701,292 @@ class VisionScanner:
                     * (0.4 + 0.03 * edge_q)
                     * (0.4 + 0.025 * contrast_q)
                 )
-                if score > best_score:
+                cyl_candidates.append(
+                    (score, cnt, float(cx_c), float(cy_c), float(major), float(minor), u_v.copy())
+                )
+                if ratio >= 2.65 and score > best_score:
                     best_score = score
                     best_cnt = cnt
+
+        if best_cnt is None and cyl_candidates:
+            cyl_candidates.sort(key=lambda item: item[0], reverse=True)
+            best_cnt = cyl_candidates[0][1]
 
         if best_cnt is not None:
             best_cnt = cls._refine_cylinder_contour(best_cnt)
 
-        return best_cnt, l_crisp, bg2_l, local_pcb, local_warm
+            # Bridge open unscrewed barrel halves across exposed internal teal/blue PCB so
+            # the detector never gets stuck on one white sticker or ping-pongs between halves.
+            pcb_ys_all, pcb_xs_all = np.where(local_pcb > 0)
+            if len(pcb_xs_all) >= 8:
+                (cx1, cy1), (rw1, rh1), r_ang1 = cv2.minAreaRect(best_cnt)
+                maj1 = max(rw1, rh1)
+                min1 = max(2.0, min(rw1, rh1))
+                bp1 = cv2.boxPoints(((cx1, cy1), (rw1, rh1), r_ang1))
+                d01_1 = bp1[1] - bp1[0]
+                d12_1 = bp1[2] - bp1[1]
+                u1 = d01_1 if np.linalg.norm(d01_1) >= np.linalg.norm(d12_1) else d12_1
+                u1 = u1 / max(1e-6, float(np.linalg.norm(u1)))
+                v1 = np.array([-u1[1], u1[0]], dtype=np.float32)
+
+                rx_p = pcb_xs_all.astype(np.float32) - float(cx1)
+                ry_p = pcb_ys_all.astype(np.float32) - float(cy1)
+                pu_p = rx_p * float(u1[0]) + ry_p * float(u1[1])
+                pv_p = rx_p * float(v1[0]) + ry_p * float(v1[1])
+                near_mask = (np.abs(pu_p) <= 1.28 * maj1) & (np.abs(pv_p) <= 1.40 * min1)
+
+                if int(np.count_nonzero(near_mask)) >= 8:
+                    px_near = pcb_xs_all[near_mask]
+                    py_near = pcb_ys_all[near_mask]
+                    pcb_cx = float(np.median(px_near))
+                    pcb_cy = float(np.median(py_near))
+                    pcb_cnt = np.column_stack((px_near, py_near)).reshape(-1, 1, 2).astype(np.int32)
+
+                    partner_cnt: np.ndarray | None = None
+                    partner_min = min1
+                    cyl_candidates.sort(key=lambda item: item[0], reverse=True)
+                    for sc2_c, cnt2, cx2, cy2, maj2, min2, u2 in cyl_candidates:
+                        dist12 = math.hypot(cx2 - float(cx1), cy2 - float(cy1))
+                        if dist12 < 0.44 * maj1 or dist12 > 1.95 * max(maj1, maj2):
+                            continue
+                        if not (0.50 <= (min2 / min1) <= 2.0):
+                            continue
+                        if abs(float(np.dot(u1, u2))) < 0.66:
+                            continue
+                        seg_x, seg_y = cx2 - float(cx1), cy2 - float(cy1)
+                        seg_len2 = max(1.0, seg_x * seg_x + seg_y * seg_y)
+                        t_pcb = ((pcb_cx - float(cx1)) * seg_x + (pcb_cy - float(cy1)) * seg_y) / seg_len2
+                        if not (0.10 <= t_pcb <= 0.90):
+                            continue
+                        perp_pcb = abs(
+                            (pcb_cx - float(cx1)) * (-seg_y) + (pcb_cy - float(cy1)) * seg_x
+                        ) / math.sqrt(seg_len2)
+                        if perp_pcb > 1.25 * max(min1, min2):
+                            continue
+                        partner_cnt = cls._refine_cylinder_contour(cnt2)
+                        partner_min = min2
+                        break
+
+                    if partner_cnt is not None:
+                        best_cnt = cv2.convexHull(
+                            np.vstack([best_cnt.astype(np.int32), pcb_cnt, partner_cnt.astype(np.int32)])
+                        )
+                        bridged_minor_s = 0.5 * (min1 + partner_min)
+                    else:
+                        med_pu = float(np.median(pu_p[near_mask]))
+                        med_pv = float(np.median(pv_p[near_mask]))
+                        if (
+                            0.34 * maj1 <= abs(med_pu) <= 0.98 * maj1
+                            and abs(med_pv) <= 0.92 * min1
+                            and len(px_near) >= 12
+                        ):
+                            best_cnt = cv2.convexHull(np.vstack([best_cnt.astype(np.int32), pcb_cnt]))
+                            bridged_minor_s = min1
+
+        return best_cnt, l_crisp, bg2_l, local_pcb, local_warm, bridged_minor_s
+
+    def _detect_open_dip_switch_hires(
+        self,
+        frame_bgr: np.ndarray,
+        coarse_fx: float,
+        coarse_fy: float,
+        minor_px: float,
+        u_vec: np.ndarray,
+        hand_mask_small: np.ndarray | None,
+        inv_scale: float,
+    ) -> dict[str, Any] | None:
+        """Locate physical SW1 8-pin SMD DIP switch at full camera resolution while rejecting white stickers."""
+        orig_h, orig_w = frame_bgr.shape[:2]
+        win_r = int(max(115, min(260, round(minor_px * 2.35))))
+        wx0 = max(0, int(round(coarse_fx)) - win_r)
+        wy0 = max(0, int(round(coarse_fy)) - win_r)
+        wx1 = min(orig_w, int(round(coarse_fx)) + win_r)
+        wy1 = min(orig_h, int(round(coarse_fy)) + win_r)
+        if (wx1 - wx0) < 40 or (wy1 - wy0) < 40:
+            return None
+
+        sub_bgr = frame_bgr[wy0:wy1, wx0:wx1]
+        sh, sw = sub_bgr.shape[:2]
+        sc1 = max(0.50, min(1.60, float(max(orig_w, orig_h)) / 1920.0))
+        sc2 = sc1 * sc1
+
+        hsv_hi = cv2.cvtColor(sub_bgr, cv2.COLOR_BGR2HSV)
+        gray = cv2.cvtColor(sub_bgr, cv2.COLOR_BGR2GRAY)
+        b_i16 = sub_bgr[:, :, 0].astype(np.int16)
+        r_i16 = sub_bgr[:, :, 2].astype(np.int16)
+
+        hand_hi = np.zeros((sh, sw), dtype=np.uint8)
+        if hand_mask_small is not None and np.any(hand_mask_small):
+            sx0 = max(0, int(math.floor(wx0 / inv_scale)))
+            sy0 = max(0, int(math.floor(wy0 / inv_scale)))
+            sx1 = min(hand_mask_small.shape[1], int(math.ceil(wx1 / inv_scale)) + 1)
+            sy1 = min(hand_mask_small.shape[0], int(math.ceil(wy1 / inv_scale)) + 1)
+            if sx1 > sx0 and sy1 > sy0:
+                hand_hi = cv2.resize(
+                    hand_mask_small[sy0:sy1, sx0:sx1], (sw, sh), interpolation=cv2.INTER_NEAREST
+                )
+
+        # 1. Mask out bright white specification stickers & white barcode stickers (including black barcode stripes)
+        #    while keeping SW1 DIP-8 pins/rockers (which have low raw_fill < 0.45 and dark housing med_gray < 145) intact!
+        white_raw = ((gray > 164) & (hsv_hi[:, :, 1] < 62)).astype(np.uint8) * 255
+        k_st = max(9, int(round(17 * sc1)) | 1)
+        white_closed = cv2.morphologyEx(
+            white_raw, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_st, k_st))
+        )
+        nw, lw, sw_stats, _ = cv2.connectedComponentsWithStats(white_closed)
+        sticker_mask = np.zeros_like(white_raw)
+        min_sticker_area = max(320, int(round(1400 * sc2)))
+        for idx_w in range(1, nw):
+            w_area = int(sw_stats[idx_w, cv2.CC_STAT_AREA])
+            if w_area < min_sticker_area:
+                continue
+            comp_w = lw == idx_w
+            raw_fill = float(np.count_nonzero(white_raw[comp_w])) / float(max(1, w_area))
+            if raw_fill >= 0.52 and float(np.median(gray[comp_w])) >= 158.0:
+                sticker_mask[comp_w] = 255
+        k_sdil = max(5, int(round(7 * sc1)) | 1)
+        sticker_mask = cv2.dilate(
+            sticker_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_sdil, k_sdil))
+        )
+
+        # 2. Verify saturated teal/petrol/blue solder-mask PCB (S >= 100 rejects grey plastic threads & O-rings)
+        pcb_hi = (
+            (hsv_hi[:, :, 0] >= 88)
+            & (hsv_hi[:, :, 0] <= 138)
+            & (hsv_hi[:, :, 1] >= 100)
+            & (hsv_hi[:, :, 2] >= 44)
+            & (hsv_hi[:, :, 2] <= 240)
+            & ((b_i16 - r_i16) >= 20)
+            & (sticker_mask == 0)
+            & (hand_hi == 0)
+        ).astype(np.uint8) * 255
+        pcb_hi = cv2.morphologyEx(
+            pcb_hi, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        )
+        k_pcl = max(5, int(round(11 * sc1)) | 1)
+        pcb_hi = cv2.morphologyEx(
+            pcb_hi, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_pcl, k_pcl))
+        )
+
+        pcb_px_hi = int(np.count_nonzero(pcb_hi))
+        min_pcb_hi = max(32, int(round(115 * sc2)))
+        if pcb_px_hi < min_pcb_hi:
+            return None
+
+        # Reject uniform blue backgrounds spanning the outer window perimeter
+        border_vals = np.concatenate([pcb_hi[0, :], pcb_hi[-1, :], pcb_hi[:, 0], pcb_hi[:, -1]])
+        if float(np.mean(border_vals > 0)) > 0.46:
+            return None
+
+        # 3. Locate black or crimson SMD DIP-8 switch body + 8-pin bright metallic/rocker micro-comb
+        dark_sw = (gray <= 74) & (hsv_hi[:, :, 1] <= 145)
+        red_sw = (
+            ((hsv_hi[:, :, 0] <= 14) | (hsv_hi[:, :, 0] >= 166))
+            & (hsv_hi[:, :, 1] >= 115)
+            & (hsv_hi[:, :, 2] >= 55)
+        )
+        housing_hi = ((dark_sw | red_sw) & (sticker_mask == 0) & (hand_hi == 0)).astype(np.uint8) * 255
+        housing_hi = cv2.morphologyEx(
+            housing_hi, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        )
+        k_hdil = max(5, int(round(11 * sc1)) | 1)
+        near_housing = cv2.dilate(
+            housing_hi, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_hdil, k_hdil))
+        )
+
+        k_th = max(5, int(round(9 * sc1)) | 1)
+        tophat = cv2.morphologyEx(
+            gray, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_th, k_th))
+        )
+        pin_dots = (
+            (tophat >= 21)
+            & (gray >= 104)
+            & (near_housing > 0)
+            & (sticker_mask == 0)
+            & (hand_hi == 0)
+        ).astype(np.uint8) * 255
+
+        k_comb = max(13, int(round(25 * sc1)) | 1)
+        pin_comb = cv2.morphologyEx(
+            pin_dots, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_comb, k_comb))
+        )
+        k_pnear = max(17, int(round(39 * sc1)) | 1)
+        pcb_adj = cv2.dilate(
+            pcb_hi, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_pnear, k_pnear))
+        )
+
+        nc, lc, sc_comb, _ = cv2.connectedComponentsWithStats(pin_comb)
+        best_pin_pts: np.ndarray | None = None
+        best_pin_count = 0
+        min_pin_px = max(18, int(round(62 * sc2)))
+        min_pcb_ov = max(20, int(round(65 * sc2)))
+
+        for idx_c in range(1, nc):
+            if int(sc_comb[idx_c, cv2.CC_STAT_AREA]) < max(55, int(round(180 * sc2))):
+                continue
+            cm = (lc == idx_c).astype(np.uint8) * 255
+            if int(np.count_nonzero(pcb_adj & cm)) < min_pcb_ov:
+                continue
+            pys, pxs = np.where(pin_dots & cm)
+            if len(pxs) >= min_pin_px and len(pxs) > best_pin_count:
+                best_pin_count = len(pxs)
+                best_pin_pts = np.column_stack((pxs.astype(np.float32), pys.astype(np.float32)))
+
+        # Motion-blur fallback: lock onto dark/red DIP-8 switch body directly adjacent to exposed PCB
+        if best_pin_pts is None:
+            housing_on_pcb = cv2.bitwise_and(housing_hi, pcb_adj)
+            hys, hxs = np.where(housing_on_pcb > 0)
+            if pcb_px_hi >= int(min_pcb_hi * 2.2) and len(hxs) >= max(30, int(round(95 * sc2))):
+                best_pin_pts = np.column_stack((hxs.astype(np.float32), hys.astype(np.float32)))
+                best_pin_count = len(hxs) // 2
+            else:
+                return None
+
+        (rcx, rcy), (rrw, rrh), r_ang = cv2.minAreaRect(best_pin_pts)
+        fx = float(rcx) + float(wx0)
+        fy = float(rcy) + float(wy0)
+        pad_px = 12.0 * sc1
+        dip_box_local = cv2.boxPoints(((rcx, rcy), (rrw + pad_px, rrh + pad_px), r_ang))
+        d01 = dip_box_local[1] - dip_box_local[0]
+        d12 = dip_box_local[2] - dip_box_local[1]
+        n01 = float(np.linalg.norm(d01))
+        n12 = float(np.linalg.norm(d12))
+        u01 = (d01 / n01) if n01 > 1e-4 else u_vec.copy()
+        u12 = (d12 / n12) if n12 > 1e-4 else u_vec.copy()
+        # Pick the DIP-8 box axis aligned with the PCB/sensor longitudinal axis so pins 1..8 never rotate 90 deg sideways
+        dip_u = u01 if abs(float(np.dot(u01, u_vec))) >= abs(float(np.dot(u12, u_vec))) else u12
+        if float(np.dot(dip_u, u_vec)) < 0.0:
+            dip_u = -dip_u
+        if abs(float(np.dot(dip_u, u_vec))) < 0.72:
+            dip_u = u_vec.copy()
+
+        dip_ang = float(math.degrees(math.atan2(float(dip_u[1]), float(dip_u[0]))))
+        dip_quad = [
+            [int(round(float(pt[0]) + wx0)), int(round(float(pt[1]) + wy0))]
+            for pt in dip_box_local
+        ]
+
+        # Smooth sub-pixel lock across consecutive live frames
+        if self._dip_lock_ema is not None:
+            prev_fx, prev_fy = self._dip_lock_ema["pt"]
+            if math.hypot(fx - prev_fx, fy - prev_fy) < 42.0 * sc1:
+                fx = 0.65 * fx + 0.35 * prev_fx
+                fy = 0.65 * fy + 0.35 * prev_fy
+                prev_u = self._dip_lock_ema["u"]
+                sm_u = 0.65 * dip_u + 0.35 * prev_u
+                sm_n = float(np.linalg.norm(sm_u))
+                if sm_n > 1e-4:
+                    dip_u = sm_u / sm_n
+                    dip_ang = float(math.degrees(math.atan2(float(dip_u[1]), float(dip_u[0]))))
+
+        self._dip_lock_ema = {"pt": (fx, fy), "u": dip_u.copy()}
+        conf = round(min(0.99, 0.84 + min(0.15, best_pin_count / max(120.0, 420.0 * sc2))), 2)
+        return {
+            "dip_focus_pt": [int(round(fx)), int(round(fy))],
+            "dip_angle_deg": round(dip_ang, 2),
+            "dip_quad": dip_quad,
+            "confidence": conf,
+        }
 
     def analyze_frame(
         self,
@@ -1762,6 +2048,8 @@ class VisionScanner:
                 "tool_tip_pt": None,
                 "isolated_3d_target": "TZ-THT-02_SENSOR_ONLY",
                 "dip_focus_pt": None,
+                "dip_angle_deg": 0.0,
+                "dip_quad": None,
                 "scan_coverage_pct": 0,
                 "sim_mode": sim_mode,
                 "camera_source": camera_source,
@@ -1788,9 +2076,19 @@ class VisionScanner:
         val_ch = hsv[:, :, 2]
         sat_ch = hsv[:, :, 1]
 
-        pcb_min_sat = 58 if sim_mode in SIM_MODES else 96
-        pcb_min_val = 42 if sim_mode in SIM_MODES else 55
-        pcb_blue_full = cv2.inRange(hsv, (92, pcb_min_sat, pcb_min_val), (138, 255, 255))
+        if sim_mode in SIM_MODES:
+            pcb_blue_full = cv2.inRange(hsv, (92, 58, 42), (138, 255, 255))
+        else:
+            b_sm = small[:, :, 0].astype(np.int16)
+            r_sm = small[:, :, 2].astype(np.int16)
+            pcb_blue_full = (
+                (hsv[:, :, 0] >= 88)
+                & (hsv[:, :, 0] <= 138)
+                & (hsv[:, :, 1] >= 92)
+                & (hsv[:, :, 2] >= 44)
+                & (hsv[:, :, 2] <= 240)
+                & ((b_sm - r_sm) >= 18)
+            ).astype(np.uint8) * 255
         warm_min_sat = 105 if sim_mode in SIM_MODES else 142
         warm_patch_full = cv2.bitwise_or(
             cv2.inRange(hsv, (0, warm_min_sat, 95), (26, 255, 255)),
@@ -1853,6 +2151,7 @@ class VisionScanner:
         live_l_ch: np.ndarray | None = None
         live_bg_l: np.ndarray | None = None
 
+        bridged_minor_s: float | None = None
         if sim_mode in SIM_MODES:
             # Exact fast workbench simulator segmentation path
             body_bright = (val_ch > 122).astype(np.uint8) * 255
@@ -1892,13 +2191,16 @@ class VisionScanner:
                         best_cnt = cnt
         else:
             # Real industrial camera / uploaded field photo: background-agnostic, 0-360 deg detector
-            best_cnt, live_l_ch, live_bg_l, pcb_sensor_only, warm_sensor_only = (
+            best_cnt, live_l_ch, live_bg_l, pcb_sensor_only, warm_sensor_only, bridged_minor_s = (
                 self._detect_industrial_cylinder(
                     small, val_ch, sat_ch, pcb_sensor_only, warm_body, keep_sensor
                 )
             )
 
         anomaly_world_pt: tuple[int, int] | None = None
+        dip_focus_pt_world: list[int] | None = None
+        dip_angle_deg: float = 0.0
+        dip_quad: list[list[int]] | None = None
 
         if best_cnt is not None:
             detected = True
@@ -1921,7 +2223,12 @@ class VisionScanner:
 
             cx, cy = cx_s * inv_scale, cy_s * inv_scale
             major_px = max(rw_s, rh_s) * inv_scale
-            minor_px = max(1.0, min(rw_s, rh_s) * inv_scale)
+            eff_minor_s = (
+                bridged_minor_s
+                if (bridged_minor_s is not None and bridged_minor_s > 1.0)
+                else min(rw_s, rh_s)
+            )
+            minor_px = max(1.0, eff_minor_s * inv_scale)
             measured_ratio = round(float(major_px / minor_px), 2)
 
             est_diameter_mm = round(NOMINAL_DIAMETER_MM, 1)
@@ -2056,34 +2363,84 @@ class VisionScanner:
             )
             cv2.fillConvexPoly(sensor_poly_mask, roi_quad, 255)
 
-            # 2A. Check for exposed internal Blue 8-pin DIP Switch PCB inside middle barrel ROI
-            blue_in_roi = cv2.bitwise_and(pcb_sensor_only, sensor_poly_mask)
-            blue_ys, blue_xs = np.where(blue_in_roi > 0)
-            min_pcb_px = max(14, int(half_maj_s * half_min_s * 0.024))
+            # 2A. Check for exposed internal Blue/Teal 8-pin DIP Switch PCB (anti-sticker SW1 pin-lock)
+            if sim_mode in SIM_MODES:
+                blue_in_roi = cv2.bitwise_and(pcb_sensor_only, sensor_poly_mask)
+                blue_ys, blue_xs = np.where(blue_in_roi > 0)
+                min_pcb_px = max(14, int(half_maj_s * half_min_s * 0.024))
+                if len(blue_xs) >= min_pcb_px:
+                    rel_x = blue_xs.astype(np.float32) - cx_s
+                    rel_y = blue_ys.astype(np.float32) - cy_s
+                    proj_s = rel_x * float(u_vec[0]) + rel_y * float(u_vec[1])
+                    mean_proj = float(np.median(proj_s))
+                    norm_pos = np.clip(mean_proj / max(1.0, half_maj_s), -1.0, 1.0)
+                    z_val = float(norm_pos * 70.0)
+                    if -25.0 <= z_val <= 42.0:
+                        pcb_open_detected = True
+                        anomaly_detected = True
+                        anomaly_z_mm = round(z_val, 1)
+                        anomaly_zone = "upper_barrel_dip"
+                        anomaly_confidence = round(
+                            min(0.99, 0.72 + len(blue_xs) / max(80.0, min_pcb_px * 5.0)), 2
+                        )
+                        ax_s = cx_s + float(u_vec[0]) * mean_proj
+                        ay_s = cy_s + float(u_vec[1]) * mean_proj
+                        anomaly_world_pt = (int(round(ax_s * inv_scale)), int(round(ay_s * inv_scale)))
+                        dip_focus_pt_world = [anomaly_world_pt[0], anomaly_world_pt[1]]
+                        dip_angle_deg = angle_deg
+            else:
+                pcb_ext_mask = np.zeros((ph, pw), dtype=np.uint8)
+                ext_lat_s = max(half_min_s * 1.45, 0.75 * eff_minor_s)
+                ext_quad = np.array(
+                    [
+                        c_s - u_vec * (half_maj_s * 1.35) - v_vec * ext_lat_s,
+                        c_s + u_vec * (half_maj_s * 1.35) - v_vec * ext_lat_s,
+                        c_s + u_vec * (half_maj_s * 1.35) + v_vec * ext_lat_s,
+                        c_s - u_vec * (half_maj_s * 1.35) + v_vec * ext_lat_s,
+                    ],
+                    dtype=np.int32,
+                )
+                cv2.fillConvexPoly(pcb_ext_mask, ext_quad, 255)
+                blue_ext = cv2.bitwise_and(pcb_sensor_only, pcb_ext_mask)
+                blue_ys, blue_xs = np.where(blue_ext > 0)
+                min_pcb_coarse = max(7, int(eff_minor_s * 0.28))
+
+                if len(blue_xs) >= min_pcb_coarse:
+                    coarse_fx = float(np.median(blue_xs)) * inv_scale
+                    coarse_fy = float(np.median(blue_ys)) * inv_scale
+                    dip_lock = self._detect_open_dip_switch_hires(
+                        frame_bgr=frame_bgr,
+                        coarse_fx=coarse_fx,
+                        coarse_fy=coarse_fy,
+                        minor_px=minor_px,
+                        u_vec=u_vec,
+                        hand_mask_small=hand_mask if hand_detected else None,
+                        inv_scale=inv_scale,
+                    )
+                    if dip_lock is not None:
+                        pcb_open_detected = True
+                        anomaly_detected = True
+                        anomaly_zone = "upper_barrel_dip"
+                        dip_focus_pt_world = dip_lock["dip_focus_pt"]
+                        dip_angle_deg = float(dip_lock["dip_angle_deg"])
+                        dip_quad = dip_lock["dip_quad"]
+                        anomaly_confidence = float(dip_lock["confidence"])
+                        anomaly_world_pt = (int(dip_focus_pt_world[0]), int(dip_focus_pt_world[1]))
+                        half_maj_full_cur = max(1.0, 0.5 * major_px)
+                        proj_full = (anomaly_world_pt[0] - cx) * float(u_vec[0]) + (
+                            anomaly_world_pt[1] - cy
+                        ) * float(u_vec[1])
+                        norm_pos = float(np.clip(proj_full / half_maj_full_cur, -1.0, 1.0))
+                        anomaly_z_mm = round(float(np.clip(norm_pos * 70.0, -35.0, 48.0)), 1)
+                    else:
+                        self._dip_lock_ema = None
+                else:
+                    self._dip_lock_ema = None
 
             # 2B. Check for Red / Orange / Amber fault tape strictly on the ISOLATED sensor (excluding screwdriver/hand!)
             warm_in_roi = cv2.bitwise_and(warm_sensor_only, sensor_poly_mask)
             warm_ys, warm_xs = np.where(warm_in_roi > 0)
             min_warm_px = max(14, int(half_maj_s * half_min_s * 0.032))
-
-            if len(blue_xs) >= min_pcb_px:
-                rel_x = blue_xs.astype(np.float32) - cx_s
-                rel_y = blue_ys.astype(np.float32) - cy_s
-                proj_s = rel_x * float(u_vec[0]) + rel_y * float(u_vec[1])
-                mean_proj = float(np.median(proj_s))
-                norm_pos = np.clip(mean_proj / max(1.0, half_maj_s), -1.0, 1.0)
-                z_val = float(norm_pos * 70.0)
-                if -25.0 <= z_val <= 42.0:
-                    pcb_open_detected = True
-                    anomaly_detected = True
-                    anomaly_z_mm = round(z_val, 1)
-                    anomaly_zone = "upper_barrel_dip"
-                    anomaly_confidence = round(
-                        min(0.99, 0.72 + len(blue_xs) / max(80.0, min_pcb_px * 5.0)), 2
-                    )
-                    ax_s = cx_s + float(u_vec[0]) * mean_proj
-                    ay_s = cy_s + float(u_vec[1]) * mean_proj
-                    anomaly_world_pt = (int(round(ax_s * inv_scale)), int(round(ay_s * inv_scale)))
 
             if len(warm_xs) >= min_warm_px and not pcb_open_detected:
                 num_lbl, lbl_im, stats, centroids = cv2.connectedComponentsWithStats(warm_in_roi)
@@ -2269,15 +2626,24 @@ class VisionScanner:
             if anomaly_detected and anomaly_world_pt is not None:
                 ax, ay = anomaly_world_pt
                 pulse = int(4.0 * abs(math.sin(now_ts * 5.5)))
-                ret_r = int(max(18, minor_px * 0.60)) + pulse
-                ret_col = (40, 165, 255) if pcb_open_detected else (48, 52, 248)
+                ret_r = int(max(18, minor_px * 0.56)) + pulse
+                ret_col = (40, 185, 255) if pcb_open_detected else (48, 52, 248)
+                if pcb_open_detected and dip_quad is not None and len(dip_quad) == 4:
+                    cv2.polylines(
+                        hud,
+                        [np.array(dip_quad, dtype=np.int32)],
+                        True,
+                        (95, 245, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
                 cv2.circle(hud, (ax, ay), ret_r, ret_col, 2, cv2.LINE_AA)
                 cv2.circle(hud, (ax, ay), 3, (90, 245, 255), -1, cv2.LINE_AA)
-                lx = min(orig_w - 348, max(440, ax - 35))
+                lx = min(orig_w - 380, max(420, ax - 45))
                 ly = max(78, ay - ret_r - 36)
                 cv2.line(hud, (ax, ay - ret_r), (lx + 18, ly + 5), ret_col, 1, cv2.LINE_AA)
                 tag = (
-                    f"DIP-8 PCB OPEN [{anomaly_zone}] z={anomaly_z_mm:+.1f}mm ({int(anomaly_confidence*100)}%)"
+                    f"SW1 DIP-8 PIN LOCK [{anomaly_zone}] z={anomaly_z_mm:+.1f}mm ({int(anomaly_confidence*100)}%)"
                     if pcb_open_detected
                     else f"TWIN DEVIATION [{anomaly_zone}] z={anomaly_z_mm:+.1f}mm ({int(anomaly_confidence*100)}%)"
                 )
@@ -2401,7 +2767,13 @@ class VisionScanner:
             "tool_shaft": tool_shaft,
             "tool_tip_pt": tool_tip_pt,
             "isolated_3d_target": "TZ-THT-02_SENSOR_ONLY",
-            "dip_focus_pt": list(anomaly_world_pt) if (pcb_open_detected and anomaly_world_pt) else None,
+            "dip_focus_pt": (
+                dip_focus_pt_world
+                if (pcb_open_detected and dip_focus_pt_world is not None)
+                else (list(anomaly_world_pt) if (pcb_open_detected and anomaly_world_pt) else None)
+            ),
+            "dip_angle_deg": round(float(dip_angle_deg if pcb_open_detected else angle_deg), 2),
+            "dip_quad": dip_quad if pcb_open_detected else None,
             "scan_coverage_pct": 94 if detected else 28,
             "sim_mode": sim_mode,
             "camera_source": camera_source,
@@ -2493,7 +2865,7 @@ class VisionScanner:
         return data
 
     def get_dip_focus_jpeg(self) -> bytes:
-        """Crop & enlarge (2.2x zoom with crisp HUD reticle `DIP-8 PIN FOCUS · ON=1`) the central PCB / DIP-8 region."""
+        """Deskew, crop & enlarge the physical SW1 8-pin DIP switch with crisp optical macro reticle."""
         with self._lock:
             raw_bgr = getattr(self, "_latest_raw_bgr", None)
             raw_jpg = self._latest_raw_jpeg
@@ -2514,55 +2886,108 @@ class VisionScanner:
             raw_bgr = np.zeros((270, 480, 3), dtype=np.uint8)
 
         h, w = raw_bgr.shape[:2]
+        pcb_open = bool(tel.get("pcb_open_detected"))
         focus_pt = tel.get("dip_focus_pt")
+        axis_info = tel.get("sensor_axis")
         bbox = tel.get("bbox") or [0, 0, 0, 0]
+        rot_deg = float(tel.get("dip_angle_deg") or tel.get("angle_deg") or 0.0)
+
         if isinstance(focus_pt, (list, tuple)) and len(focus_pt) == 2:
             fx, fy = int(focus_pt[0]), int(focus_pt[1])
+        elif (
+            tel.get("detected")
+            and isinstance(axis_info, dict)
+            and isinstance(axis_info.get("gland"), list)
+            and isinstance(axis_info.get("tip"), list)
+        ):
+            gx, gy = axis_info["gland"]
+            tx_a, ty_a = axis_info["tip"]
+            fx = int(round(gx + (tx_a - gx) * 0.56))
+            fy = int(round(gy + (ty_a - gy) * 0.56))
         elif tel.get("detected") and len(bbox) == 4 and bbox[2] > 20 and bbox[3] > 10:
-            # Upper barrel / internal DIP-8 PCB sits around 62% along gland->strainer axis
-            fx = int(bbox[0] + bbox[2] * 0.62)
+            fx = int(bbox[0] + bbox[2] * 0.56)
             fy = int(bbox[1] + bbox[3] * 0.50)
         else:
             fx, fy = w // 2, h // 2
+            rot_deg = 0.0
 
         out_w, out_h = 528, 286
-        zoom = 2.2
+        if w >= 1400:
+            zoom = 3.3 if pcb_open else 2.6
+        elif w >= 1100:
+            zoom = 2.6 if pcb_open else 2.2
+        else:
+            zoom = 2.2
+
         crop_w = max(64, min(w, int(round(out_w / zoom))))
         crop_h = max(48, min(h, int(round(out_h / zoom))))
 
-        x0 = max(0, min(w - crop_w, fx - crop_w // 2))
-        y0 = max(0, min(h - crop_h, fy - crop_h // 2))
-        roi = raw_bgr[y0 : y0 + crop_h, x0 : x0 + crop_w]
-        zoomed = cv2.resize(roi, (out_w, out_h), interpolation=cv2.INTER_CUBIC)
+        # Extract local patch around (fx, fy) and deskew along DIP-8 major axis so pins 1..8 run horizontally
+        pad_r = max(crop_w, crop_h)
+        px0 = fx - pad_r
+        py0 = fy - pad_r
+        px1 = fx + pad_r + 1
+        py1 = fy + pad_r + 1
+        cx0, cy0 = max(0, px0), max(0, py0)
+        cx1, cy1 = min(w, px1), min(h, py1)
+        sub_patch = raw_bgr[cy0:cy1, cx0:cx1]
+        if sub_patch.size == 0:
+            sub_patch = np.zeros((2 * pad_r + 1, 2 * pad_r + 1, 3), dtype=np.uint8)
+        elif cx0 != px0 or cy0 != py0 or cx1 != px1 or cy1 != py1:
+            sub_patch = cv2.copyMakeBorder(
+                sub_patch,
+                cy0 - py0,
+                py1 - cy1,
+                cx0 - px0,
+                px1 - cx1,
+                cv2.BORDER_REPLICATE,
+            )
 
-        # Top HUD header bar: "DIP-8 PIN FOCUS · ON=1"
+        if abs(rot_deg) > 1.0 and tel.get("detected"):
+            rot_m = cv2.getRotationMatrix2D((float(pad_r), float(pad_r)), rot_deg, 1.0)
+            sub_patch = cv2.warpAffine(
+                sub_patch,
+                rot_m,
+                (2 * pad_r + 1, 2 * pad_r + 1),
+                flags=cv2.INTER_LANCZOS4,
+                borderMode=cv2.BORDER_REPLICATE,
+            )
+
+        rx_start = max(0, pad_r - crop_w // 2)
+        ry_start = max(0, pad_r - crop_h // 2)
+        roi = sub_patch[ry_start : ry_start + crop_h, rx_start : rx_start + crop_w]
+        zoomed = cv2.resize(roi, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4)
+        if pcb_open and w >= 1100:
+            soft = cv2.GaussianBlur(zoomed, (0, 0), 1.05)
+            zoomed = cv2.addWeighted(zoomed, 1.32, soft, -0.32, 0)
+
+        # Top HUD header bar: "SW1 DIP-8 PIN FOCUS"
         cv2.rectangle(zoomed, (0, 0), (out_w, 32), (14, 19, 28), -1)
         cv2.line(zoomed, (0, 32), (out_w, 32), (245, 195, 40), 1)
         cv2.putText(
             zoomed,
-            "DIP-8 PIN FOCUS",
+            "SW1 DIP-8 PIN FOCUS",
             (12, 22),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.50,
+            0.48,
             (248, 250, 252),
             1,
             cv2.LINE_AA,
         )
-        cv2.circle(zoomed, (162, 17), 2, (56, 189, 248), -1, cv2.LINE_AA)
+        cv2.circle(zoomed, (192, 17), 2, (56, 189, 248), -1, cv2.LINE_AA)
         cv2.putText(
             zoomed,
-            "ON=1  [2.2X MACRO]",
-            (172, 22),
+            f"ON=1  [{zoom:.1f}X MACRO]",
+            (202, 22),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.48,
+            0.46,
             (125, 225, 255),
             1,
             cv2.LINE_AA,
         )
 
-        pcb_open = bool(tel.get("pcb_open_detected"))
         tag_col = (40, 165, 255) if pcb_open else (90, 175, 95)
-        tag_txt = "PCB EXPOSED" if pcb_open else "BARREL CLOSED"
+        tag_txt = "PINS LOCKED" if pcb_open else "BARREL CLOSED"
         cv2.rectangle(zoomed, (out_w - 134, 6), (out_w - 10, 26), tag_col, -1)
         cv2.putText(
             zoomed,
@@ -2576,7 +3001,7 @@ class VisionScanner:
         )
 
         # Precision DIP-8 corner reticle & 1..8 binary weight scale
-        rx0, ry0, rx1, ry1 = 104, 72, out_w - 104, out_h - 54
+        rx0, ry0, rx1, ry1 = 96, 66, out_w - 96, out_h - 50
         ret_col = (56, 215, 255) if pcb_open else (210, 200, 60)
         brk = 20
         for cx_b, cy_b, sx, sy in (
@@ -2605,7 +3030,7 @@ class VisionScanner:
                 cv2.LINE_AA,
             )
 
-        ok, enc = cv2.imencode(".jpg", zoomed, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
+        ok, enc = cv2.imencode(".jpg", zoomed, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
         return enc.tobytes() if ok else self.get_latest_jpeg()
 
     def get_telemetry(self) -> dict[str, Any]:

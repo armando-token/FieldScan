@@ -544,8 +544,17 @@ async def _handle_multimodal_or_live_repair_query(
         }
 
     spec = load_tht02_spec()
-    frame_jpg = _SCANNER.get_latest_jpeg() if include_camera else None
     tel = _SCANNER.get_telemetry() if include_camera else None
+    if include_camera:
+        q_low = query.lower()
+        if bool(tel and tel.get("pcb_open_detected")) and any(
+            kw in q_low for kw in ("dip", "pin", "switch", "rocker", "slave", "address", "pcb", "config")
+        ):
+            frame_jpg = _SCANNER.get_dip_focus_jpeg()
+        else:
+            frame_jpg = _SCANNER.get_latest_jpeg()
+    else:
+        frame_jpg = None
     mb_tel = _MODBUS.get_telemetry()
 
     return await asyncio.to_thread(

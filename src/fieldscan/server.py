@@ -6,6 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 import cv2
@@ -57,52 +58,53 @@ def _jpeg_to_png_bytes(jpeg_bytes: bytes) -> bytes | None:
 
 
 def _detect_conversational_repair_intent(text: str) -> str | None:
-    """Detect natural spoken/typed intents for interactive live repair & sign-off reporting."""
-    q = (text or "").lower()
+    """Detect natural English spoken/typed intents for interactive live repair & sign-off reporting."""
+    q = (text or "").lower().strip()
+    if not q:
+        return None
+
+    # 1. Step 4: Post-repair OEM sign-off & 4-angle dossier
     if any(
         phrase in q
         for phrase in (
-            "visto bueno",
-            "todos los angulos",
-            "todos los ángulos",
-            "creame un reporte",
-            "créame un reporte",
-            "crear un reporte",
-            "reporte con todo lo que hemos hecho",
-            "dossier post",
+            "sign off",
+            "sign-off",
+            "signoff",
+            "manufacturer",
+            "all angles",
+            "four angles",
+            "4 angles",
+            "post-repair",
+            "dossier",
+            "report",
         )
     ):
         return "signoff_report"
 
+    # 2. Step 1: Unpowered / open / unconfigured initial fault discovery
     if any(
         phrase in q
         for phrase in (
-            "modo modbus",
-            "esta en modbus",
-            "está en modbus",
-            "configuralo como",
-            "configúralo como",
-            "que pines",
-            "qué pines",
-            "como configuro los pines",
-            "cómo configuro los pines",
-        )
-    ):
-        return "guide_dip"
-
-    if any(
-        phrase in q
-        for phrase in (
-            "no enciende",
-            "lo he encontrado",
-            "no sabemos si funciona",
-            "no se si funciona",
-            "no sé si funciona",
-            "abierto y desconfigurado",
-            "desconfigurado con sus pines",
+            "doesn't turn on",
+            "does not turn on",
+            "won't power on",
+            "will not power on",
+            "won't turn on",
+            "not turning on",
+            "unconfigured",
+            "what should i do",
+            "found this sensor",
+            "not sure if it works",
         )
     ):
         return "inspect_open"
+
+    if re.search(r"\bopen\b", q) and not re.search(r"\b(?:modbus|slave)\b", q):
+        return "inspect_open"
+
+    # 3. Step 2: Modbus-RTU / Slave ID / DIP-8 pin guidance
+    if re.search(r"\b(?:modbus|slave|pins|dip)\b", q):
+        return "guide_dip"
 
     return None
 
@@ -236,10 +238,11 @@ async def api_sensor_load(payload: dict[str, Any]) -> dict[str, Any]:
     spec = match["spec"]
     dims = spec["dimensions_mm"]
     msg = (
-        f"Ficha técnica verificada localmente ({match['pdf_document']['page_count']} páginas, "
-        f"{match['pdf_document']['inspected_in_ms']} ms): entrada '{raw_query}' resuelta a "
-        f"{spec['name']} ({spec['sensor_id']}). Plano acotado cargado: longitud {dims['total_length']} mm "
-        f"× diámetro Ø{dims['outer_diameter']} mm, elemento CMOSens SHT30/SHT3X y bus RS-485 Modbus-RTU."
+        f"Local datasheet verified ({match['pdf_document']['page_count']} pages, "
+        f"{match['pdf_document']['inspected_in_ms']} ms): input '{raw_query}' resolved to "
+        f"{spec['name']} ({spec['sensor_id']}). Parametric CAD blueprint loaded: total length "
+        f"{dims['total_length']} mm x outer diameter {dims['outer_diameter']} mm, SHT30/SHT3X CMOSens "
+        f"probe element, and RS-485 Modbus-RTU bus."
     )
     engine = get_lfm_engine()
     audio_b64 = await asyncio.to_thread(engine.synthesize_speech_b64, msg)
@@ -272,6 +275,16 @@ async def api_video_telemetry() -> dict[str, Any]:
 @app.get("/api/video/snapshot")
 async def api_video_snapshot() -> Response:
     jpg = await asyncio.to_thread(_SCANNER.get_latest_jpeg)
+    return Response(
+        content=jpg,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@app.get("/api/video/dip_crop")
+async def api_video_dip_crop() -> Response:
+    jpg = await asyncio.to_thread(_SCANNER.get_dip_focus_jpeg)
     return Response(
         content=jpg,
         media_type="image/jpeg",
@@ -396,7 +409,7 @@ async def api_repair_step(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     if step == "guide_dip":
-        text = str(payload.get("query") or payload.get("text") or "Modo Modbus dirección esclava 1")
+        text = str(payload.get("query") or payload.get("text") or "Configure for Industrial Modbus RTU slave 1")
         res = await asyncio.to_thread(
             _REPAIR.guide_dip_for_modbus,
             text,
@@ -408,7 +421,7 @@ async def api_repair_step(payload: dict[str, Any]) -> dict[str, Any]:
         return res
 
     if step == "connect_modbus":
-        # If real USB-RS485 adapter is attached, probe hardware first; otherwise switch simulator to online!
+        # If real USB-RS485 adapter is attached, probe hardware first; otherwise switch simulator to online
         ports = discover_serial_ports()
         target_sid = int(payload.get("slave_id") or _REPAIR.target_slave_id or 1)
         if ports and not payload.get("force_sim"):
@@ -493,6 +506,10 @@ async def _handle_multimodal_or_live_repair_query(
             tts_fn=engine.synthesize_speech_b64,
         )
         return {
+            "stage": pkg["stage"],
+            "andon_state": pkg["andon_state"],
+            "focus_dip": False,
+            "explode_pcb": False,
             "diagnosis": pkg["spoken_summary"],
             "assistant_message": pkg["spoken_summary"],
             "manual_page": 9,
@@ -531,7 +548,7 @@ async def _handle_multimodal_or_live_repair_query(
 async def api_diagnose(payload: dict[str, Any]) -> dict[str, Any]:
     query = str(payload.get("query") or payload.get("prompt") or "").strip()
     if not query:
-        query = "Diagnosticar estado actual del sensor TZ THT-02 en cámara y bus RS-485 según el manual V1.1."
+        query = "Diagnose the current condition of the TZ THT-02 sensor on camera and RS-485 bus per Manual V1.1."
 
     include_camera = bool(payload.get("include_camera", True))
     zone_hint = payload.get("zone") or payload.get("highlighted_zone")
@@ -612,12 +629,12 @@ async def api_escalate(payload: dict[str, Any]) -> dict[str, Any]:
     diagnosis_text = str(
         payload.get("diagnosis_text")
         or payload.get("diagnosis_summary")
-        or "Anomalía localizada en inspección óptica + ficha técnica TZ THT-02 V1.1."
+        or "Fault localized via optical inspection and TZ THT-02 Datasheet V1.1."
     )
     notes = str(payload.get("notes") or payload.get("operator_notes") or "")
     dip_addr = payload.get("dip_address")
     if dip_addr is not None and "DIP" not in notes:
-        notes = f"{notes} | Dirección esclava DIP-8: {dip_addr}".strip(" |")
+        notes = f"{notes} | DIP-8 Slave Address: {dip_addr}".strip(" |")
 
     hud_jpg = await asyncio.to_thread(_SCANNER.get_latest_jpeg)
     cam_png = await asyncio.to_thread(_jpeg_to_png_bytes, hud_jpg)

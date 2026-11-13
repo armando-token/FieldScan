@@ -1,47 +1,49 @@
-# 01 — Pegamento de Hardware: Cámara USB Acer 4K UVC ↔ Qualcomm Dragonwing IQ-9075 (`IQ9`)
+# 01 — Hardware Glue: Acer 4K UVC USB Camera ↔ Qualcomm Dragonwing IQ-9075 (`IQ9`)
 
-Este documento resume **únicamente los puntos exactos de conexión física y de software** entre la cámara **Acer 4K USB (Sony 1/2", PDAF, 2 Mics)** y la placa **Qualcomm Dragonwing IQ-9075 EVK (Ubuntu ARM64)** para evitar perder tiempo durante las 2 horas del hackathon.
+This document captures the **exact physical port mappings and low-latency V4L2/AVFoundation software settings** connecting the **Acer 4K USB Camera (Sony 1/2" CMOS, PDAF, Dual Microphones)** to the **Qualcomm Dragonwing IQ-9075 EVK (Ubuntu ARM64)** so zero minutes are lost during the 2-hour hackathon build window.
 
 ---
 
-## 1. Conexión Física (¡Crítico en el IQ-9075!)
+## 1. Physical USB Topology (Critical on the Dragonwing IQ-9075 EVK)
 
-Según el manual oficial del **Dragonwing IQ-9075 EVK (`80-90441-253`)**:
-- La placa principal **NO tiene puertos USB-A rectangulares grandes**; expone:
-  - **`JUSB0` (USB Type-C)**: USB 3.1 Gen 2 (soporta Host y Device).
-  - **`JUSB1` (USB Type-C)**: USB 3.1 Gen 2 (**Modo Host dedicado — USAR ESTE PUERTO PREFERENTEMENTE**).
+Per the official **Qualcomm Dragonwing IQ-9075 EVK Hardware Manual (`80-90441-253`)**:
+- The main carrier board **does NOT expose full-size rectangular USB-A ports**; instead it provides:
+  - **`JUSB0` (USB Type-C)**: USB 3.1 Gen 2 (Dual-Role Host / Device).
+  - **`JUSB1` (USB Type-C)**: USB 3.1 Gen 2 (**Dedicated Host Mode — USE THIS PORT PREFERENTIALLY**).
   - **`JUSB2` (Micro-USB)**: USB 2.0 Host.
-- **Checklist de cables en mochila**:
-  1. Cable **USB-C a USB-C** directo (o el cable original de la Acer 4K + **adaptador/hub USB-C macho a USB-A hembra**).
-  2. Abrir la **tapa física de privacidad (*Privacy Cover*)** de la Acer 4K antes de iniciar la prueba.
+- **Mandatory Hardware Backpack Checklist**:
+  1. A **USB-C Male to Multi-Port USB-A 3.0 Hub** plugged into **`JUSB1`** so both the **Acer 4K UVC Camera** and the **`FT2232HL` Dual-Channel Isolated USB-to-RS485 Converter** run simultaneously at full bandwidth (plus a direct **USB-C to USB-C** spare cable).
+  2. Slide open the physical **Privacy Shutter** on top of the Acer 4K camera lens before launching the stack.
 
 ---
 
-## 2. Verificación Instantánea en Ubuntu Linux (10 segundos)
+## 2. 10-Second Kernel Verification on Ubuntu ARM64 Linux
 
-Al enchufar la cámara Acer 4K en `JUSB1`, el kernel Linux carga automáticamente `uvcvideo` (video) y `snd-usb-audio` (los 2 micrófonos integrados) **sin instalar drivers ni necesitar internet**:
+When the Acer 4K camera is plugged into `JUSB1`, the Linux kernel automatically loads `uvcvideo` (video stream) and `snd-usb-audio` (integrated dual noise-canceling microphones) **offline with zero external drivers or internet access**:
 
 ```bash
-# 1. Verificar nodo de video (/dev/video0)
+# 1. Verify UVC video device node (/dev/video0)
 ls -l /dev/video*
 
-# 2. Verificar permisos del usuario actual (si da Permission Denied, usar grupo video)
+# 2. Ensure current user belongs to the video group (avoids Permission Denied)
 id | grep -q video || sudo usermod -aG video $USER
 
-# 3. Verificar que los 2 micrófonos con reducción de ruido de la Acer aparecen en ALSA
+# 3. Confirm the Acer dual digital microphones enumerate in ALSA
 arecord -l
 ```
 
+*(On **macOS / Mac Mini**, `src/fieldscan/vision_scanner.py` automatically detects `Darwin` and opens the camera via Apple's native `cv2.CAP_AVFOUNDATION` backend with zero configuration).*
+
 ---
 
-## 3. El "Pegamento" Exacto en OpenCV (Evitar Lag USB en 4K)
+## 3. Exact OpenCV Pipeline Glue (Eliminating 4K USB Uncompressed Lag)
 
-**Trampa común**: Si abres una cámara 4K (`3840×2160`) sin especificar códec en Linux V4L2, OpenCV negocia `YUYV` sin comprimir y cae a **`5 FPS` con `800 ms` de retraso**.
+**Classic V4L2 Pitfall**: Opening a 4K UVC camera (`3840×2160`) in Linux OpenCV without explicitly negotiating a compressed four-character code defaults to raw uncompressed `YUYV`, collapsing throughput to **`5 FPS` with `800 ms` of buffered latency**.
 
-**Solución probada en `src/fieldscan/vision_scanner.py`**:
-1. Abrir con backend explícito `cv2.CAP_V4L2`.
-2. Forzar **`FOURCC = 'MJPG'`** ANTES de fijar resolución.
-3. Fijar **`1280 × 720` a `30 FPS`** (`MJPEG`) y **`CAP_PROP_BUFFERSIZE = 1`** (descarta frames viejos para tener latencia cero en tiempo real):
+**Verified Fix in `src/fieldscan/vision_scanner.py`**:
+1. Open the capture handle explicitly with `cv2.CAP_V4L2` on Linux.
+2. Force **`FOURCC = 'MJPG'`** **BEFORE** setting width and height.
+3. Lock **`1280 × 720` @ `30 FPS`** (`MJPEG`) and **`CAP_PROP_BUFFERSIZE = 1`** (drops stale frames so real-time tracking stays sub-frame responsive):
 
 ```python
 cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
@@ -54,10 +56,10 @@ cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 ---
 
-## 4. Calibración Longitudinal del Sensor `TZ THT-02` en Mesa
+## 4. Longitudinal Bench Calibration for the `TZ THT-02` Transmitter
 
-- El sensor real `TZ THT-02` mide exactamente **`140.0 mm` de largo × `16.0 mm` de diámetro** (relación de aspecto `8.75 : 1`).
-- Colocar el sensor sobre una **superficie oscura mate** (mesa oscura, mousepad negro o cartulina gris oscura) para que el cuerpo gris claro del `THT-02` tenga contraste limpio del 100% bajo las luces del salón.
-- Para marcar una falla externa en vivo frente al jurado:
-  - Usar un **pedazo pequeño de cinta roja/naranja o una X roja** sobre la **punta ranurada del filtro (`strainer_head`)** o sobre el **prensaestopas trasero (`waterproof_gland_leads`)**, **o desenroscar la mitad del cilindro** (Paso 2 de la pág. 5 del manual) para dejar visible la **placa PCB azul del DIP switch**.
-- `OpenCV` proyecta la posición del parche/apertura sobre el eje mayor `[-70 mm, +70 mm]` en `< 4 ms` por cuadro y sincroniza el giro y la alerta roja en `Three.js` a `30–60 FPS`.
+- The physical `Tzone TZ THT-02` probe measures **`140.0 mm` total length × `16.0 mm` outer diameter** (`8.75 : 1` aspect ratio).
+- Place the transmitter on a **matte dark surface** (black desk mat, dark gray cardstock, or anodized plate) so the light-gray polycarbonate body achieves clean contour segmentation under venue lighting.
+- **Live Fault Demonstrations in Front of Judges**:
+  - Apply a **small red or orange tape marker** onto the slotted sintered stainless tip (`strainer_head`) or rear cable gland (`waterproof_gland_leads`), **or unscrew the middle housing barrel** (Manual Page 5, Step 2) to expose the internal **blue `DIP-8` switch PCB**.
+- `OpenCV` projects the fault stain or housing separation onto the unified longitudinal coordinate axis `[-70.0 mm, +70.0 mm]` in `< 4 ms/frame`, driving live **red fault stain comparison** on the `60 FPS` `Three.js v0.170` digital twin and triggering the **3-Tier Andon Stack Light (`Red / Amber / Green`)**.

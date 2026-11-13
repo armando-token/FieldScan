@@ -1,501 +1,657 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FIELDSCAN CAD · TZ THT-02 Offline Twin</title>
+  <meta
+    name="description"
+    content="FieldScan CAD Digital Twin, 30 FPS Optical Scanner, 60 FPS 3D Reconstruction, Industrial Modbus-RTU SCADA HMI, and Offline Multimodal AI Voice Engineer for TZ THT-02."
+  />
+  <title>FIELDSCAN CAD · DIGITAL TWIN — TZ THT-02 Industrial SCADA &amp; Repair HMI</title>
+  <link rel="stylesheet" href="/static/vendor/open-props.min.css" />
+  <link rel="stylesheet" href="/static/vendor/uPlot.min.css" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-  <!-- TOP TELEMETRY BAR (52px) -->
-  <header class="topbar" role="banner">
-    <div class="brand-cluster">
-      <div class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
-          <polygon points="12 2 21 7 21 17 12 22 3 17 3 7" />
-          <line x1="12" y1="22" x2="12" y2="12" />
-          <polyline points="21 7 12 12 3 7" />
-          <circle cx="12" cy="12" r="2.2" fill="currentColor" />
-        </svg>
+  <!-- =====================================================================
+       TOP COMMAND BAR: BRAND, SYSTEM STATE BANNER, 4-STEP WORKFLOW & BENCH
+       ===================================================================== -->
+  <header class="command-bar" role="banner">
+    <!-- Top Utility & Hardware Row -->
+    <div class="command-row-top">
+      <div class="brand-cluster">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.9">
+            <polygon points="12 2 21 7 21 17 12 22 3 17 3 7" />
+            <line x1="12" y1="22" x2="12" y2="12" />
+            <polyline points="21 7 12 12 3 7" />
+            <circle cx="12" cy="12" r="2.2" fill="currentColor" />
+          </svg>
+        </div>
+        <div class="brand-titles">
+          <h1>FIELDSCAN CAD <span class="brand-sep">·</span> <span class="brand-sub">DIGITAL TWIN</span></h1>
+          <span class="brand-meta">MODBUS-RTU RS-485 · SHT30 CMOSENS · 1:1 SCALE (140.0 × Ø16.0 MM)</span>
+        </div>
+        <button
+          type="button"
+          class="sensor-spec-pill"
+          id="btnSensorPill"
+          title="Verify local 9-page PDF datasheet and 1:1 metrology specification"
+        >
+          <i data-lucide="cpu"></i>
+          <span>TZ THT-02 · 140×Ø16 mm</span>
+        </button>
       </div>
-      <div class="brand-titles">
-        <h1>FIELDSCAN CAD <span class="brand-sep">·</span> <span class="brand-sub">TZ THT-02 Offline Twin</span></h1>
-        <span class="brand-meta">MODBUS-RTU RS-485 · SHT30 CMOSENS · ESCALA 1:1 (140.0 × Ø16.0 MM)</span>
+
+      <div class="toolbar-selectors">
+        <div class="select-group">
+          <label class="select-shell" for="selectCameraMode" title="Select live USB optical camera or workbench fault simulation">
+            <i data-lucide="camera"></i>
+            <select id="selectCameraMode" aria-label="Camera Feed Mode">
+              <option value="usb">Cam: Live USB (/dev/video0)</option>
+              <option value="sim_normal" selected>Cam: Nominal Sensor Sim</option>
+              <option value="sim_open_dip">Cam: Open Housing DIP-8</option>
+              <option value="sim_strainer_patch">Cam: Strainer Tip Fault</option>
+              <option value="sim_gland_fault">Cam: RS-485 Gland Fault</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            class="btn-icon-hmi"
+            id="btnUploadPhoto"
+            title="Upload custom field inspection photo"
+            aria-label="Upload field inspection photo"
+          >
+            <i data-lucide="upload"></i>
+          </button>
+          <input type="file" id="photoUploadInput" accept="image/*" hidden />
+        </div>
+
+        <label class="select-shell" for="selectModbusMode" title="Select RS-485 Modbus-RTU hardware interface or bench state">
+          <i data-lucide="usb"></i>
+          <select id="selectModbusMode" aria-label="Modbus RTU Bus Mode">
+            <option value="auto" selected>Modbus: Auto-Detect</option>
+            <option value="hardware">Modbus: Hardware FT2232HL</option>
+            <option value="sim_disconnected">Modbus: Disconnected</option>
+            <option value="sim_online">Modbus: Online (Nominal)</option>
+            <option value="sim_abnormal_7fff">Modbus: 0x7FFF Probe Alarm</option>
+            <option value="sim_breath_test">Modbus: Breath Humidity Spike</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="telemetry-cluster">
+        <div class="sys-runtime-pill" id="pillEngine" title="Local LiquidAI LFM3 On-Device Inference Telemetry">
+          <span id="pillModelText">LFM3-VL-2B + Audio-2B</span>
+          <span class="pill-divider">·</span>
+          <span id="pillRamText">3.4 / 16 GB</span>
+          <span class="pill-divider">·</span>
+          <span id="pillLatencyText">Ready</span>
+        </div>
+
+        <button
+          type="button"
+          class="airplane-pill"
+          id="pillAirplane"
+          title="Run live socket guard audit (zero external IP egress)"
+        >
+          <i data-lucide="shield-check"></i>
+          <span id="pillAirplaneText">Airplane Mode: Verified</span>
+        </button>
       </div>
     </div>
 
-    <div class="telemetry-pills" id="telemetryPills">
-      <button class="pill pill-emerald" id="pillAirplane" type="button" title="Ejecutar verificación de sockets externos (0 salidas de red)">
-        <span class="pill-dot"></span>
-        <span id="pillAirplaneText">AIRPLANE MODE: VERIFIED (0 EXT SOCKETS)</span>
-      </button>
-
-      <div class="pill pill-cyan" id="pillCam">
-        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6">
-          <rect x="1.5" y="3.5" width="9.5" height="9" rx="1.2" />
-          <polygon points="11 6.5 14.5 4.5 14.5 11.5 11 9.5" />
-        </svg>
-        <span id="pillCamText">USB CAM: 30 FPS</span>
+    <!-- Guided Workflow & Dynamic Full-Color System State Row -->
+    <div class="command-row-workflow">
+      <div class="system-state-banner is-red" id="systemStateBanner" role="status" aria-live="polite">
+        <span class="banner-beacon" aria-hidden="true"></span>
+        <span class="banner-main-text" id="systemStateText">FAULT / OFFLINE</span>
+        <span class="banner-sub-text" id="systemStateSub">No Modbus RTU Signal · Ready for Guided Inspection</span>
       </div>
 
-      <button class="pill pill-neutral" id="pillModbus" type="button" title="Escanear bus USB-RS485 (FT2232HL) y estado SCADA Modbus-RTU">
-        <span class="pill-dot" id="pillModbusDot"></span>
-        <span id="pillModbusText">MODBUS RS-485: SIN SEÑAL</span>
-      </button>
+      <nav class="workflow-stepper" aria-label="Guided 4-Step Repair Workflow">
+        <button
+          type="button"
+          class="step-btn step-sky"
+          id="btnStepInspect"
+          title="Step 1: Inspect open housing or optical sensor fault"
+        >
+          <i data-lucide="scan-search"></i>
+          <span>1. Inspect Fault</span>
+        </button>
 
-      <div class="pill pill-amber" id="pillModel">
-        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6">
-          <rect x="3" y="3" width="10" height="10" rx="1.5" />
-          <line x1="6" y1="1" x2="6" y2="3" /><line x1="10" y1="1" x2="10" y2="3" />
-          <line x1="6" y1="13" x2="6" y2="15" /><line x1="10" y1="13" x2="10" y2="15" />
-          <line x1="1" y1="6" x2="3" y2="6" /><line x1="1" y1="10" x2="3" y2="10" />
-          <line x1="13" y1="6" x2="15" y2="6" /><line x1="13" y1="10" x2="15" y2="10" />
-        </svg>
-        <span id="pillModelText">LiquidAI LFM3-VL-2B + Audio-2B</span>
-      </div>
+        <button
+          type="button"
+          class="step-btn step-amber"
+          id="btnStepDip"
+          title="Step 2: Zoom onto DIP-8 switch block and configure Modbus Slave ID"
+        >
+          <i data-lucide="sliders-horizontal"></i>
+          <span>2. Focus &amp; Set DIP-8</span>
+        </button>
 
-      <div class="pill pill-neutral" id="pillRam">
-        <span class="pill-key">RAM:</span>
-        <span id="pillRamText">3.4 / 16.0 GB</span>
-      </div>
+        <button
+          type="button"
+          class="step-btn step-emerald"
+          id="btnStepConnect"
+          title="Step 3: Energize RS-485 bus and verify live Temperature and Humidity"
+        >
+          <i data-lucide="plug-zap"></i>
+          <span>3. Power &amp; Verify Bus</span>
+        </button>
 
-      <div class="pill pill-neutral" id="pillLatency">
-        <span class="pill-key">LATENCY:</span>
-        <span id="pillLatencyText">-- ms (-- tok/s)</span>
-      </div>
+        <button
+          type="button"
+          class="step-btn step-teal"
+          id="btnStepSignoff"
+          title="Step 4: Capture 4-angle 3D CAD views and generate Manufacturer Sign-Off Dossier"
+        >
+          <i data-lucide="file-check-2"></i>
+          <span>4. 3D Sign-Off Dossier</span>
+        </button>
+      </nav>
     </div>
   </header>
 
-  <!-- 3-COLUMN ENGINEERING WORKSTATION -->
-  <main class="workstation">
-    <!-- LEFT PANEL: REAL-WORLD CAMERA + 2D BLUEPRINT MANUAL -->
-    <aside class="panel panel-left" aria-label="Escáner óptico e inspector de planos">
-      <!-- Top Half: Live OpenCV 30 FPS Scanner -->
-      <section class="subpanel scanner-section">
-        <div class="subpanel-header">
-          <div class="subpanel-title">
-            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6">
-              <path d="M2 5V2h3M11 2h3v3M14 11v3h-3M5 14H2v-3" />
-              <circle cx="8" cy="8" r="2.3" />
-            </svg>
-            <span>ESCÁNER OPENCV · 30 FPS</span>
-          </div>
-          <div class="scanner-header-actions">
-            <span class="badge-live" id="camSourceBadge">SIM / USB</span>
-            <label class="btn-micro btn-upload" for="photoUploadInput" title="Subir fotografía de campo para inspección">
-              <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7">
-                <path d="M8 11V3M5 6l3-3 3 3M2.5 13h11" />
-              </svg>
-              <span>Foto</span>
-            </label>
-            <input type="file" id="photoUploadInput" accept="image/*" hidden />
-          </div>
+  <!-- =====================================================================
+       WIDESCREEN 16:9 MULTI-SECTION INDUSTRIAL HMI WORKSPACE
+       ===================================================================== -->
+  <main class="hmi-grid">
+    <!-- 1. UPPER-LEFT VIEWPORT: LIVE OPTICAL CAMERA SCANNER (30 FPS) -->
+    <section class="hmi-card camera-panel" aria-label="Live Optical Camera Scanner">
+      <div class="card-header">
+        <div class="card-title">
+          <i data-lucide="eye"></i>
+          <span>LIVE OPTICAL CAMERA SCANNER</span>
         </div>
-
-        <div class="video-frame" id="videoFrame">
-          <img id="videoStream" src="/api/video/stream" alt="Transmisión en vivo OpenCV TZ THT-02" />
-          <canvas id="videoFallbackCanvas" class="video-fallback-canvas" width="640" height="360" hidden></canvas>
-          <div class="video-reticle" aria-hidden="true">
-            <span class="corner tl"></span>
-            <span class="corner tr"></span>
-            <span class="corner bl"></span>
-            <span class="corner br"></span>
-          </div>
-          <div class="video-hud-top">
-            <span class="hud-tag" id="hudSensorId">ID: TZ THT-02</span>
-            <span class="hud-tag hud-tag-status" id="hudStatusTag">NOMINAL</span>
-          </div>
-        </div>
-
-        <div class="scanner-telemetry-strip">
-          <div class="tele-cell">
-            <span class="tele-label">ÁNGULO</span>
-            <span class="tele-val" id="scanAngleVal">0.0°</span>
-          </div>
-          <div class="tele-cell">
-            <span class="tele-label">EST. COTAS</span>
-            <span class="tele-val" id="scanDimVal">140.0×16.0mm</span>
-          </div>
-          <div class="tele-cell tele-cell-zone">
-            <span class="tele-label">ZONA FALLA</span>
-            <span class="tele-val" id="scanZoneVal">NINGUNA</span>
-          </div>
-        </div>
-
-        <div class="sim-switcher" role="group" aria-label="Selector de fuente de cámara y simulador de banco">
-          <button type="button" class="sim-btn" data-cam-mode="usb" title="Cámara USB real (/dev/video0)">
-            <span class="sim-dot sim-dot-cyan"></span>USB /dev/video0
+        <div class="card-header-right">
+          <span class="meta-badge" id="camSourceBadge">BENCH SIM</span>
+          <span class="meta-badge meta-badge-sky" id="pillCamText">30 FPS</span>
+          <button
+            type="button"
+            class="chip-btn"
+            id="btnToggleDipPip"
+            title="Show or hide zoomed DIP-8 pin-focus macro inset"
+          >
+            <i data-lucide="sliders-horizontal"></i>
+            <span>DIP-8 Macro</span>
           </button>
-          <button type="button" class="sim-btn active" data-cam-mode="sim_normal" title="Simulador: Sensor en estado nominal">
-            Normal
-          </button>
-          <button type="button" class="sim-btn" data-cam-mode="sim_strainer_patch" title="Simulador: Obstrucción / parche en filtro sinterizado SHT30">
-            Parche Filtro/Punta
-          </button>
-          <button type="button" class="sim-btn" data-cam-mode="sim_open_dip" title="Simulador: Carcasa abierta exponiendo PCB DIP-8">
-            Abierto / DIP-8
-          </button>
-          <button type="button" class="sim-btn" data-cam-mode="sim_gland_fault" title="Simulador: Daño en prensaestopas / líneas RS-485">
-            Falla Cable RS-485
-          </button>
-        </div>
-      </section>
-
-      <!-- Bottom Half: TZ THT-02 Manual & 2D Blueprint Inspector -->
-      <section class="subpanel manual-section">
-        <div class="subpanel-header">
-          <div class="subpanel-title">
-            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6">
-              <path d="M3 2.5h7.5L13 5v8.5H3V2.5z" />
-              <polyline points="10 2.5 10 5.5 13 5.5" />
-              <line x1="5" y1="8" x2="11" y2="8" />
-              <line x1="5" y1="10.5" x2="9.5" y2="10.5" />
-            </svg>
-            <span>MANUAL &amp; PLANOS 2D · V1.1</span>
-          </div>
-          <div class="manual-nav-controls">
-            <button type="button" class="btn-icon" id="manualPrevBtn" title="Página anterior" aria-label="Página anterior">‹</button>
-            <span class="manual-page-indicator" id="manualPageIndicator">PÁG 1 / 9</span>
-            <button type="button" class="btn-icon" id="manualNextBtn" title="Página siguiente" aria-label="Página siguiente">›</button>
-          </div>
-        </div>
-
-        <div class="manual-quick-pills" id="manualQuickPills">
-          <button type="button" class="page-pill active" data-page="1">P1 Partes</button>
-          <button type="button" class="page-pill" data-page="4">P4 Cableado RS485</button>
-          <button type="button" class="page-pill" data-page="5">P5 DIP Switch</button>
-          <button type="button" class="page-pill" data-page="6">P6 Reg 7FFFH</button>
-          <button type="button" class="page-pill" data-page="9">P9 Plano 140×16mm</button>
-        </div>
-
-        <div class="manual-viewer-box" id="manualViewerBox" title="Clic para ampliar plano técnico a pantalla completa">
-          <img id="manualPageImg" src="/assets/manual_pages/page_1.png" alt="Manual técnico TZ THT-02 Página 1" />
-          <div class="manual-caption-bar">
-            <span id="manualPageCaption">Pág. 1 · Identificación de partes y sonda SHT30</span>
-            <span class="zoom-hint">⤢ ZOOM</span>
-          </div>
-        </div>
-      </section>
-    </aside>
-
-    <!-- CENTER VIEWPORT: 60 FPS THREE.JS PARAMETRIC CAD STUDIO -->
-    <section class="viewport-center" aria-label="Estudio CAD Paramétrico 3D Three.js">
-      <!-- Floating Top Viewport Toolbar -->
-      <div class="cad-toolbar" role="toolbar" aria-label="Herramientas de visualización CAD 3D">
-        <div class="cad-toolbar-group">
-          <button type="button" class="cad-tool-btn active" id="btnModeSolid" title="Renderizado PBR Sólido CAD">
-            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6">
-              <polygon points="8 1.5 14 5 14 11 8 14.5 2 11 2 5" />
-            </svg>
-            <span>Sólido CAD</span>
-          </button>
-          <button type="button" class="cad-tool-btn" id="btnModeWireframe" title="Modo Malla / Rayos-X para inspección interna SHT30 y PCB">
-            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5">
-              <polygon points="8 1.5 14 5 14 11 8 14.5 2 11 2 5" />
-              <line x1="2" y1="5" x2="14" y2="11" />
-              <line x1="14" y1="5" x2="2" y2="11" />
-              <line x1="8" y1="1.5" x2="8" y2="14.5" />
-            </svg>
-            <span>Wireframe / Rayos-X</span>
-          </button>
-        </div>
-
-        <div class="cad-toolbar-sep"></div>
-
-        <div class="cad-toolbar-group">
-          <button type="button" class="cad-tool-btn cad-tool-accent" id="btnToggleExplode" title="Desenroscar carcasa (Pasos 1 y 2 Manual Pág. 5) para ver PCB DIP-8">
-            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6">
-              <polyline points="4 5 1.5 8 4 11" />
-              <polyline points="12 5 14.5 8 12 11" />
-              <line x1="1.5" y1="8" x2="6.5" y2="8" />
-              <line x1="9.5" y1="8" x2="14.5" y2="8" />
-            </svg>
-            <span>Abrir Carcasa (DIP-8)</span>
-          </button>
-          <button type="button" class="cad-tool-btn active" id="btnToggleDims" title="Mostrar/ocultar cotas dimensionales 140.0 mm × Ø16.0 mm">
-            <span>Cotas 2D/3D</span>
-          </button>
-          <button type="button" class="cad-tool-btn active" id="btnSyncCam" title="Sincronizar inclinación del modelo 3D con el ángulo detectado por OpenCV">
-            <span>Sync Giro Cámara</span>
-          </button>
-          <button type="button" class="cad-tool-btn" id="btnResetView" title="Restablecer cámara isométrica CAD">
-            <span>Reset Vista</span>
-          </button>
-        </div>
-
-        <div class="cad-toolbar-sep"></div>
-
-        <div class="cad-fps-readout" id="cadFpsReadout" title="Cuadros por segundo del motor WebGL Three.js">
-          <span class="fps-dot"></span>
-          <span id="fpsCounterText">FPS: 60</span>
         </div>
       </div>
 
-      <!-- Three.js Canvas Mount + 2D Projected Engineering Overlays -->
+      <div class="camera-stage" id="videoFrame">
+        <img id="videoStream" src="/api/video/stream" alt="Live OpenCV 30 FPS optical sensor stream" />
+        <canvas id="videoFallbackCanvas" class="video-fallback-canvas" width="640" height="360" hidden></canvas>
+
+        <div class="video-reticle" aria-hidden="true">
+          <span class="corner tl"></span>
+          <span class="corner tr"></span>
+          <span class="corner bl"></span>
+          <span class="corner br"></span>
+        </div>
+
+        <div class="camera-hud-top">
+          <span class="hud-pill" id="hudSensorId">TZ THT-02 · <strong id="scanDimVal">140.0×16.0 mm</strong></span>
+          <span class="hud-pill hud-pill-nominal" id="hudStatusTag">NOMINAL</span>
+        </div>
+
+        <!-- AUTOMATIC PIN-FOCUS MACRO PIP (Appears automatically on DIP-8 inspection / Step 2) -->
+        <div class="dip-macro-pip" id="dipMacroPip" hidden>
+          <div class="dip-pip-head">
+            <span class="dip-pip-kicker">
+              <i data-lucide="sliders-horizontal"></i>
+              <span>PIN-FOCUS MACRO · SW1 DIP-8</span>
+            </span>
+            <div class="dip-pip-head-right">
+              <span class="dip-addr-badge" id="dipCalcAddr">SLAVE #01 (0x01)</span>
+              <button type="button" class="dip-pip-close" id="btnCloseDipPip" aria-label="Close macro inset">
+                <i data-lucide="x"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="dip-pip-content">
+            <div class="dip-crop-box">
+              <img id="dipCropImg" src="/api/video/dip_crop" alt="Macro optical zoom of 8-pin DIP switch block" />
+              <canvas id="dipCropFallbackCanvas" width="280" height="84" hidden></canvas>
+            </div>
+            <div class="dip-switches-row" id="dipSwitchesRow" role="group" aria-label="DIP-8 Binary Switches 1 to 8">
+              <!-- Populated dynamically by app.js -->
+            </div>
+            <div class="dip-pip-foot" id="dipPinSummary">
+              Binary weights: 128 · 64 · 32 · 16 · 8 · 4 · 2 · 1 (Click pins to toggle ON/OFF)
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Camera Metrology & Multi-Angle Scan Coverage Bar -->
+      <div class="camera-telemetry-bar">
+        <div class="scan-coverage-cell">
+          <div class="coverage-top">
+            <span class="tele-lbl">MULTI-ANGLE SCAN COVERAGE</span>
+            <span class="tele-val" id="scanCoverageVal">42%</span>
+          </div>
+          <div class="coverage-bar-track">
+            <div class="coverage-bar-fill" id="scanCoverageFill" style="width: 42%"></div>
+          </div>
+        </div>
+        <div class="tele-stat-cell">
+          <span class="tele-lbl">ORIENTATION θ</span>
+          <span class="tele-val" id="scanAngleVal">0.0°</span>
+        </div>
+        <div class="tele-stat-cell">
+          <span class="tele-lbl">DETECTED ANOMALY</span>
+          <span class="tele-val" id="scanZoneVal">NONE</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. UPPER-CENTER VIEWPORT: REAL-TIME 3D RECONSTRUCTION & TWIN DEVIATION MAP (60 FPS) -->
+    <section class="hmi-card twin-panel" aria-label="Real-Time 3D Reconstruction and Digital Twin Deviation Map">
+      <div class="card-header">
+        <div class="card-title">
+          <i data-lucide="box"></i>
+          <span>REAL-TIME 3D RECONSTRUCTION &amp; TWIN DEVIATION MAP</span>
+        </div>
+
+        <div class="card-header-right">
+          <span class="twin-verdict-badge is-nominal" id="twinMatchBadge">100% DIGITAL TWIN MATCH</span>
+
+          <div class="segmented-bar" role="group" aria-label="3D Twin View Controls">
+            <button type="button" class="seg-btn active" id="btnModeSolid" title="Solid PBR CAD surface">Solid</button>
+            <button type="button" class="seg-btn" id="btnModeWireframe" title="Translucent X-Ray internal inspection">X-Ray</button>
+            <button type="button" class="seg-btn" id="btnToggleExplode" title="Unscrew housing to expose internal DIP-8 PCB">Explode</button>
+            <button type="button" class="seg-btn" id="btnResetView" title="Reset 3D camera to full isometric pose">
+              <i data-lucide="rotate-ccw"></i>
+              <span>Reset 3D View</span>
+            </button>
+          </div>
+
+          <span class="meta-badge meta-badge-emerald" id="fpsCounterText">60 FPS</span>
+        </div>
+      </div>
+
       <div class="canvas-stage" id="canvasStage">
         <canvas id="cadCanvas"></canvas>
 
-        <!-- Projected 3D->2D Dimension & Callout Labels -->
+        <!-- Projected 3D->2D Engineering Dimension & Twin Deviation Badges -->
         <div class="overlay-layer" id="overlayLayer">
           <div class="dim-badge" id="labelDimLength">140.0 MM</div>
           <div class="dim-badge" id="labelDimDia">Ø16.0 MM</div>
-          <div class="dim-badge dim-badge-dip" id="labelDipAddr">MODBUS ADDR: 176 [DIP 1,3,4]</div>
+          <div class="dim-badge dim-badge-dip" id="labelDipAddr">MODBUS ADDR: #01 [PIN 8 ON]</div>
 
-          <!-- Floating 3D Fault Callout Badge -->
           <div class="fault-callout" id="faultCallout" hidden>
             <div class="fault-callout-header">
               <span class="fault-pulse-dot"></span>
-              <span id="faultCalloutZone">ZONA CRÍTICA</span>
+              <span id="faultCalloutZone">⚠️ TWIN DEVIATION: STRAINER HEAD — PROBABLE FAULT SOURCE</span>
             </div>
-            <div class="fault-callout-body" id="faultCalloutText">Anomalía detectada en sub-ensamble</div>
+            <div class="fault-callout-body" id="faultCalloutText">
+              Optical-to-CAD anomaly localized on sensor sub-assembly.
+            </div>
           </div>
         </div>
 
-        <!-- Live RS-485 Modbus SCADA & Closed-Loop Validation Card -->
-        <div class="scada-live-card" id="scadaLiveCard">
-          <div class="scada-card-header">
-            <span class="scada-kicker">BUS SCADA RS-485 · FT2232HL</span>
-            <span class="scada-status-badge is-offline" id="scadaStatusBadge">SIN SEÑAL</span>
-          </div>
-          <div class="scada-metrics-row">
-            <div class="scada-metric">
-              <span class="scada-metric-lbl">TEMP (0000H)</span>
-              <strong class="scada-metric-val" id="scadaTempVal">--.- °C</strong>
-            </div>
-            <div class="scada-metric">
-              <span class="scada-metric-lbl">HUMEDAD (0001H)</span>
-              <strong class="scada-metric-val" id="scadaHumVal">--.- %RH</strong>
-            </div>
-            <div class="scada-metric scada-metric-sm">
-              <span class="scada-metric-lbl">SLAVE / BAUD</span>
-              <strong class="scada-metric-val" id="scadaSlaveVal">#1 · 9600</strong>
-            </div>
-          </div>
-          <div class="scada-frame-line" id="scadaFrameHex">TX: 01 03 00 00 00 08 44 0C · ESPERANDO RESPUESTA...</div>
-          <div class="scada-actions-row">
-            <button type="button" class="scada-btn" id="btnScanRealModbus" title="Buscar convertidor físico FT2232HL USB-RS485 (/dev/ttyUSB* o /dev/cu.usbserial*)">
-              🔌 Escanear USB-RS485
-            </button>
-            <button type="button" class="scada-btn scada-btn-emerald" id="btnSimConnectModbus" title="Conectar / energizar sensor reparado en bus Modbus-RTU">
-              ⚡ Enchufar Sensor
-            </button>
-            <button type="button" class="scada-btn" id="btnBreathTest" title="Simular soplo de humedad sobre la punta SHT30 en vivo">
-              💨 Probar Humedad
-            </button>
-          </div>
-        </div>
-
-        <!-- Interactive DIP-8 Address Inspector Mini-HUD (visible when exploded or inspecting DIP) -->
-        <div class="dip-hud-card" id="dipHudCard" hidden>
-          <div class="dip-hud-top">
-            <span class="dip-hud-title">SW1 · BLOQUE DIP-8 (MANUAL PÁG. 5)</span>
-            <span class="dip-hud-addr" id="dipCalcAddr">ADDR = 176 (0xB0)</span>
-          </div>
-          <div class="dip-switches-row" id="dipSwitchesRow" role="group" aria-label="Interruptores DIP 1 a 8">
-            <!-- Populated dynamically by app.js -->
-          </div>
-          <div class="dip-hud-note">Pesos binarios: 128 · 64 · 32 · 16 · 8 · 4 · 2 · 1 (Clic para conmutar en vivo)</div>
-        </div>
-
-        <!-- Bottom-Left Sub-Assembly Tree / Selected Part Inspector -->
-        <div class="assembly-hud">
+        <!-- Compact Sub-Assembly Selector Strip -->
+        <div class="assembly-strip">
           <div class="assembly-tree-pills" id="assemblyTreePills">
-            <button type="button" class="part-chip" data-zone="strainer_head">1. Filtro SHT30</button>
-            <button type="button" class="part-chip" data-zone="upper_seal_ring">2. Sello Sup.</button>
-            <button type="button" class="part-chip" data-zone="upper_barrel_dip">3. Barril + PCB DIP-8</button>
-            <button type="button" class="part-chip" data-zone="mounting_flange">4. Brida Ø4.2mm</button>
-            <button type="button" class="part-chip" data-zone="lower_barrel_rs485">5. Barril Inf.</button>
-            <button type="button" class="part-chip" data-zone="waterproof_gland_leads">6. Prensaestopas + RS485</button>
+            <button type="button" class="part-chip" data-zone="strainer_head">1. SHT30 Strainer</button>
+            <button type="button" class="part-chip" data-zone="upper_seal_ring">2. O-Ring Seal</button>
+            <button type="button" class="part-chip" data-zone="upper_barrel_dip">3. DIP-8 PCB</button>
+            <button type="button" class="part-chip" data-zone="mounting_flange">4. Flange Ø4.2</button>
+            <button type="button" class="part-chip" data-zone="lower_barrel_rs485">5. RS-485 Barrel</button>
+            <button type="button" class="part-chip" data-zone="waterproof_gland_leads">6. Gland &amp; Leads</button>
           </div>
-          <div class="part-spec-bar" id="partSpecBar">
-            <span class="spec-tag">ENSAMBLE: <strong>TZ THT-02</strong></span>
-            <span class="spec-sep">|</span>
-            <span id="selectedPartSummary">Clic en cualquier sub-ensamble 3D para inspeccionar cotas, tolerancias y referencia del manual.</span>
+          <div class="assembly-spec-line" id="selectedPartSummary">
+            Click any 3D sub-assembly or DIP-8 switch rocker to inspect 1:1 tolerances and datasheet reference.
           </div>
         </div>
       </div>
     </section>
 
-    <!-- RIGHT PANEL: MULTIMODAL VOICE/VISION COPILOT + AUTOCAD ESCALATION -->
-    <aside class="panel panel-right" aria-label="Copiloto Multimodal Voz y Visión">
-      <div class="subpanel-header copilot-header">
-        <div class="subpanel-title">
-          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6">
-            <path d="M8 1.5a3 3 0 0 1 3 3v3a3 3 0 0 1-6 0v-3a3 3 0 0 1 3-3z" />
-            <path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5M5.5 14.5h5" />
-          </svg>
-          <span>COPILOTO LIVE · REPARACIÓN + SCADA</span>
+    <!-- 3. BOTTOM WIDESCREEN CONSOLE: INDUSTRIAL SCADA & MODBUS-RTU HMI -->
+    <section
+      class="hmi-card scada-console"
+      id="scadaLiveCard"
+      data-scada-state="red"
+      aria-label="Industrial SCADA and Modbus-RTU HMI"
+    >
+      <div class="scada-header">
+        <div class="scada-title-group">
+          <span class="scada-status-led" aria-hidden="true"></span>
+          <span class="scada-panel-name">INDUSTRIAL SCADA &amp; MODBUS-RTU HMI</span>
+          <span class="scada-banner-tag" id="scadaStatusBadge">RED ALERT: NO MODBUS SIGNAL</span>
         </div>
-        <button type="button" class="btn-micro" id="btnAutoSpeak" data-autospeak="true" title="Activar/desactivar lectura por voz automática">
-          🔊 Voz Auto: ON
+
+        <div class="scada-actions">
+          <button
+            type="button"
+            class="scada-action-btn"
+            id="btnScanRealModbus"
+            title="Probe physical FTDI FT2232HL USB-to-RS485 converter ports"
+          >
+            <i data-lucide="usb"></i>
+            <span>Scan FT2232HL</span>
+          </button>
+          <button
+            type="button"
+            class="scada-action-btn scada-action-emerald"
+            id="btnSimConnectModbus"
+            title="Energize RS-485 bus and validate live SHT30 registers"
+          >
+            <i data-lucide="plug-zap"></i>
+            <span>Energize Bus</span>
+          </button>
+          <button
+            type="button"
+            class="scada-action-btn scada-action-sky"
+            id="btnBreathTest"
+            title="Trigger dynamic humidity and temperature breath spike test"
+          >
+            <i data-lucide="wind"></i>
+            <span>Simulate Breath Spike</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="scada-grid">
+        <!-- 3-Tier Industrial Andon Stack Light -->
+        <div class="andon-column">
+          <div class="andon-stack" id="andonStack" data-andon="RED" title="3-Tier Industrial Andon Stack Light">
+            <div class="andon-cap"></div>
+            <div class="andon-lens lens-red is-active" id="andonRed" title="RED: Fault / Bus Offline">
+              <span>RED</span>
+            </div>
+            <div class="andon-lens lens-amber" id="andonAmber" title="AMBER: Awaiting Bus Power / DIP-8 Setup">
+              <span>AMB</span>
+            </div>
+            <div class="andon-lens lens-green" id="andonGreen" title="GREEN: Modbus RTU Online &amp; Healthy">
+              <span>GRN</span>
+            </div>
+            <div class="andon-mast"></div>
+            <div class="andon-foot">ANDON</div>
+          </div>
+        </div>
+
+        <!-- Giant High-Contrast SCADA Readout Cards -->
+        <div class="scada-readouts">
+          <div class="readout-card readout-temp">
+            <div class="readout-head">
+              <span>TEMPERATURE</span>
+              <code>REG 0000H</code>
+            </div>
+            <div class="readout-val" id="scadaTempVal">--.- °C</div>
+            <div class="readout-meta">SHT30 · ±0.3 °C (-40..+125 °C)</div>
+          </div>
+
+          <div class="readout-card readout-hum">
+            <div class="readout-head">
+              <span>HUMIDITY</span>
+              <code>REG 0001H</code>
+            </div>
+            <div class="readout-val" id="scadaHumVal">--.- %RH</div>
+            <div class="readout-meta">CMOSens · ±2 %RH (0..100 %RH)</div>
+          </div>
+
+          <div class="readout-card readout-bus">
+            <div class="readout-head">
+              <span>NODE &amp; BUS FRAME</span>
+              <code id="scadaCrcPill">CRC-16 A001</code>
+            </div>
+            <div class="readout-node" id="scadaSlaveVal">Slave #01 · 9600 8N1</div>
+            <div class="readout-hex" id="scadaFrameHex">TX: 01 03 00 00 00 08 44 0C · NO RESPONSE</div>
+          </div>
+        </div>
+
+        <!-- Real-Time uPlot Dual-Series Telemetry Graph -->
+        <div class="scada-chart-card">
+          <div class="chart-card-header">
+            <span>REAL-TIME TELEMETRY HISTORY</span>
+            <div class="chart-series-key">
+              <span class="series-dot dot-temp">Temp (°C)</span>
+              <span class="series-dot dot-hum">Humidity (%RH)</span>
+            </div>
+          </div>
+          <div class="scada-chart-stage" id="scadaChartWrap">
+            <div id="scadaChart" class="uplot-mount"></div>
+            <canvas id="scadaFallbackCanvas" width="440" height="128" hidden></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. RIGHT COLUMN: LIVE AI VOICE ENGINEER & 2D DATASHEET -->
+    <aside class="hmi-card voice-column" aria-label="Live AI Voice Engineer and 2D Datasheet">
+      <div class="card-header">
+        <div class="card-title">
+          <i data-lucide="radio"></i>
+          <span>LIVE AI VOICE ENGINEER</span>
+        </div>
+        <button
+          type="button"
+          class="chip-btn active"
+          id="btnAutoSpeak"
+          title="Enable or mute automatic English neural speech synthesis"
+        >
+          <i data-lucide="volume-2"></i>
+          <span id="autoSpeakText">Voice: ON</span>
         </button>
       </div>
 
-      <!-- Guided Demo Quick-Actions (Closed-Loop Live Repair + SCADA Validation) -->
-      <div class="quick-actions-block">
-        <div class="quick-actions-label">REPARACIÓN EN TIEMPO REAL (VOZ O 1-CLIC)</div>
-        <div class="quick-actions-grid">
-          <button type="button" class="qa-btn" id="qaLoadSensor" title="Paso 1: Mostrar sensor abierto / sin encender para autodiagnóstico en vivo">
-            <span class="qa-num">1</span>
-            <span class="qa-text">No enciende / Sensor abierto (Inspección Live)</span>
-          </button>
-          <button type="button" class="qa-btn" id="qaInspectDip" title="Paso 2: Indicar Modo Modbus para que la IA lea la cámara y dicte los pines DIP-8">
-            <span class="qa-num">2</span>
-            <span class="qa-text">Modo Modbus → Guiar Pines DIP-8</span>
-          </button>
-          <button type="button" class="qa-btn qa-btn-emerald" id="qaDiagnoseCam" title="Paso 3: Conectar sensor al USB-RS485 y validar Temperatura y Humedad reales">
-            <span class="qa-num">3</span>
-            <span class="qa-text">Enchufar RS-485 → Validar °C y %RH</span>
-          </button>
-          <button type="button" class="qa-btn qa-btn-amber" id="qaEscalateCad" title="Paso 4: Generar Dossier con Fotos Antes/Después + 4 Ángulos 3D + Visto Bueno Fabricante">
-            <span class="qa-num">4</span>
-            <span class="qa-text">Reporte 4-Ángulos 3D + Visto Bueno</span>
-          </button>
+      <!-- Tactile Push-To-Talk Mic Button + Live NEXT STEP Callout Box -->
+      <div class="voice-command-deck">
+        <button type="button" class="btn-mic-primary" id="btnVoiceRecord">
+          <span class="mic-orb">
+            <i data-lucide="mic"></i>
+          </span>
+          <span class="mic-copy">
+            <strong id="pttLabel">Push to Speak to AI Engineer</strong>
+            <small id="pttSubLabel">Offline LFM3-Audio-2B · Click to Record</small>
+          </span>
+        </button>
+
+        <div class="voice-meter" id="voiceMeter" hidden>
+          <div class="voice-meter-fill" id="voiceMeterFill"></div>
+        </div>
+
+        <div class="next-step-callout" id="nextStepBox">
+          <div class="next-step-head">
+            <i data-lucide="activity"></i>
+            <span id="nextStepTitle">NEXT STEP · READY TO INSPECT</span>
+          </div>
+          <p class="next-step-body" id="nextStepBody">
+            Click <strong>1. Inspect Fault</strong> in the top bar or ask the AI Voice Engineer to inspect the exposed DIP-8 switches.
+          </p>
         </div>
       </div>
 
-      <!-- Conversation & Structured Diagnosis Feed -->
+      <!-- Scrollable Diagnostic Transcript Feed -->
       <div class="chat-feed" id="chatFeed" role="log" aria-live="polite">
-        <!-- Initial engineering readiness card injected/rendered cleanly -->
         <article class="msg msg-assistant">
           <div class="msg-meta">
-            <span class="msg-author">LFM3-VL-2B · SISTEMA OFFLINE</span>
-            <span class="msg-time" id="bootTimestamp">LISTO</span>
+            <span class="msg-author">LFM3-VL-2B · OFFLINE FIELD ENGINEER</span>
+            <span class="msg-time" id="bootTimestamp">READY</span>
           </div>
           <div class="msg-text">
-            Gemelo paramétrico <strong>TZ THT-02</strong> inicializado a escala real (<code>140.0 × Ø16.0 mm</code>). Seleccione un paso rápido, apunte la cámara al sensor o mantenga presionado <strong>Hablar al Copiloto</strong> para diagnosticar fallas de sonda <code>SHT30</code> (<code>7FFFH</code>), dirección <code>DIP-8</code> o cableado <code>RS-485</code> sin conexión a internet.
+            1:1 Parametric Digital Twin initialized for <strong>TZ THT-02</strong> (<code>140.0 × Ø16.0 mm</code>). Use the color-coded workflow buttons above, speak via the microphone, or click any datasheet citation chip to diagnose <code>SHT30</code> (<code>0x7FFF</code>), <code>DIP-8</code> addressing, or <code>RS-485</code> bus faults completely offline.
           </div>
           <div class="citation-row">
-            <button type="button" class="cite-chip" data-cite-page="1">Pág. 1 · Partes</button>
-            <button type="button" class="cite-chip" data-cite-page="5">Pág. 5 · DIP Switch</button>
-            <button type="button" class="cite-chip" data-cite-page="6">Pág. 6 · Reg 7FFFH</button>
-            <button type="button" class="cite-chip" data-cite-page="9">Pág. 9 · Cotas 140×16</button>
+            <button type="button" class="cite-chip" data-cite-page="1">Page 1 · Parts</button>
+            <button type="button" class="cite-chip" data-cite-page="5">Page 5 · DIP-8</button>
+            <button type="button" class="cite-chip" data-cite-page="6">Page 6 · 0x7FFF</button>
+            <button type="button" class="cite-chip" data-cite-page="9">Page 9 · 140×16 mm</button>
           </div>
         </article>
       </div>
 
-      <!-- Voice + Text Input Bar -->
-      <div class="copilot-input-area">
-        <div class="voice-bar">
-          <button type="button" class="btn-ptt" id="btnPushToTalk">
-            <svg class="mic-svg" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7">
-              <rect x="5.2" y="1.5" width="5.6" height="8.2" rx="2.8" />
-              <path d="M3 7.2a5 5 0 0 0 10 0M8 12.2v2.3M5.5 14.5h5" />
-            </svg>
-            <span id="pttLabel">🎤 Hablar al Copiloto (Clic para Grabar)</span>
+      <!-- Compact English Text Prompt Bar -->
+      <form class="text-query-form" id="textQueryForm">
+        <input
+          type="text"
+          id="queryInput"
+          placeholder="Ask AI Engineer or type sensor command..."
+          autocomplete="off"
+        />
+        <button type="submit" class="btn-send" id="btnSendQuery" title="Send multimodal query">
+          <i data-lucide="send"></i>
+          <span>Send</span>
+        </button>
+      </form>
+
+      <!-- Tabbed / Collapsible Drawer for Official 2D PDF Manual Pages (Pages 1-9) -->
+      <section class="manual-drawer" id="manualDrawer" aria-label="Official 2D PDF Datasheet Viewer">
+        <div class="manual-drawer-header">
+          <button
+            type="button"
+            class="manual-drawer-tab"
+            id="btnToggleManualDrawer"
+            aria-expanded="true"
+            title="Toggle Official 2D PDF Manual Pages (Pages 1-9)"
+          >
+            <i data-lucide="book-open"></i>
+            <span>2D PDF MANUAL</span>
+            <span class="manual-page-indicator" id="manualPageIndicator">PAGE 1 / 9</span>
           </button>
-          <div class="voice-meter" id="voiceMeter" hidden>
-            <div class="voice-meter-fill" id="voiceMeterFill"></div>
+
+          <div class="manual-nav-controls">
+            <button type="button" class="btn-icon-mini" id="manualPrevBtn" title="Previous page" aria-label="Previous page">
+              <i data-lucide="chevron-left"></i>
+            </button>
+            <button type="button" class="btn-icon-mini" id="manualNextBtn" title="Next page" aria-label="Next page">
+              <i data-lucide="chevron-right"></i>
+            </button>
+            <button type="button" class="btn-icon-mini" id="btnExpandManual" title="Open fullscreen 2D schematic" aria-label="Expand manual">
+              <i data-lucide="expand"></i>
+            </button>
           </div>
         </div>
 
-        <form class="text-query-form" id="textQueryForm">
-          <input
-            type="text"
-            id="queryInput"
-            placeholder="Ej: Lectura 7FFFH en humedad o revisar dirección DIP..."
-            autocomplete="off"
-          />
-          <button type="submit" class="btn-send" id="btnSendQuery" title="Enviar consulta multimodal">
-            Enviar
-          </button>
-        </form>
-      </div>
+        <div class="manual-drawer-body" id="manualDrawerBody">
+          <div class="manual-quick-pills" id="manualQuickPills">
+            <button type="button" class="page-pill active" data-page="1">P1 Parts</button>
+            <button type="button" class="page-pill" data-page="4">P4 Wiring</button>
+            <button type="button" class="page-pill" data-page="5">P5 DIP-8</button>
+            <button type="button" class="page-pill" data-page="6">P6 0x7FFF</button>
+            <button type="button" class="page-pill" data-page="9">P9 140×16</button>
+          </div>
 
-      <!-- CAD & Manufacturer Escalation Footer -->
-      <footer class="escalation-footer">
-        <div class="esc-footer-header">
-          <span>EXPORTACIÓN CAD &amp; ESCALAMIENTO OFFLINE</span>
-          <span class="esc-queue-tag" id="escQueueTag">STORE-AND-FORWARD</span>
+          <div class="manual-viewer-box" id="manualViewerBox" title="Click to inspect full-resolution 2D blueprint">
+            <img id="manualPageImg" src="/assets/manual_pages/page_1.png" alt="TZ THT-02 Technical Manual Page 1" />
+            <div class="manual-caption-bar">
+              <span id="manualPageCaption">Page 1 · Component Overview &amp; SHT30 Probe</span>
+              <span class="zoom-hint">ZOOM</span>
+            </div>
+          </div>
         </div>
-        <div class="esc-btn-row">
-          <button type="button" class="esc-btn" id="btnDownloadDxf" title="Descargar plano técnico AutoCAD .DXF">
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6">
-              <path d="M8 2v8.5M5 7.8L8 11l3-3.2M2.5 13.5h11" />
-            </svg>
-            <span>.DXF (AutoCAD)</span>
-          </button>
-          <button type="button" class="esc-btn" id="btnDownloadStl" title="Descargar malla sólida paramétrica 3D .STL">
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6">
-              <polygon points="8 1.8 13.5 5 13.5 11 8 14.2 2.5 11 2.5 5" />
-            </svg>
-            <span>.STL (3D)</span>
-          </button>
-          <button type="button" class="esc-btn esc-btn-primary" id="btnOpenEscalateModal" title="Ver correo Store-and-Forward y paquete .ZIP para fabricante">
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6">
-              <rect x="1.5" y="3" width="13" height="10" rx="1.2" />
-              <polyline points="2 4 8 8.5 14 4" />
-            </svg>
-            <span>Correo / .ZIP</span>
-          </button>
-        </div>
+      </section>
+
+      <!-- Compact CAD & Offline Sign-Off Export Strip -->
+      <footer class="export-strip">
+        <button type="button" class="export-chip-btn" id="btnDownloadDxf" title="Download 1:1 AutoCAD .DXF drawing">
+          <i data-lucide="download"></i>
+          <span>AutoCAD .DXF</span>
+        </button>
+        <button type="button" class="export-chip-btn" id="btnDownloadStl" title="Download 1:1 Binary .STL 3D mesh">
+          <i data-lucide="box"></i>
+          <span>3D Mesh .STL</span>
+        </button>
+        <button
+          type="button"
+          class="export-chip-btn export-chip-primary"
+          id="btnOpenEscalateModal"
+          title="Generate 4-Angle 3D Manufacturer Sign-Off Dossier (.ZIP / .EML)"
+        >
+          <i data-lucide="mail"></i>
+          <span id="escQueueTag">Sign-Off .ZIP</span>
+        </button>
       </footer>
     </aside>
   </main>
 
-  <!-- MANUAL 2D BLUEPRINT LIGHTBOX MODAL -->
+  <!-- =====================================================================
+       MODAL 1: 2D DATASHEET & BLUEPRINT LIGHTBOX
+       ===================================================================== -->
   <div class="modal-backdrop" id="manualModal" hidden>
-    <div class="modal-dialog modal-lightbox" role="dialog" aria-modal="true" aria-label="Plano y Manual TZ THT-02 Ampliado">
+    <div class="modal-dialog modal-lightbox" role="dialog" aria-modal="true" aria-label="TZ THT-02 2D Datasheet Viewer">
       <div class="modal-header">
         <div class="modal-title-group">
-          <span class="modal-kicker">DOCUMENTACIÓN DE FÁBRICA OFFLINE</span>
-          <h2 id="lightboxTitle">TZ THT-02 User's Manual V1.1 — Página 1</h2>
+          <span class="modal-kicker">OFFLINE OEM DATASHEET · V1.1</span>
+          <h2 id="lightboxTitle">TZ THT-02 User's Manual V1.1 — Page 1</h2>
         </div>
         <div class="modal-header-actions">
-          <button type="button" class="btn-micro" id="lightboxPrevBtn">‹ Anterior</button>
+          <button type="button" class="chip-btn" id="lightboxPrevBtn">‹ Prev</button>
           <span class="manual-page-indicator" id="lightboxPageBadge">1 / 9</span>
-          <button type="button" class="btn-micro" id="lightboxNextBtn">Siguiente ›</button>
-          <button type="button" class="btn-close" id="lightboxCloseBtn" aria-label="Cerrar">✕</button>
+          <button type="button" class="chip-btn" id="lightboxNextBtn">Next ›</button>
+          <button type="button" class="btn-close" id="lightboxCloseBtn" aria-label="Close modal">✕</button>
         </div>
       </div>
       <div class="lightbox-body">
-        <img id="lightboxImg" src="/assets/manual_pages/page_1.png" alt="Página ampliada del manual TZ THT-02" />
+        <img id="lightboxImg" src="/assets/manual_pages/page_1.png" alt="Enlarged TZ THT-02 manual schematic" />
       </div>
     </div>
   </div>
 
-  <!-- OFFLINE STORE-AND-FORWARD ESCALATION PACKAGE MODAL -->
+  <!-- =====================================================================
+       MODAL 2: MANUFACTURER 4-ANGLE 3D SIGN-OFF DOSSIER & OUTBOX PACKAGE
+       ===================================================================== -->
   <div class="modal-backdrop" id="escalationModal" hidden>
-    <div class="modal-dialog modal-escalation" role="dialog" aria-modal="true" aria-label="Paquete de Escalamiento Offline Store-and-Forward">
+    <div
+      class="modal-dialog modal-escalation"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Manufacturer 4-Angle 3D Sign-Off Dossier"
+    >
       <div class="modal-header">
         <div class="modal-title-group">
-          <span class="modal-kicker">STORE-AND-FORWARD OUTBOX · MODO AVIÓN</span>
-          <h2>Paquete Técnico de Escalamiento al Fabricante (.ZIP / .DXF / .STL)</h2>
+          <span class="modal-kicker">STORE-AND-FORWARD OUTBOX · AIRPLANE MODE VERIFIED</span>
+          <h2>Manufacturer 4-Angle 3D Sign-Off &amp; CAD Escalation Dossier</h2>
         </div>
-        <button type="button" class="btn-close" id="escalationCloseBtn" aria-label="Cerrar">✕</button>
+        <button type="button" class="btn-close" id="escalationCloseBtn" aria-label="Close modal">✕</button>
       </div>
 
       <div class="escalation-modal-body">
         <div class="esc-status-banner">
-          <span class="pill-dot pill-dot-emerald"></span>
+          <span class="banner-beacon banner-beacon-emerald"></span>
           <div class="esc-status-copy">
-            <strong id="escOutboxState">COLA OFFLINE LISTA PARA SINCRONIZACIÓN SMTP</strong>
-            <span id="escPackagePath">Paquete firmado localmente en /outbox/ sin sockets externos.</span>
+            <strong id="escOutboxState">COMPLIANT WITH MANUAL V1.1 · QUEUED IN LOCAL OUTBOX</strong>
+            <span id="escPackagePath">Signed locally in /outbox/ with zero external network sockets.</span>
           </div>
-          <a class="btn-download-zip" id="escZipDownloadLink" href="#" download>⬇ Descargar Paquete .ZIP</a>
+          <a class="btn-download-zip" id="escZipDownloadLink" href="#" download>Download Complete .ZIP</a>
         </div>
 
         <div class="esc-grid">
           <div class="esc-email-pane">
-            <div class="email-field"><span class="email-key">PARA:</span> <span id="escEmailTo">support-eng@tzonedigital.com (Tzone Digital Technology Co., Ltd.)</span></div>
-            <div class="email-field"><span class="email-key">CC:</span> <span id="escEmailCc">mantenimiento.planta@fieldscan.local</span></div>
-            <div class="email-field"><span class="email-key">ASUNTO:</span> <strong id="escEmailSubject">[FIELDSCAN-CAD] Reporte de Falla TZ THT-02 + Gemelo .DXF/.STL</strong></div>
-            <div class="email-attachments" id="escAttachmentsList">
-              <!-- Populated dynamically -->
+            <div class="email-field">
+              <span class="email-key">TO:</span>
+              <span id="escEmailTo">support-eng@tzonedigital.com (Tzone Digital Engineering)</span>
             </div>
-            <pre class="email-body-pre" id="escEmailBody">Generando paquete de ingeniería offline...</pre>
+            <div class="email-field">
+              <span class="email-key">CC:</span>
+              <span id="escEmailCc">plant-reliability@fieldscan.local</span>
+            </div>
+            <div class="email-field">
+              <span class="email-key">SUBJECT:</span>
+              <strong id="escEmailSubject">[FIELDSCAN-SIGN-OFF] TZ THT-02 Verified Repair + 4-Angle 3D Twin + .DXF/.STL</strong>
+            </div>
+            <div class="email-attachments" id="escAttachmentsList">
+              <!-- Populated dynamically (.DXF, .STL, .EML, .ZIP, 4-Angle PNG, Strip PNG) -->
+            </div>
+            <pre class="email-body-pre" id="escEmailBody">Compiling 4-angle 3D CAD views, chronological repair strip, and AutoCAD artifacts...</pre>
           </div>
 
           <div class="esc-preview-pane">
-            <div class="esc-preview-label">CAPTURA ÓPTICA ANOTADA ADJUNTA</div>
+            <div class="esc-preview-tabs">
+              <button type="button" class="preview-tab active" id="tabPreviewQuad">4-Angle 3D Twin</button>
+              <button type="button" class="preview-tab" id="tabPreviewStrip">Before / During / After Strip</button>
+            </div>
             <div class="esc-snapshot-box">
-              <img id="escSnapshotImg" src="/api/video/snapshot" alt="Captura anotada del sensor" />
+              <img id="escSnapshotImg" src="/api/video/snapshot" alt="4-Angle 3D CAD and repair evidence preview" />
             </div>
             <div class="esc-cad-summary" id="escCadSummary">
-              <div><span>Cotas Verificadas:</span> <strong>140.0 mm × Ø16.0 mm</strong></div>
-              <div><span>Zona Resaltada:</span> <strong id="escSummaryZone">strainer_head</strong></div>
-              <div><span>Dirección DIP-8:</span> <strong id="escSummaryDip">176 (DIP 1,3,4 ON)</strong></div>
-              <div><span>Archivos CAD:</span> <strong>AutoCAD R12 .DXF + Binary .STL</strong></div>
+              <div><span>Verified Metrology:</span> <strong>140.0 mm × Ø16.0 mm (1:1)</strong></div>
+              <div><span>Inspection Verdict:</span> <strong id="escSummaryZone">SCADA ONLINE VERIFIED</strong></div>
+              <div><span>DIP-8 Configuration:</span> <strong id="escSummaryDip">Slave #01 (Pin 8 ON)</strong></div>
+              <div><span>Included Exports:</span> <strong>.DXF · .STL · .EML · .ZIP</strong></div>
             </div>
           </div>
         </div>
@@ -503,6 +659,8 @@
     </div>
   </div>
 
+  <script src="/static/vendor/lucide.min.js"></script>
+  <script src="/static/vendor/uPlot.iife.min.js"></script>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

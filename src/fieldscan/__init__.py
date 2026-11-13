@@ -1,3 +1,3 @@
-"""FieldScan THT-02 offline industrial sensor twin package."""
+"""FieldScan THT-02 offline industrial sensor digital twin and SCADA diagnostic package."""
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"

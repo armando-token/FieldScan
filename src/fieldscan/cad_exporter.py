@@ -41,36 +41,45 @@ _PACKAGE_COUNTER = 0
 
 
 def _resolve_zone(spec: dict[str, Any], fault_zone: str | None) -> dict[str, Any] | None:
-    """Resolve a canonical zone dict from `spec['zones']` by exact or partial ID/label."""
+    """Resolve a canonical zone dict from `spec['zones']` by exact or partial ID, alias, or label."""
     if not fault_zone:
         return None
     needle = fault_zone.strip().lower()
     if not needle:
         return None
+    alias_map = {
+        "seal_ring": "upper_seal_ring",
+        "middle_barrel": "lower_barrel_rs485",
+    }
+    mapped = alias_map.get(needle, needle)
     zones: list[dict[str, Any]] = spec.get("zones", [])
     for z in zones:
-        if z.get("id", "").lower() == needle:
+        zid = z.get("id", "").lower()
+        z_aliases = [str(a).lower() for a in z.get("aliases", [])]
+        if zid == mapped or needle in z_aliases:
             return z
     for z in zones:
         zid = z.get("id", "").lower()
-        lbl_es = z.get("label_es", "").lower()
+        lbl = z.get("label", "").lower()
         lbl_en = z.get("label_en", "").lower()
-        if needle in zid or zid in needle or needle in lbl_es or needle in lbl_en:
+        if mapped in zid or zid in mapped or needle in lbl or needle in lbl_en:
             return z
     # Fallback synthetic zone spanning full envelope if an unknown custom string was supplied
     total_len = float(spec.get("dimensions_mm", {}).get("total_length", 140.0))
     outer_d = float(spec.get("dimensions_mm", {}).get("outer_diameter", 16.0))
     return {
         "id": fault_zone.strip(),
-        "label_es": f"Zona reportada ({fault_zone.strip()})",
+        "label": f"Reported Zone ({fault_zone.strip()})",
         "label_en": f"Reported Zone ({fault_zone.strip()})",
         "z_start_mm": 0.0,
         "z_end_mm": total_len,
         "diameter_mm": outer_d,
         "manual_pages": [1, 9],
-        "probable_faults_es": ["Anomalía reportada en inspección de campo"],
-        "electrical_symptoms": ["Verificar registros Modbus 0x0000..0x0007"],
-        "recommended_actions_es": ["Inspección física y eléctrica según manual TZ THT-02 V1.1"],
+        "probable_faults": ["Physical anomaly reported during field inspection"],
+        "probable_faults_en": ["Physical anomaly reported during field inspection"],
+        "electrical_symptoms": ["Verify Modbus holding registers 0x0000..0x0007"],
+        "recommended_actions": ["Perform physical and electrical inspection per TZ THT-02 Manual V1.1"],
+        "recommended_actions_en": ["Perform physical and electrical inspection per TZ THT-02 Manual V1.1"],
     }
 
 
@@ -367,7 +376,7 @@ def export_autocad_dxf(
         z0 = float(resolved_zone["z_start_mm"])
         z1 = float(resolved_zone["z_end_mm"])
         zid = str(resolved_zone["id"])
-        zlabel = str(resolved_zone.get("label_es") or resolved_zone.get("label_en") or zid)
+        zlabel = str(resolved_zone.get("label_en") or resolved_zone.get("label") or zid)
         half_box_y = R + 3.2 if zid != "mounting_flange" else R + 4.5
 
         # Red highlight envelope over exact z_start_mm..z_end_mm
@@ -403,8 +412,8 @@ def export_autocad_dxf(
 
         summary_clean = (diagnosis_summary or "").strip()
         if not summary_clean:
-            faults_es = resolved_zone.get("probable_faults_es") or []
-            summary_clean = faults_es[0] if faults_es else "Anomalía detectada en zona inspeccionada"
+            faults_en = resolved_zone.get("probable_faults_en") or resolved_zone.get("probable_faults") or []
+            summary_clean = faults_en[0] if faults_en else "Anomaly detected in inspected zone"
         if len(summary_clean) > 84:
             summary_clean = summary_clean[:81] + "..."
 
@@ -807,7 +816,7 @@ def _render_annotated_snapshot(
     draw.text((w - 220, 16), f"ZONE: {zone_tag[:18]}", fill=(255, 255, 255), font=_HUD_FONT)
 
     draw.rectangle([0, h - 64, w, h], fill=(10, 15, 24))
-    diag_line = (diagnosis_text or "Inspección registrada en gemelo digital offline.").replace("\n", " ").strip()
+    diag_line = (diagnosis_text or "Inspection recorded in offline digital twin.").replace("\n", " ").strip()
     if len(diag_line) > 96:
         diag_line = diag_line[:93] + "..."
     draw.text((14, h - 50), f"DIAGNOSIS: {diag_line}", fill=(255, 205, 110), font=_HUD_FONT)
@@ -848,8 +857,11 @@ def build_escalation_package(
 
     resolved_zone = _resolve_zone(spec, fault_zone)
     zone_id = resolved_zone["id"] if resolved_zone else None
-    zone_label_es = resolved_zone["label_es"] if resolved_zone else "Inspección General (Sin fallo localizado)"
-    zone_label_en = resolved_zone["label_en"] if resolved_zone else "General Inspection (No localized fault)"
+    zone_label_en = (
+        str(resolved_zone.get("label_en") or resolved_zone.get("label"))
+        if resolved_zone
+        else "General Inspection (No localized fault)"
+    )
     zone_span = (
         f"{resolved_zone['z_start_mm']:.1f} .. {resolved_zone['z_end_mm']:.1f} mm"
         if resolved_zone
@@ -871,73 +883,78 @@ def build_escalation_package(
     _render_annotated_snapshot(spec, png_path, resolved_zone, diagnosis_text, camera_png_bytes, ts_human)
 
     # 3. Markdown Engineering Escalation Report (.md)
-    faults_bullets = "\n".join(
-        f"- {item}" for item in (resolved_zone.get("probable_faults_es", []) if resolved_zone else ["N/A"])
+    faults_list = (
+        resolved_zone.get("probable_faults_en") or resolved_zone.get("probable_faults") or ["N/A"]
+        if resolved_zone
+        else ["N/A"]
     )
-    symptoms_bullets = "\n".join(
-        f"- {item}" for item in (resolved_zone.get("electrical_symptoms", []) if resolved_zone else ["N/A"])
+    symptoms_list = resolved_zone.get("electrical_symptoms") or ["N/A"] if resolved_zone else ["N/A"]
+    actions_list = (
+        resolved_zone.get("recommended_actions_en") or resolved_zone.get("recommended_actions") or ["N/A"]
+        if resolved_zone
+        else ["N/A"]
     )
-    actions_bullets = "\n".join(
-        f"- {item}" for item in (resolved_zone.get("recommended_actions_es", []) if resolved_zone else ["N/A"])
-    )
+    faults_bullets = "\n".join(f"- {item}" for item in faults_list)
+    symptoms_bullets = "\n".join(f"- {item}" for item in symptoms_list)
+    actions_bullets = "\n".join(f"- {item}" for item in actions_list)
     pages_ref = ", ".join(str(p) for p in (resolved_zone.get("manual_pages", [1, 9]) if resolved_zone else [1, 9]))
 
-    report_md = f"""# Dossier de Escalamiento de Ingeniería / Engineering Escalation Report
+    report_md = f"""# Engineering Escalation Report — TZ THT-02 Digital Twin
 
 - **Package ID**: `{package_id}`
-- **Fecha / Timestamp**: `{ts_human}`
+- **Timestamp (UTC)**: `{ts_human}`
 - **Sensor**: `{spec.get("sensor_id", "TZ-THT-02")}` — {spec.get("name", "TZ THT-02")}
-- **Zona Afectada / Fault Zone**: `{zone_id or "NOMINAL"}` — **{zone_label_es}** (*{zone_label_en}*)
-- **Cota Axial / Axial Span**: `{zone_span}` (Envolvente total: `140.0 mm × Ø16.0 mm`)
-- **Páginas del Manual V1.1 Relacionadas**: Páginas `{pages_ref}`
+- **Affected Fault Zone**: `{zone_id or "NOMINAL"}` — **{zone_label_en}**
+- **Axial Span**: `{zone_span}` (Total rigid envelope: `140.0 mm × Ø16.0 mm`)
+- **Cited Manual V1.1 Pages**: Pages `{pages_ref}`
 
-## 1. Diagnóstico en Campo / Field Diagnosis
-{diagnosis_text.strip() or "Sin diagnóstico textual adicional."}
+## 1. Field Diagnosis
+{diagnosis_text.strip() or "No additional textual diagnosis recorded."}
 
-## 2. Notas del Operador / Operator Notes
-{operator_notes.strip() or "Sin notas manuales registradas por el operador."}
+## 2. Operator Notes
+{operator_notes.strip() or "No manual operator notes recorded."}
 
-## 3. Matriz Técnica de Zona (`{zone_id or "general"}`)
-### Causas Físicas Probables
+## 3. Zone Technical Matrix (`{zone_id or "general"}`)
+### Probable Physical Causes
 {faults_bullets}
 
-### Síntomas Eléctricos / Modbus RTU Asociados
+### Associated Electrical & Modbus-RTU Symptoms
 {symptoms_bullets}
 
-### Acciones Correctivas Recomendadas
+### Recommended Corrective Actions
 {actions_bullets}
 
-## 4. Manifiesto de Artefactos Adjuntos / Artifact Manifest
-| Archivo | Tipo | Tamaño (Bytes) | SHA-256 (16-hex) |
+## 4. Attached Artifact Manifest
+| Filename | Artifact Type | Size (Bytes) | SHA-256 (16-hex) |
 | :--- | :--- | ---: | :--- |
-| `{dxf_path.name}` | Plano AutoCAD R2010 (`140×16mm` + `FAULT_CALLOUT`) | {dxf_path.stat().st_size} | `{_sha256_short(dxf_path)}` |
-| `{stl_path.name}` | Malla Sólida 3D Binaria `.STL` (Escala 1:1 mm) | {stl_path.stat().st_size} | `{_sha256_short(stl_path)}` |
-| `{png_path.name}` | Captura Anotada con Telemetría HUD | {png_path.stat().st_size} | `{_sha256_short(png_path)}` |
+| `{dxf_path.name}` | AutoCAD R2010 Blueprint (`140×16mm` + `FAULT_CALLOUT`) | {dxf_path.stat().st_size} | `{_sha256_short(dxf_path)}` |
+| `{stl_path.name}` | Binary 3D Solid Mesh `.STL` (1:1 mm scale) | {stl_path.stat().st_size} | `{_sha256_short(stl_path)}` |
+| `{png_path.name}` | Annotated Telemetry HUD Snapshot | {png_path.stat().st_size} | `{_sha256_short(png_path)}` |
 """
     md_path.write_text(report_md, encoding="utf-8")
 
     # 4. RFC-5322 Store-and-Forward Offline Outbox Email (.eml)
     sender = "fieldscan-copilot@edge-iq9075.local"
-    recipient = "mantenimiento-ingenieria@planta-industrial.local"
-    subject = f"[FIELDSCAN ESCALATION] {spec.get('sensor_id', 'TZ-THT-02')} | Zona: {zone_id or 'GENERAL'} ({package_id})"
+    recipient = "engineering-support@industrial-plant.local"
+    subject = f"[FIELDSCAN ESCALATION] {spec.get('sensor_id', 'TZ-THT-02')} | Zone: {zone_id or 'GENERAL'} ({package_id})"
     msg_id = make_msgid(domain="edge-iq9075.local")
     date_hdr = format_datetime(now_utc)
 
     email_body = (
-        f"PAQUETE DE ESCALAMIENTO OFFLINE (STORE-AND-FORWARD OUTBOX)\n"
-        f"==========================================================\n"
-        f"ID Paquete : {package_id}\n"
-        f"Fecha UTC  : {ts_human}\n"
-        f"Equipo     : {spec.get('name', 'TZ THT-02')} ({spec.get('sensor_id', 'TZ-THT-02')})\n"
-        f"Zona Fallo : {zone_id or 'NOMINAL'} - {zone_label_es} [{zone_span}]\n"
-        f"Manual Ref : TZ THT-02 User's Manual V1.1 (Pags. {pages_ref})\n\n"
-        f"DIAGNOSTICO:\n{diagnosis_text.strip() or 'N/A'}\n\n"
-        f"NOTAS DEL OPERADOR:\n{operator_notes.strip() or 'N/A'}\n\n"
-        f"ADJUNTOS TECNICOS:\n"
-        f"  1. {dxf_path.name} (Plano AutoCAD R2010 con capa FAULT_CALLOUT)\n"
-        f"  2. {stl_path.name} (Modelo 3D binario STL 140mm x 16mm)\n"
-        f"  3. {png_path.name} (Evidencia visual anotada)\n"
-        f"  4. {md_path.name} (Reporte de ingenieria en Markdown)\n"
+        f"OFFLINE ENGINEERING ESCALATION PACKAGE (STORE-AND-FORWARD OUTBOX)\n"
+        f"=================================================================\n"
+        f"Package ID : {package_id}\n"
+        f"Timestamp  : {ts_human}\n"
+        f"Equipment  : {spec.get('name', 'TZ THT-02')} ({spec.get('sensor_id', 'TZ-THT-02')})\n"
+        f"Fault Zone : {zone_id or 'NOMINAL'} - {zone_label_en} [{zone_span}]\n"
+        f"Manual Ref : TZ THT-02 User's Manual V1.1 (Pages {pages_ref})\n\n"
+        f"FIELD DIAGNOSIS:\n{diagnosis_text.strip() or 'N/A'}\n\n"
+        f"OPERATOR NOTES:\n{operator_notes.strip() or 'N/A'}\n\n"
+        f"TECHNICAL ATTACHMENTS:\n"
+        f"  1. {dxf_path.name} (AutoCAD R2010 Blueprint with FAULT_CALLOUT layer)\n"
+        f"  2. {stl_path.name} (Binary 3D STL Mesh 140.0mm x 16.0mm)\n"
+        f"  3. {png_path.name} (Annotated visual inspection snapshot)\n"
+        f"  4. {md_path.name} (Markdown engineering escalation report)\n"
     )
 
     msg = EmailMessage()
@@ -1007,7 +1024,8 @@ def build_escalation_package(
         "sensor_id": spec.get("sensor_id", "TZ-THT-02"),
         "timestamp_utc": ts_human,
         "fault_zone": zone_id,
-        "fault_zone_label_es": zone_label_es,
+        "fault_zone_label": zone_label_en,
+        "fault_zone_label_en": zone_label_en,
         "diagnosis_text": diagnosis_text,
         "operator_notes": operator_notes,
         "generated_in_ms": generated_in_ms,

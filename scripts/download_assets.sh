@@ -48,7 +48,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 uv sync --extra dev
 
-echo "[3/3] Downloading LiquidAI LFM3-VL-2B, LFM3-Audio-2B & Piper Spanish Voice..."
+echo "[3/3] Downloading LiquidAI LFM3-VL-2B, LFM3-Audio-2B & Piper English Voice (en_US-lessac-medium)..."
 VENDOR_ROOT="${VENDOR_ROOT}" uv run python -c "
 from huggingface_hub import hf_hub_download
 import os, pathlib
@@ -67,8 +67,8 @@ for repo, fname in [
     hf_hub_download(repo_id=repo, filename=fname, local_dir=str(models_dir))
 
 for fname in [
-    'es/es_ES/davefx/medium/es_ES-davefx-medium.onnx',
-    'es/es_ES/davefx/medium/es_ES-davefx-medium.onnx.json',
+    'en/en_US/lessac/medium/en_US-lessac-medium.onnx',
+    'en/en_US/lessac/medium/en_US-lessac-medium.onnx.json',
 ]:
     print(' -> rhasspy/piper-voices', fname)
     hf_hub_download(repo_id='rhasspy/piper-voices', filename=fname, local_dir=str(piper_dir))

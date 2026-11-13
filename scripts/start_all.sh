@@ -81,7 +81,8 @@ VL_MODEL="${MODELS_DIR}/LFM3-VL-2B-QAD-Q4_0.gguf"
 VL_MMPROJ="${MODELS_DIR}/mmproj-LFM3-VL-2B-Q8_0.gguf"
 AUDIO_MODEL="${MODELS_DIR}/LFM3-Audio-2B-Q4_0.gguf"
 AUDIO_MMPROJ="${MODELS_DIR}/mmproj-LFM3-Audio-2B-Q4_0.gguf"
-export PIPER_VOICE_MODEL="${PIPER_VOICE_MODEL:-${VENDOR_ROOT}/piper/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx}"
+export PIPER_VOICE_MODEL="${PIPER_VOICE_MODEL:-${VENDOR_ROOT}/piper/en/en_US/lessac/medium/en_US-lessac-medium.onnx}"
+export FIELDSCAN_PIPER_ONNX="${FIELDSCAN_PIPER_ONNX:-${PIPER_VOICE_MODEL}}"
 
 mkdir -p "${PROJECT_ROOT}/logs"
 
@@ -107,7 +108,7 @@ else
   echo "[1/3] LiquidAI/LFM3-VL-2B already active on 127.0.0.1:8091"
 fi
 
-# 2. Start LiquidAI LFM3-Audio-2B (Offline Spanish Speech ASR) on 127.0.0.1:8092
+# 2. Start LiquidAI LFM3-Audio-2B (Offline English Speech ASR) on 127.0.0.1:8092
 if [[ -f "${AUDIO_MODEL}" ]] && ! curl --noproxy '*' -sf http://127.0.0.1:8092/health >/dev/null 2>&1; then
   echo "[2/3] Starting LiquidAI/LFM3-Audio-2B on 127.0.0.1:8092 (${THREADS} threads)..."
   nohup "${LLAMA_SERVER_BIN}" \

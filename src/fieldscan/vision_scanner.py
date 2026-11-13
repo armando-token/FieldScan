@@ -1082,6 +1082,8 @@ class VisionScanner:
             "anomaly_z_mm": anomaly_z_mm,
             "anomaly_confidence": anomaly_confidence,
             "pcb_open_detected": pcb_open_detected,
+            "dip_focus_pt": list(anomaly_world_pt) if (pcb_open_detected and anomaly_world_pt) else None,
+            "scan_coverage_pct": 94 if detected else 28,
             "sim_mode": sim_mode,
             "camera_source": camera_source,
             "fps": round(float(fps), 1),
@@ -1109,6 +1111,10 @@ class VisionScanner:
         with self._lock:
             self._frame_seq += 1
             telemetry["frame_seq"] = self._frame_seq
+            telemetry["scan_coverage_pct"] = (
+                min(98, 86 + min(12, self._frame_seq)) if telemetry.get("detected") else 28
+            )
+            self._latest_raw_bgr = raw_bgr
             if ok_hud:
                 self._latest_hud_jpeg = buf_hud.tobytes()
             if ok_raw:
@@ -1151,6 +1157,122 @@ class VisionScanner:
             with self._lock:
                 data = self._latest_raw_jpeg
         return data
+
+    def get_dip_focus_jpeg(self) -> bytes:
+        """Crop & enlarge (2.2x zoom with crisp HUD reticle `DIP-8 PIN FOCUS · ON=1`) the central PCB / DIP-8 region."""
+        with self._lock:
+            raw_bgr = getattr(self, "_latest_raw_bgr", None)
+            raw_jpg = self._latest_raw_jpeg
+            tel = dict(self._latest_telemetry)
+
+        if raw_bgr is None:
+            if not raw_jpg:
+                self.step_once()
+                with self._lock:
+                    raw_bgr = getattr(self, "_latest_raw_bgr", None)
+                    raw_jpg = self._latest_raw_jpeg
+                    tel = dict(self._latest_telemetry)
+            if raw_bgr is None and raw_jpg:
+                arr = np.frombuffer(raw_jpg, dtype=np.uint8)
+                raw_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
+        if raw_bgr is None or raw_bgr.size == 0:
+            raw_bgr = np.zeros((270, 480, 3), dtype=np.uint8)
+
+        h, w = raw_bgr.shape[:2]
+        focus_pt = tel.get("dip_focus_pt")
+        bbox = tel.get("bbox") or [0, 0, 0, 0]
+        if isinstance(focus_pt, (list, tuple)) and len(focus_pt) == 2:
+            fx, fy = int(focus_pt[0]), int(focus_pt[1])
+        elif tel.get("detected") and len(bbox) == 4 and bbox[2] > 20 and bbox[3] > 10:
+            # Upper barrel / internal DIP-8 PCB sits around 62% along gland->strainer axis
+            fx = int(bbox[0] + bbox[2] * 0.62)
+            fy = int(bbox[1] + bbox[3] * 0.50)
+        else:
+            fx, fy = w // 2, h // 2
+
+        out_w, out_h = 528, 286
+        zoom = 2.2
+        crop_w = max(64, min(w, int(round(out_w / zoom))))
+        crop_h = max(48, min(h, int(round(out_h / zoom))))
+
+        x0 = max(0, min(w - crop_w, fx - crop_w // 2))
+        y0 = max(0, min(h - crop_h, fy - crop_h // 2))
+        roi = raw_bgr[y0 : y0 + crop_h, x0 : x0 + crop_w]
+        zoomed = cv2.resize(roi, (out_w, out_h), interpolation=cv2.INTER_CUBIC)
+
+        # Top HUD header bar: "DIP-8 PIN FOCUS · ON=1"
+        cv2.rectangle(zoomed, (0, 0), (out_w, 32), (14, 19, 28), -1)
+        cv2.line(zoomed, (0, 32), (out_w, 32), (245, 195, 40), 1)
+        cv2.putText(
+            zoomed,
+            "DIP-8 PIN FOCUS",
+            (12, 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.50,
+            (248, 250, 252),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.circle(zoomed, (162, 17), 2, (56, 189, 248), -1, cv2.LINE_AA)
+        cv2.putText(
+            zoomed,
+            "ON=1  [2.2X MACRO]",
+            (172, 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.48,
+            (125, 225, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+        pcb_open = bool(tel.get("pcb_open_detected"))
+        tag_col = (40, 165, 255) if pcb_open else (90, 175, 95)
+        tag_txt = "PCB EXPOSED" if pcb_open else "BARREL CLOSED"
+        cv2.rectangle(zoomed, (out_w - 134, 6), (out_w - 10, 26), tag_col, -1)
+        cv2.putText(
+            zoomed,
+            tag_txt,
+            (out_w - 126, 21),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            (252, 252, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+        # Precision DIP-8 corner reticle & 1..8 binary weight scale
+        rx0, ry0, rx1, ry1 = 104, 72, out_w - 104, out_h - 54
+        ret_col = (56, 215, 255) if pcb_open else (210, 200, 60)
+        brk = 20
+        for cx_b, cy_b, sx, sy in (
+            (rx0, ry0, 1, 1),
+            (rx1, ry0, -1, 1),
+            (rx0, ry1, 1, -1),
+            (rx1, ry1, -1, -1),
+        ):
+            cv2.line(zoomed, (cx_b, cy_b), (cx_b + sx * brk, cy_b), ret_col, 2, cv2.LINE_AA)
+            cv2.line(zoomed, (cx_b, cy_b), (cx_b, cy_b + sy * brk), ret_col, 2, cv2.LINE_AA)
+
+        # 8-pin alignment guide along bottom HUD strip
+        cv2.rectangle(zoomed, (0, out_h - 28), (out_w, out_h), (14, 19, 28), -1)
+        weights = (128, 64, 32, 16, 8, 4, 2, 1)
+        for idx, wt in enumerate(weights):
+            px = rx0 + 18 + int(idx * ((rx1 - rx0 - 36) / 7.0))
+            cv2.line(zoomed, (px, ry1 - 4), (px, ry1 + 5), ret_col, 1, cv2.LINE_AA)
+            cv2.putText(
+                zoomed,
+                f"{idx + 1}:{wt}",
+                (px - 16, out_h - 9),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                (195, 220, 240),
+                1,
+                cv2.LINE_AA,
+            )
+
+        ok, enc = cv2.imencode(".jpg", zoomed, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
+        return enc.tobytes() if ok else self.get_latest_jpeg()
 
     def get_telemetry(self) -> dict[str, Any]:
         """Return latest thread-safe OpenCV telemetry dictionary."""

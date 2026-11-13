@@ -86,8 +86,8 @@ def address_to_dip_bits(address: int) -> list[int]:
     return [1 if (val & w) else 0 for w in DIP_WEIGHTS]
 
 
-def describe_dip_pins_es(address: int) -> dict[str, Any]:
-    """Generate human-friendly Spanish pin instructions for a target Modbus Slave ID."""
+def describe_dip_pins(address: int) -> dict[str, Any]:
+    """Generate crisp Industrial English DIP-8 pin instructions for a target Modbus Slave ID."""
     addr = max(1, min(247, int(address)))
     bits = address_to_dip_bits(addr)
     on_pins = [idx + 1 for idx, b in enumerate(bits) if b == 1]
@@ -95,12 +95,19 @@ def describe_dip_pins_es(address: int) -> dict[str, Any]:
     weights_used = [DIP_WEIGHTS[p - 1] for p in on_pins]
     sum_expr = " + ".join(str(w) for w in weights_used) + f" = {addr}" if weights_used else "0"
 
-    if len(on_pins) == 1:
-        pin_txt = f"sube únicamente el Pin {on_pins[0]} a ON y deja los demás pines ({', '.join(map(str, off_pins))}) en OFF"
+    if on_pins == [8]:
+        pin_txt = "Set Pins 1 through 7 to OFF and flip Pin 8 to ON"
+    elif on_pins == [1]:
+        pin_txt = "Flip Pin 1 to ON (128) and set Pins 2 through 8 to OFF"
+    elif len(on_pins) == 1:
+        pin_txt = (
+            f"Flip only Pin {on_pins[0]} to ON ({sum_expr}) "
+            f"and set Pins {', '.join(map(str, off_pins))} to OFF"
+        )
     else:
         pin_txt = (
-            f"sube los Pines {', '.join(map(str, on_pins))} a ON ({sum_expr}) "
-            f"y coloca los Pines {', '.join(map(str, off_pins))} en OFF"
+            f"Flip Pins {', '.join(map(str, on_pins))} to ON ({sum_expr}) "
+            f"and set Pins {', '.join(map(str, off_pins))} to OFF"
         )
 
     return {
@@ -111,13 +118,21 @@ def describe_dip_pins_es(address: int) -> dict[str, Any]:
         "on_pins": on_pins,
         "off_pins": off_pins,
         "sum_expression": sum_expr,
-        "instruction_es": pin_txt,
+        "instruction": pin_txt,
+        "instruction_en": pin_txt,
     }
 
 
 def build_read_registers_request(slave_id: int = 1, start_reg: int = 0x0000, count: int = 8) -> bytes:
     """Build Function 0x03 Read Holding Registers frame (e.g. `01 03 00 00 00 08 44 0C` on Page 7)."""
     pdu = struct.pack(">BBHH", slave_id & 0xFF, 0x03, start_reg & 0xFFFF, count & 0xFFFF)
+    return append_crc16(pdu)
+
+
+def build_write_single_coil_request(slave_id: int, coil_addr: int, turn_on: bool) -> bytes:
+    """Build Function 0x05 Write Single Coil RTU frame (`0xFF00` = ON, `0x0000` = OFF + CRC-16) for optional RS-485 Andon relay boards."""
+    coil_val = 0xFF00 if turn_on else 0x0000
+    pdu = struct.pack(">BBHH", slave_id & 0xFF, 0x05, coil_addr & 0xFFFF, coil_val)
     return append_crc16(pdu)
 
 
@@ -531,9 +546,9 @@ class ModbusRTUScanner:
                 tx_hex=format_hex(tx_probe),
                 rx_hex="",
                 roundtrip_ms=80.0 if hw_present else 0.0,
-                status_label="BUS TIMEOUT · SIN SEÑAL RS-485"
+                status_label="BUS TIMEOUT · NO RS-485 SIGNAL"
                 if hw_present
-                else "USB-RS485 NO CONECTADO",
+                else "USB-RS485 ADAPTER DISCONNECTED",
             )
 
         # 2. Deterministic Workbench Bus Simulation modes (for VM & rehearsal)
@@ -553,7 +568,7 @@ class ModbusRTUScanner:
                 tx_hex=tx_hex,
                 rx_hex="",
                 roundtrip_ms=52.0,
-                status_label="SIN SEÑAL MODBUS (TIMEOUT)",
+                status_label="NO MODBUS SIGNAL (TIMEOUT)",
             )
 
         if mode == "sim_abnormal_7fff":
@@ -574,7 +589,7 @@ class ModbusRTUScanner:
                 tx_hex=tx_hex,
                 rx_hex=format_hex(rx),
                 roundtrip_ms=11.4,
-                status_label="ALARMA 7FFFH · SONDA SHT30 ANORMAL",
+                status_label="ALARM 7FFFH · SHT30 PROBE ABNORMAL",
             )
 
         if mode == "sim_breath_test":
@@ -607,8 +622,54 @@ class ModbusRTUScanner:
             tx_hex=tx_hex,
             rx_hex=format_hex(rx),
             roundtrip_ms=11.8,
-            status_label="SCADA ONLINE · SEÑAL VALIDADA",
+            status_label="SCADA ONLINE · SIGNAL VERIFIED",
         )
+
+    def drive_andon_relay(self, tier_color: str, relay_slave_id: int = 2) -> dict[str, Any]:
+        """Build (and optionally transmit over RS-485) Function 0x05 coil frames for a 3-tier Andon stacklight."""
+        clean_tier = (tier_color or "RED").strip().upper()
+        coil_states = {
+            0: clean_tier == "RED",
+            1: clean_tier == "YELLOW",
+            2: clean_tier == "GREEN",
+        }
+        frames_hex: list[str] = []
+        raw_frames: list[bytes] = []
+        for c_addr, on_flag in coil_states.items():
+            frm = build_write_single_coil_request(slave_id=relay_slave_id, coil_addr=c_addr, turn_on=on_flag)
+            raw_frames.append(frm)
+            frames_hex.append(format_hex(frm))
+
+        transmitted = False
+        with self._lock:
+            port_name = self._active_port
+            baud = self._active_baud
+
+        if port_name and not port_name.startswith("sim://") and os.environ.get("FIELDSCAN_ANDON_RELAY_SLAVE"):
+            try:
+                with serial.Serial(
+                    port=port_name,
+                    baudrate=baud,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    timeout=0.05,
+                    write_timeout=0.05,
+                ) as ser:
+                    for frm in raw_frames:
+                        ser.write(frm)
+                        ser.flush()
+                        ser.read(8)
+                    transmitted = True
+            except Exception:
+                transmitted = False
+
+        return {
+            "andon_light": clean_tier,
+            "relay_slave_id": relay_slave_id,
+            "coil_frames_hex": frames_hex,
+            "transmitted_hardware": transmitted,
+        }
 
     def _record_telemetry(
         self,
@@ -636,6 +697,8 @@ class ModbusRTUScanner:
             abnormal = bool(decoded["sensor_abnormal_7fff"]) if decoded else False
             slave_id = decoded["reported_slave_id"] if decoded else self.target_slave_id
             dip_bits = decoded["dip_bits"] if decoded else address_to_dip_bits(self.target_slave_id)
+            healthy = bool(online and not abnormal and temp_c is not None and hum_rh is not None)
+            andon_light = "GREEN" if healthy else "RED"
 
             if online and temp_c is not None and hum_rh is not None:
                 self._history.append(
@@ -648,7 +711,8 @@ class ModbusRTUScanner:
 
             payload: dict[str, Any] = {
                 "online": online,
-                "healthy": bool(online and not abnormal and temp_c is not None and hum_rh is not None),
+                "healthy": healthy,
+                "andon_light": andon_light,
                 "sensor_abnormal_7fff": abnormal,
                 "mode": mode,
                 "source": source,

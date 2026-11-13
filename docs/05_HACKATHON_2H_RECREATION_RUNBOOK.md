@@ -1,49 +1,54 @@
-# 05 — Runbook de Recreación en 2 Horas (`6:30 PM – 8:30 PM`) + Guion Ganador (120 Segundos)
+# 05 — 2-Hour Hackathon Recreation Runbook (`6:30 PM – 8:30 PM`) & 120-Second English Judge Pitch
 
-Este plan cronometrado evita cualquier bloqueo técnico mañana en **On-Device AI Hackathon: Cleared for Takeoff ✈️ (Qualcomm × Liquid AI)** con el nuevo flujo v2.0 (**Autodiagnóstico en Vivo + Reparación Guiada DIP-8 + Validación SCADA `FT2232HL` RS-485 + Dossier 4-Vistas al Fabricante**).
+This time-boxed runbook eliminates every hardware, serial-port, and offline-network bottleneck at the **On-Device AI Hackathon: Cleared for Takeoff (Qualcomm × Liquid AI)** for FieldScan CAD v2.0 (**Live Visual Autodiagnosis + Guided `DIP-8` Repair + `FT2232HL` RS-485 SCADA Validation + 4-View Manufacturer Warranty Dossier**).
 
 ---
 
-## Antes de que Apaguen el Wi-Fi (`5:30 PM – 6:35 PM` · Pre-vuelo obligatorio)
+## Pre-Flight Checklist Before Wi-Fi Cutoff (`5:30 PM – 6:35 PM` · Mandatory)
 
-1. **Enchufar hardware al Qualcomm IQ9 (`IQ-9075`) vía Hub USB-C**:
-   - **Cámara Acer 4K USB** (destapar cobertor físico de privacidad de la lente).
-   - **Convertidor Industrial `FT2232HL` USB a 2CH RS-485** cableado al `TZ THT-02` (`Amarillo→A+`, `Verde→B-`, `Rojo→+Fuente DC`, `Negro→GND común`).
-   - Dar permisos instantáneos al puerto serie en Linux:
+1. **Attach Physical Hardware to the Qualcomm Dragonwing IQ-9075 (`IQ9`) via USB-C 3.0 Hub on `JUSB1`**:
+   - **Acer 4K USB Camera** (slide open the physical lens privacy shutter).
+   - **`FT2232HL` Dual-Channel Isolated USB-to-RS485 Converter** wired to the **`Tzone TZ THT-02`** (`Red -> DC 5-24V+`, `Black -> Common GND`, `Yellow -> RS485 A+`, `Green -> RS485 B-`).
+   - Grant immediate user-space serial and video permissions on Linux:
      ```bash
      sudo chmod 666 /dev/ttyUSB*
      ls -l /dev/video* /dev/ttyUSB*
      ```
-2. **Pre-cachear binarios y modelos (mientras hay Wi-Fi rápido)**:
+2. **Pre-Cache Native Binaries, GGUF Weights & English Voice Models (While Venue Wi-Fi Is Active)**:
    ```bash
    ./scripts/download_assets.sh
    ```
-   *(O copiar tu carpeta `vendor/` de `2.4 GB` desde un pendrive USB-C como respaldo instantáneo).*
+   *(Keep a USB-C flash drive backup of the `~2.4 GB` `vendor/` folder in your pocket for instant zero-network recovery).*
 
 ---
 
-## Construcción Orgánica en las 2 Horas (`6:30 PM – 8:30 PM`)
+## Organic 2-Hour Build Schedule (`6:30 PM – 8:30 PM`)
 
-| Minuto | Bloque | Qué se conecta ("El Pegamento") | Verificación rápida |
+| Minute | Build Block | Core Integration ("The Glue") | Instant Verification |
 | :---: | :--- | :--- | :--- |
-| `00–20` | **Bloque 1: Motor Liquid AI** | Levantar `llama-server` en `127.0.0.1:8091` (`LFM3-VL-2B`, `--reasoning off --reasoning-budget 0`) y `127.0.0.1:8092` (`LFM3-Audio-2B`). | `curl --noproxy '*' http://127.0.0.1:8091/health` → `{"status":"ok"}` |
-| `20–45` | **Bloque 2: Ficha PDF + Bus Modbus-RTU** | Conectar `pdf_ingest.py` (`THT02_Users_Manual_v1.1.pdf`) y `modbus_rtu.py` (`FT2232HL`, CRC-16 `0xA001`, trama `01 03 00 00 00 08 44 0C`, matemática DIP-8). | Ver `01 03 00 00 00 08 44 0C` y lectura real `°C / %RH`. |
-| `45–75` | **Bloque 3: Cámara 30 FPS + Coordinador de Reparación** | Conectar `vision_scanner.py` + `live_repair.py` + `cad_exporter.py` (evidencia Antes/Durante/Después + lámina 4-ángulos + `.DXF`/`.STL`/`.EML`). | Probar transición reactiva cero-clic al energizar el sensor. |
-| `75–105` | **Bloque 4: Estudio Three.js 60 FPS + Tarjeta SCADA** | Conectar `server.py` (`127.0.0.1:8088`) con `static/index.html` + `static/app.js` (gemelo 3D explosivo, palancas DIP-8 animadas, tarjeta SCADA en vivo). | Rotar gemelo 3D a 60 FPS y ver capturas WebGL de 4 vistas. |
-| `105–120` | **Bloque 5: Simulacro Final en Modo Avión** | **Apagar nosotros mismos el Wi-Fi 15 min antes que los jueces**, poner el THT-02 abierto con DIP mal puesto y fuente apagada, y ensayar 3 veces. | Badges `MODO AVIÓN: VERIFICADO` y `MODBUS: EN LÍNEA` listos. |
+| `00–20` | **Block 1: Liquid AI Local Engine** | Launch `llama-server` on `127.0.0.1:8091` (`LiquidAI/LFM3-VL-2B-GGUF`, `--reasoning off --reasoning-budget 0 --image-max-tokens 128`) and `127.0.0.1:8092` (`LiquidAI/LFM3-Audio-2B-GGUF` English ASR) + load `Piper` `en_US-lessac-medium.onnx`. | `curl --noproxy '*' http://127.0.0.1:8091/health` → `{"status":"ok"}` |
+| `20–45` | **Block 2: PDF Blueprint + Modbus-RTU Bus** | Wire `pdf_ingest.py` (`THT02_Users_Manual_v1.1.pdf`) and `modbus_rtu.py` (`FT2232HL` dual-channel scan, CRC-16 `0xA001`, poll frame `01 03 00 00 00 08 44 0C`, `0x7FFF` sentinel, `DIP-8` binary switch math). | Confirm `01 03 00 00 00 08 44 0C` poll and live `°C / %RH` decode. |
+| `45–75` | **Block 3: 30 FPS Vision + Live Repair Loop** | Connect `vision_scanner.py` + `live_repair.py` + `cad_exporter.py` (Before/During/After photo audit strip + 4-angle CAD sheet + `.DXF`/`.STL`/`.EML` offline outbox). | Verify zero-click reactive transition when DC power energizes the sensor. |
+| `75–105` | **Block 4: Widescreen Open-Source HMI** | Connect `server.py` (`127.0.0.1:8088`) with local `static/vendor/` (`Three.js v0.170` 60 FPS twin & red fault stain comparison, `uPlot v1.6.32` SCADA chart, `Lucide v1.72`, `Open Props`, 3-Tier `Red/Amber/Green` Andon Stack Light). | Orbit 3D twin at `60 FPS`, verify `uPlot` trace and 4-view WebGL capture. |
+| `105–120` | **Block 5: Airplane-Mode Dress Rehearsal** | **Turn off Wi-Fi ourselves 15 minutes before the judges**, stage the physical `TZ THT-02` unscrewed with misconfigured `DIP-8` pins and DC power OFF, and run 3 full rehearsals. | Confirm `AIRPLANE MODE: VERIFIED (0 EXT SOCKETS)` and Andon transitions. |
 
 ---
 
-## Guion Exacto de Demo en Vivo Frente a los Jueces (`8:30 PM` · 120 Segundos)
+## Winning 120-Second Live English Pitch Script (`8:30 PM` · Judge Demo)
 
-1. **`0:00 – 0:20` · El Caso Real en Planta (con el `TZ THT-02` abierto y apagado en tu mano)**:
-   > *"Imaginen una planta minera, un buque o un hangar sin internet. Encontramos este transmisor industrial `TZ THT-02` abierto, desconfigurado y muerto en la línea RS-485. No tenemos nube ni archivos CAD, solo un PDF técnico en 2D y este Qualcomm IQ9."*
-2. **`0:20 – 0:50` · Autodiagnóstico Visual + Voz en Tiempo Real (Etapas 1 y 2)**:
-   - Muestras el sensor abierto bajo la **Acer 4K** y hablas: **"Encontré este sensor abierto y no funciona. Lo necesito en modo Modbus estándar, mira los pines."**
-   - El gemelo **Three.js 60 FPS se explota solo** mostrando la PCB interna y el bloque DIP-8; la IA cruza la cámara con la Página 4 del manual y **te responde hablándote**: *"La carcasa está abierta, no hay señal RS-485 y los pines DIP están mal configurados. Para Modo Modbus Esclavo 1 a 9600 bps, baja los pines 1 al 7 a OFF y sube únicamente el Pin 8 a ON. Luego enchúfalo."*
-3. **`0:50 – 1:30` · El Momento Mágico "Cero-Clic" (Reparación Física + SCADA en Vivo)**:
-   - Frente a los jueces, mueves el **Pin 8 a ON** con un destornillador fino y **enciendes la fuente / enchufas el conector al `FT2232HL`**.
-   - **¡Sin tocar el teclado ni el mouse!**, el Qualcomm IQ9 detecta tramas Modbus-RTU reales (`CRC-16 OK`), cierra el gemelo 3D, pinta la temperatura y humedad reales de la sala en pantalla y **la IA habla sola**: *"¡Conectado y funcionando correctamente! Ya recibo señal válida en el esclavo 1..."*
-   - Soplas suavemente sobre la punta del sensor → **la humedad `%RH` sube en vivo en la pantalla frente a los jueces**.
-4. **`1:30 – 2:00` · Cierre Ejecutivo: Dossier 3D de 4 Ángulos + Planos AutoCAD para Garantía**:
-   - Pulsas **`📐 4. Dossier 4-Vistas Fabricante`**: el sistema toma 4 planos 3D acotados (`Isométrica`, `Frontal 140×Ø16 mm`, `Explotada DIP-8`, `Prensaestopas IP65`), adjunta las fotos **Antes / Durante / Después**, exporta `.DXF` + `.STL` y deja en bandeja offline el correo técnico preguntándole al fabricante si la intervención conserva garantía IP65.
+1. **`0:00 – 0:20` · The Real-World Plant Problem (holding the unscrewed, unpowered `TZ THT-02` in hand)**:
+   > *"Imagine an underground mine, an offshore rig, or an aircraft hangar with zero internet. We just found this industrial `TZ THT-02` transmitter unscrewed, misconfigured, and completely silent on the RS-485 bus. We have no cloud and no 3D CAD files—only a flat 2D PDF manual and this Qualcomm Dragonwing IQ-9075 running 100% offline."*
+
+2. **`0:20 – 0:50` · Live Visual + Spoken English Autodiagnosis (Stages 1 & 2 · Andon `RED` → `AMBER`)**:
+   - Place the open sensor under the **Acer 4K** camera and speak in English: **"I found this sensor open and dead on the RS-485 line. Configure it for standard Modbus Slave 1—check the DIP switches."**
+   - The **`Three.js v0.170` 60 FPS digital twin automatically explodes**, highlighting the internal PCB and red fault zone while the **3-Tier Andon Stack Light shifts from Red to Amber**. Cross-referencing Manual Pages 4 and 5, `LFM3-VL-2B` + `Piper Neural TTS` (`en_US-lessac-medium.onnx`) speaks back in `< 60 ms`:
+     > *"Housing is open, no RS-485 signal is present, and DIP-8 switches are misconfigured at Slave 176. For standard Modbus Slave 1 at 9600 8N1, set Pins 1 through 7 OFF and flip only Pin 8 ON, then power the RS-485 bus."*
+
+3. **`0:50 – 1:30` · The Zero-Click Magic Moment (Physical Repair + Live `uPlot` SCADA · Andon `GREEN`)**:
+   - Live in front of the judges, flip **Pin 8 ON** with a precision screwdriver and **turn ON the 5–24V DC power supply / plug into the `FT2232HL` RS-485 converter**.
+   - **Without touching the keyboard or mouse**, the Qualcomm IQ-9075 detects valid Modbus-RTU frames (`01 03 00 00 00 08 44 0C`, `CRC-16 0xA001 OK`), closes the 3D digital twin, switches the **Andon Stack Light to Solid Green**, plots real room temperature and humidity live on the **`uPlot` SCADA chart**, and **speaks automatically**:
+     > *"Connected and verified! Receiving valid Modbus-RTU telemetry from Slave 1..."*
+   - Gently breathe onto the sintered stainless sensor tip → **judges watch `%RH` climb in real time on the `uPlot` SCADA chart**.
+
+4. **`1:30 – 2:00` · Executive Close: 4-Angle 3D CAD & IP65 Warranty Sign-Off Dossier**:
+   - Click **`4. 4-View Manufacturer Dossier`**: FieldScan captures 4 dimensioned WebGL 3D views (`Isometric`, `Front 140×Ø16 mm`, `Exploded DIP-8`, `IP65 Cable Gland`), attaches the **Before / During / After** camera audit strip, exports AutoCAD **`.DXF`** + **`.STL`**, and queues a complete RFC-5322 **`.EML`** package in the offline outbox requesting manufacturer IP65 warranty sign-off—with zero external network sockets.

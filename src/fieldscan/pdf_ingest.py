@@ -37,49 +37,55 @@ _PDF_IMAGE_CTM_RE = re.compile(
     rb"([+-]?\d+(?:\.\d+)?)\s+cm\s+/([^\s/()<>[\]{}%]+)\s+Do"
 )
 
-# Spoken Spanish/English phonetic normalizations common in Whisper / LFM3-Audio ASR
+# Spoken English phonetic normalizations common in Whisper / LFM3-Audio ASR
 _PHONETIC_REPLACEMENTS: tuple[tuple[str, str], ...] = (
-    ("te hache te", "tht"),
-    ("te hache ese", "ths"),
-    ("te ache te", "tht"),
-    ("te ache ese", "ths"),
-    ("cero cero", "00"),
-    ("cero dos", "02"),
-    ("cero", "0"),
-    ("dos", "2"),
-    ("treinta", "30"),
+    ("tee aitch tee", "tht"),
+    ("tee h tee", "tht"),
+    ("tee aitch ess", "ths"),
+    ("tee h s", "ths"),
+    ("tee aitch pee", "thp"),
+    ("tee h p", "thp"),
+    ("zero zero", "00"),
+    ("zero two", "02"),
+    ("oh two", "02"),
+    ("oh oh", "00"),
+    ("zero", "0"),
+    ("two", "2"),
+    ("thirty", "30"),
 )
 
 _DOMAIN_PHRASES: dict[str, float] = {
-    "sensor de temperatura y humedad": 0.93,
-    "sensor de temperatura": 0.90,
-    "sensor de humedad": 0.89,
-    "sonda de temperatura": 0.89,
-    "sonda de humedad": 0.88,
     "temperature and humidity sensor": 0.93,
+    "temperature and humidity transmitter": 0.93,
+    "rs485 temperature and humidity sensor": 0.95,
     "temperature sensor": 0.88,
     "humidity sensor": 0.88,
-    "sensor rs485": 0.86,
+    "temperature probe": 0.88,
+    "humidity probe": 0.88,
+    "rs485 sensor": 0.90,
+    "sensor rs485": 0.88,
+    "modbus sensor": 0.88,
     "sensor modbus": 0.86,
-    "sonda rs485": 0.86,
     "sht3x": 0.94,
+    "sht30": 0.94,
     "tz sensor": 0.88,
 }
 
 _DOMAIN_TOKENS: set[str] = {
     "tht",
     "ths",
+    "thp",
     "tht02",
     "ths00",
+    "thp02",
     "sht30",
     "sht3x",
     "tz",
-    "temperatura",
     "temperature",
-    "humedad",
     "humidity",
     "sensor",
-    "sonda",
+    "probe",
+    "transmitter",
     "rs485",
     "modbus",
 }
@@ -100,7 +106,7 @@ def load_tht02_spec() -> dict[str, Any]:
 
 
 def load_tht02_datasheet() -> str:
-    """Load and return the full bilingual Markdown technical reference (`THT02_datasheet.md`)."""
+    """Load and return the full Industrial English Markdown technical reference (`THT02_datasheet.md`)."""
     global _DATASHEET_CACHE
     stat = DATASHEET_PATH.stat()
     if _DATASHEET_CACHE is None or _DATASHEET_CACHE[0] != stat.st_mtime_ns:
@@ -237,7 +243,7 @@ def inspect_pdf_document(pdf_path: Path = DEFAULT_PDF_PATH) -> dict[str, Any]:
 
 
 def _normalize_query(raw: str) -> str:
-    """Normalize accents, punctuation, casing, and spoken Spanish phonetic tokens."""
+    """Normalize punctuation, casing, and spoken English ASR phonetic tokens."""
     decomposed = unicodedata.normalize("NFKD", raw or "")
     stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch)).lower()
     cleaned = re.sub(r"[^a-z0-9]+", " ", stripped).strip()
@@ -251,7 +257,7 @@ def _compact_alnum(text: str) -> str:
 
 
 def match_and_load_sensor(query: str) -> dict[str, Any]:
-    """Match spoken/typed sensor queries (including fuzzy ASR like 'sensor THS 00') to TZ THT-02."""
+    """Match spoken/typed sensor queries (including fuzzy ASR like 'THS 00' or 'THP02') to TZ THT-02."""
     t0 = time.perf_counter()
     spec = load_tht02_spec()
     datasheet_md = load_tht02_datasheet()
@@ -271,7 +277,7 @@ def match_and_load_sensor(query: str) -> dict[str, Any]:
         matched = True
     else:
         query_tokens = norm_query.split()
-        # 1) Exact or substring alias matching (covers 'THT-02', 'sensor THS 00', 'THT 02', 'SHT30')
+        # 1) Exact or substring alias matching (covers 'THT-02', 'THS 00', 'THT 02', 'SHT30')
         for alias in aliases:
             norm_alias = _normalize_query(alias)
             comp_alias = _compact_alnum(norm_alias)
@@ -291,7 +297,7 @@ def match_and_load_sensor(query: str) -> dict[str, Any]:
                     best_alias = alias
                     match_reason = "compact_alias_substring"
 
-        # 2) Domain & Spanish/English descriptive phrases ('sensor de temperatura', 'sonda humedad')
+        # 2) Industrial English descriptive domain phrases ('temperature and humidity sensor', 'RS485 sensor')
         if best_score < 0.95:
             for phrase, weight in _DOMAIN_PHRASES.items():
                 if phrase in norm_query and weight > best_score:
@@ -322,7 +328,7 @@ def match_and_load_sensor(query: str) -> dict[str, Any]:
                         best_alias = alias
                         match_reason = "fuzzy_phonetic_alias"
 
-        # 4) Token overlap fallback for general Spanish/English field queries
+        # 4) Token overlap fallback for general English field queries
         overlap = _DOMAIN_TOKENS.intersection(query_tokens)
         if overlap and best_score < 0.82:
             token_score = min(0.88, 0.72 + 0.06 * len(overlap))

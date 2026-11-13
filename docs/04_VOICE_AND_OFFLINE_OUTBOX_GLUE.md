@@ -1,44 +1,45 @@
-# 04 — Pegamento de Voz y Bandeja de Escalación Offline (`Store-and-Forward Outbox`)
+# 04 — Offline English Voice Loop & Store-and-Forward Outbox Glue
 
-Este documento explica cómo resolver los dos puntos donde suelen fallar las demos multimodales cuando apagan el Wi-Fi del salón.
+This document details how FieldScan CAD v2.0 solves the two failure points that break almost every multimodal field demo the moment venue Wi-Fi is switched off: **browser audio capture / offline speech synthesis** and **manufacturer warranty escalation without internet sockets**.
 
 ---
 
-## 1. Cadena Completa de Voz 100% Local (Micrófono Acer 4K → `LFM3-Audio-2B` → `Piper TTS`)
+## 1. Complete 100% On-Device English Voice Chain (Acer 4K Dual Mics → `LFM3-Audio-2B` → `Piper Neural TTS`)
 
-```
-[2 Mics Acer 4K USB]
-   │  MediaRecorder (navegador en http://127.0.0.1:8088)
-   ▼
-[POST /api/voice (WebM/WAV)]
-   │  ffmpeg pipe: convierte cualquier formato de navegador a PCM WAV 16 kHz Mono
-   ▼
+```text
+[Acer 4K Dual USB Microphones]
+   |  Browser MediaRecorder (http://127.0.0.1:8088)
+   v
+[POST /api/voice (WebM / MP4 / WAV)]
+   |  In-memory ffmpeg pipe: normalizes any browser container to 16 kHz Mono PCM WAV
+   v
 [llama-server :8092 — LiquidAI/LFM3-Audio-2B-Q4_0.gguf]
-   │  System: "Perform ASR in Spanish." | User: input_audio base64
-   ▼
-[Texto Transcrito] ──► (Fuzzy Match THT-02 / THS-00  ó  Diagnóstico Multimodal LFM3-VL-2B :8091)
-   ▼
-[Piper Neural TTS (es_ES-davefx-medium.onnx en RAM)]
-   │  Genera respuesta hablada natural en español en ~50 ms (WAV Base64)
-   ▼
-[Altavoces Laptop / Monitor HDMI + Resaltado Rojo en Three.js]
+   |  System: "Perform ASR in English." | User: input_audio Base64 (--reasoning off --reasoning-budget 0)
+   v
+[English Transcript] --> (Fuzzy Part Match THT-02 / THS-00  OR  Multimodal Diagnosis via LFM3-VL-2B :8091)
+   v
+[Piper Neural TTS (en_US-lessac-medium.onnx resident in RAM)]
+   |  Synthesizes crisp spoken English operator guidance in < 60 ms (Base64 WAV)
+   v
+[Workstation / HDMI Speakers + Three.js v0.170 Red Fault Stain + 3-Tier Andon Stack Light]
 ```
 
-> **Nota importante de seguridad del navegador**: Chrome y Firefox permiten `navigator.mediaDevices.getUserMedia({ audio: true })` sin HTTPS **únicamente** cuando entras por **`http://127.0.0.1:8088`** o **`http://localhost:8088`** (nunca por IP LAN `192.168.x.x` sin TLS). Siempre abrir `http://127.0.0.1:8088`.
+> **Critical Browser Security Rule**: Chrome, Firefox, and Safari permit `navigator.mediaDevices.getUserMedia({ audio: true })` without TLS certificates **only** on **`http://127.0.0.1:8088`** or **`http://localhost:8088`** (never over raw LAN addresses like `192.168.x.x` without HTTPS). Always open the workstation at `http://127.0.0.1:8088`.
 
-> **Seguro anti-ruido de salón**: Además del botón de micrófono real, la interfaz incluye **botones de disparo de 1 clic** con las 4 frases exactas de la demo por si hay música o aplausos fuertes durante los 2 minutos del pitch.
+> **Loud Venue Fail-Safe**: Alongside live push-to-talk microphone capture, the HMI includes **1-click English voice-command preset buttons** covering the 4 canonical diagnostic and repair intents, guaranteeing rock-solid execution even if music or applause spikes during the 120-second pitch.
 
 ---
 
-## 2. Cómo Funciona el "Envío al Fabricante / Ingeniería" con el Wi-Fi Apagado
+## 2. Manufacturer Warranty & Engineering Escalation With Wi-Fi Turned Off
 
-Durante la prueba final del hackathon (*"We'll turn off the Wi-Fi"*), cualquier intento de conectar a `smtp.gmail.com` daría timeout o violaría la regla offline.
+During final hackathon judging (*"We'll turn off the Wi-Fi"*), any naive attempt to open a socket to `smtp.gmail.com` or a cloud webhook either hangs on DNS/TCP timeout or violates strict offline compliance.
 
-Por eso implementamos el patrón industrial real **`Store-and-Forward Outbox` (`outbox/` + `exports/`)**:
-1. En `< 60 ms`, `POST /api/escalate` genera localmente:
-   - `THT02_fieldscan_<id>.dxf` (plano técnico 2D/3D para AutoCAD con la zona dañada acotada en rojo),
-   - `THT02_fieldscan_<id>.stl` (modelo 3D en milímetros reales),
-   - `THT02_camera_evidence_<id>.png` (foto real de la cámara Acer 4K con el encuadre de falla de OpenCV),
-   - `THT02_escalation_<id>.eml` (correo estándar RFC-5322 con adjuntos MIME incrustados, listo para abrir en cualquier cliente de correo o despachar automáticamente al reconectar red),
-   - `THT02_escalation_bundle_<id>.zip` (paquete completo descargable por USB).
-2. En la pantalla el jurado ve el **correo técnico completo ya redactado**, con sus archivos CAD adjuntos listos para descargar/abrir y el sello verde **`QUEUED IN OFFLINE OUTBOX (ZERO EXTERNAL SOCKETS)`**.
+FieldScan CAD v2.0 implements an authentic industrial **`Store-and-Forward Outbox` (`outbox/` + `exports/`)**:
+1. In `< 60 ms`, `POST /api/escalate` and `POST /api/repair/signoff` generate locally on disk:
+   - `THT02_fieldscan_<id>.dxf` (AutoCAD R2010 2D/3D engineering drawing with the damaged zone dimensioned in red on layer `FAULT_CALLOUT`),
+   - `THT02_fieldscan_<id>.stl` (1:1 millimeter binary 3D solid mesh),
+   - `THT02_quad_cad_<id>.png` (`1280×800` 4-angle WebGL 3D CAD sheet: `Isometric`, `Front Elevation 140×Ø16 mm`, `Exploded DIP-8`, and `IP65 Cable Gland`),
+   - `THT02_camera_evidence_<id>.png` / `THT02_evidence_strip_<id>.png` (real Acer 4K camera frame and chronological **Before / During / After** inspection strip),
+   - `THT02_escalation_<id>.eml` (standard RFC-5322 MIME message with `X-FieldScan-SignOff-Request: TRUE` and embedded CAD/photo attachments, ready to open in any desktop mail client or auto-dispatch when plant connectivity returns),
+   - `THT02_escalation_bundle_<id>.zip` (single-click portable USB archive).
+2. On screen, judges inspect the **fully drafted English engineering sign-off email**, live CAD download links, and the green verification badge: **`QUEUED IN OFFLINE OUTBOX (ZERO EXTERNAL SOCKETS)`**.

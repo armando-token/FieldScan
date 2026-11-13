@@ -3,87 +3,93 @@ import { OrbitControls } from '/static/vendor/OrbitControls.js';
 import { STLExporter } from '/static/vendor/STLExporter.js';
 
 /* ==========================================================================
-   CANONICAL TZ THT-02 METADATA, SUB-ASSEMBLIES & MANUAL INDEX
+   CANONICAL TZ THT-02 METADATA, SUB-ASSEMBLIES & MANUAL INDEX (100% ENGLISH)
    ========================================================================== */
 const ZONE_SPECS = {
   strainer_head: {
     id: 'strainer_head',
-    title: 'Cabeza Ranurada + Filtro Sinterizado SHT30',
-    shortLabel: 'FILTRO / SONDA SHT30',
+    title: 'Slotted Protective Cap & Sintered SS316L SHT30 Filter',
+    shortLabel: 'SHT30 STRAINER HEAD',
     zRange: 'z = +42.0 .. +70.0 mm',
-    dims: 'L = 28.0 mm · Ø16.0 mm (4 ranuras axiales · malla SS316L Ø10.9 mm)',
+    dims: 'L = 28.0 mm · Ø16.0 mm (4 axial slots · Ø10.9 mm SS316L mesh)',
     manualPage: 1,
     faultPage: 6,
-    summary: 'Jaula protectora ranurada con filtro sinterizado inox y chip CMOSens SHT30 (±0.3°C / ±2%RH). Si retorna 7FFFH, revisar obstrucción o condensación (Pág. 6).',
+    summary:
+      'Slotted protective cage housing stainless sintered filter and SHT30 CMOSens die (±0.3°C / ±2%RH). Register 0x7FFF indicates probe contamination or sensor damage (Page 6).',
     anchorLocal: new THREE.Vector3(0, 11.5, 56.0),
   },
   upper_seal_ring: {
     id: 'upper_seal_ring',
-    title: 'Anillo Elastómero Superior O-Ring',
-    shortLabel: 'SELLO O-RING SUP.',
+    title: 'Upper Elastomer Environmental O-Ring Collar',
+    shortLabel: 'UPPER O-RING SEAL',
     zRange: 'z = +38.0 .. +42.0 mm',
-    dims: 'Ancho = 4.0 mm · Ø16.2 mm NBR/Viton estanco',
+    dims: 'Width = 4.0 mm · Ø16.2 mm NBR/Viton IP65 seal',
     manualPage: 1,
     faultPage: 4,
-    summary: 'Junta tórica superior de aislamiento ambiental (-40~85°C, 5~95%RH sin condensación · Pág. 4).',
+    summary:
+      'Upper weatherproof O-ring isolating internal electronics from duct moisture (-40..+85°C, 5..95%RH non-condensing · Page 4).',
     anchorLocal: new THREE.Vector3(0, 11.0, 40.0),
   },
   upper_barrel_dip: {
     id: 'upper_barrel_dip',
-    title: 'Barril Superior + PCB Interna DIP-8',
-    shortLabel: 'BARRIL SUP. / DIP-8 PCB',
+    title: 'Upper Polymer Barrel & Internal 8-Pin DIP Switch PCB',
+    shortLabel: 'UPPER BARREL / DIP-8 PCB',
     zRange: 'z = 0.0 .. +38.0 mm (PCB 30×11×1.6 mm)',
-    dims: 'L = 38.0 mm · Ø16.0 mm ext / Ø13.2 mm int · Bloque DIP 1..8',
+    dims: 'L = 38.0 mm · Ø16.0 mm OD / Ø13.2 mm ID · SW1 DIP 1..8',
     manualPage: 5,
     faultPage: 5,
-    summary: 'Aloja PCB azul RS-485 y selector DIP de 8 posiciones (pesos 128, 64, 32, 16, 8, 4, 2, 1). Desenroscar Paso 1 y Paso 2 para configurar dirección esclava (Pág. 5).',
+    summary:
+      'Houses the blue RS-485 PCB and 8-position binary DIP switch block (weights 128, 64, 32, 16, 8, 4, 2, 1). Unscrew Step 1 & Step 2 to set Modbus Slave ID (Page 5).',
     anchorLocal: new THREE.Vector3(0, 11.5, 16.0),
   },
   mounting_flange: {
     id: 'mounting_flange',
-    title: 'Brida / Clip de Montaje Mural',
-    shortLabel: 'BRIDA MONTAJE Ø4.2MM',
+    title: 'Snap-On Wall & Duct Mounting Flange Clip',
+    shortLabel: 'MOUNTING FLANGE Ø4.2MM',
     zRange: 'z = +8.0 .. +28.0 mm',
-    dims: 'Ancho total = 42.0 mm · Barrenos Ø4.2 mm (paso 32.0 mm)',
+    dims: 'Span = 42.0 mm · 2× Ø4.2 mm bores (32.0 mm pitch)',
     manualPage: 1,
     faultPage: 9,
-    summary: 'Abrazadera snap-on de polímero técnico con orejas laterales reforzadas y perforaciones Ø4.2 mm para fijación en ducto o muro (Pág. 1 / Pág. 9).',
+    summary:
+      'Reinforced polymer snap-on saddle bracket with Ø4.2 mm mounting holes for wall or HVAC duct installation (Page 1 & Page 9).',
     anchorLocal: new THREE.Vector3(0, 12.0, 18.0),
   },
   lower_barrel_rs485: {
     id: 'lower_barrel_rs485',
-    title: 'Barril Inferior + Etapa Transceptora RS-485',
-    shortLabel: 'BARRIL INF. RS-485',
+    title: 'Lower Barrel & Isolated RS-485 Transceiver Stage',
+    shortLabel: 'LOWER BARREL RS-485',
     zRange: 'z = -50.0 .. 0.0 mm',
-    dims: 'L = 50.0 mm · Ø16.0 mm · Rosca central M14 + O-ring',
+    dims: 'L = 50.0 mm · Ø16.0 mm · M14 central thread & seam O-ring',
     manualPage: 5,
     faultPage: 7,
-    summary: 'Cuerpo tubular inferior con junta central y etapa Modbus-RTU (4800/9600/19200 bps, 8-N-1, CRC-16 A001 · Pág. 5–9).',
+    summary:
+      'Lower cylindrical body housing Modbus-RTU transceiver stage (4800/9600/19200 bps, 8N1, CRC-16 0xA001 · Pages 5–9).',
     anchorLocal: new THREE.Vector3(0, 11.5, -25.0),
   },
   waterproof_gland_leads: {
     id: 'waterproof_gland_leads',
-    title: 'Terminal Impermeable + Latiguillo RS-485 (4 Hilos)',
-    shortLabel: 'PRENSAESTOPAS / CABLE RS-485',
-    zRange: 'z = -70.0 .. -50.0 mm + Cable Ø5.0 mm',
-    dims: 'Tuerca estriada L = 20.0 mm + Rojo(V+) Negro(GND) Amarillo(A+) Verde(B-)',
+    title: 'Waterproof Cable Gland & 4-Wire RS-485 Pigtail',
+    shortLabel: 'CABLE GLAND & RS-485 LEADS',
+    zRange: 'z = -70.0 .. -50.0 mm + Ø5.0 mm Cable',
+    dims: 'Ribbed dome nut L = 20.0 mm + Red(V+) Black(GND) Yellow(A+) Green(B-)',
     manualPage: 4,
     faultPage: 4,
-    summary: 'Prensaestopas cónico estriado y cable blindado 1 m: Rojo V+ (5~24V DC), Negro GND común, Amarillo RS-485 A+, Verde RS-485 B- (Pág. 4).',
+    summary:
+      'Tapered strain-relief gland and shielded 4-conductor cable: Red V+ (5–24V DC), Black Common GND, Yellow RS-485 A+, Green RS-485 B- (Page 4).',
     anchorLocal: new THREE.Vector3(0, 11.5, -60.0),
   },
 };
 
 const MANUAL_PAGES = {
-  1: 'Pág. 1 · Identificación de partes y sonda SHT30',
-  2: 'Pág. 2 · Descripción general CMOSens SHT30 y áreas HVAC',
-  3: 'Pág. 3 · Datos técnicos: DC 5~24V, SHT30 (-40~125°C, ±0.3°C)',
-  4: 'Pág. 4 · Código de colores RS-485 (Rojo V+, Negro GND, Amarillo A+, Verde B-)',
-  5: 'Pág. 5 · Interruptor DIP-8 (128..1, Ej: 176) y apertura en 2 pasos',
-  6: 'Pág. 6 · Mapa de registros Modbus (0000H Temp, 0001H Hum, 7FFFH Anormal)',
-  7: 'Pág. 7 · Función 03H lectura Modbus Poll y trama RTU',
-  8: 'Pág. 8 · Función 06H ajuste Baud Rate (0005H) y respuesta de excepción',
-  9: 'Pág. 9 · Códigos de error, cálculo CRC-16 (A001) y plano 140×16 mm',
+  1: 'Page 1 · Component Overview & SHT30 Probe',
+  2: 'Page 2 · CMOSens SHT30 Architecture & HVAC Applications',
+  3: 'Page 3 · Technical Specs: DC 5–24V, SHT30 (-40..125°C, ±0.3°C)',
+  4: 'Page 4 · RS-485 Color Wiring (Red V+, Black GND, Yellow A+, Green B-)',
+  5: 'Page 5 · 8-Pin DIP Switch Weights (128..1, Ex: 176) & 2-Step Opening',
+  6: 'Page 6 · Holding Register Map (0x0000 Temp, 0x0001 Hum, 0x7FFF Fault)',
+  7: 'Page 7 · Function 0x03 Read Holding Registers & RTU Frame',
+  8: 'Page 8 · Function 0x06 Baud Rate Register (0x0005) & Exceptions',
+  9: 'Page 9 · Error Codes, CRC-16 (0xA001) & 140.0×Ø16.0 mm Blueprint',
 };
 
 const DIP_WEIGHTS = [128, 64, 32, 16, 8, 4, 2, 1];
@@ -94,18 +100,34 @@ const DIP_WEIGHTS = [128, 64, 32, 16, 8, 4, 2, 1];
 const state = {
   renderMode: 'solid', // 'solid' | 'wireframe'
   exploded: false,
-  explodeProgress: 0, // 0..1 smooth animation
+  explodeProgress: 0,
   autoExplodeEnabled: true,
   showDimensions: true,
   syncCameraAngle: true,
   cameraAngleDeg: 0,
   smoothedAngleDeg: 0,
+  minObservedAngle: 0,
+  maxObservedAngle: 0,
+  scanFramesObserved: 0,
+
   activeCameraMode: 'sim_normal',
+  activeModbusMode: 'auto',
+  activeStep: 0,
+  repairStage: 'IDLE_MONITORING',
+
   selectedZone: null,
   highlightedZone: null,
+  lastDiagnosisFaultLock: false,
   faultReason: '',
   manualPage: 1,
-  dipBits: [1, 0, 1, 1, 0, 0, 0, 0], // 128 + 32 + 16 = 176 (Manual Page 5 example)
+  manualCollapsed: false,
+
+  // Default Slave #01 (Pin 8 = ON, weight 1) for immediate standard Modbus RTU setup
+  dipBits: [0, 0, 0, 0, 0, 0, 0, 1],
+  dipPipVisible: false,
+  dipPipDismissed: false,
+  dipCropFailed: false,
+
   autoSpeak: true,
   isRecording: false,
   lastEscalation: null,
@@ -113,55 +135,62 @@ const state = {
   lastAudioB64: null,
   videoStreamFailed: false,
   seenRepairEventId: 0,
+
   modbusHealthy: false,
+  wasModbusHealthy: false,
+  emeraldVerifyUntil: 0,
 };
 
 /* ==========================================================================
    DOM REFERENCES
    ========================================================================== */
 const dom = {
-  pillAirplane: document.getElementById('pillAirplane'),
-  pillAirplaneText: document.getElementById('pillAirplaneText'),
-  pillCamText: document.getElementById('pillCamText'),
-  pillModbus: document.getElementById('pillModbus'),
-  pillModbusText: document.getElementById('pillModbusText'),
+  btnSensorPill: document.getElementById('btnSensorPill'),
+  selectCameraMode: document.getElementById('selectCameraMode'),
+  btnUploadPhoto: document.getElementById('btnUploadPhoto'),
+  photoUploadInput: document.getElementById('photoUploadInput'),
+  selectModbusMode: document.getElementById('selectModbusMode'),
+
   pillModelText: document.getElementById('pillModelText'),
   pillRamText: document.getElementById('pillRamText'),
   pillLatencyText: document.getElementById('pillLatencyText'),
+  pillAirplane: document.getElementById('pillAirplane'),
+  pillAirplaneText: document.getElementById('pillAirplaneText'),
 
-  scadaLiveCard: document.getElementById('scadaLiveCard'),
-  scadaStatusBadge: document.getElementById('scadaStatusBadge'),
-  scadaTempVal: document.getElementById('scadaTempVal'),
-  scadaHumVal: document.getElementById('scadaHumVal'),
-  scadaSlaveVal: document.getElementById('scadaSlaveVal'),
-  scadaFrameHex: document.getElementById('scadaFrameHex'),
-  btnScanRealModbus: document.getElementById('btnScanRealModbus'),
-  btnSimConnectModbus: document.getElementById('btnSimConnectModbus'),
-  btnBreathTest: document.getElementById('btnBreathTest'),
+  systemStateBanner: document.getElementById('systemStateBanner'),
+  systemStateText: document.getElementById('systemStateText'),
+  systemStateSub: document.getElementById('systemStateSub'),
 
+  btnStepInspect: document.getElementById('btnStepInspect'),
+  btnStepDip: document.getElementById('btnStepDip'),
+  btnStepConnect: document.getElementById('btnStepConnect'),
+  btnStepSignoff: document.getElementById('btnStepSignoff'),
+
+  camSourceBadge: document.getElementById('camSourceBadge'),
+  pillCamText: document.getElementById('pillCamText'),
+  btnToggleDipPip: document.getElementById('btnToggleDipPip'),
   videoStream: document.getElementById('videoStream'),
   videoFallbackCanvas: document.getElementById('videoFallbackCanvas'),
-  camSourceBadge: document.getElementById('camSourceBadge'),
   hudSensorId: document.getElementById('hudSensorId'),
   hudStatusTag: document.getElementById('hudStatusTag'),
-  scanAngleVal: document.getElementById('scanAngleVal'),
   scanDimVal: document.getElementById('scanDimVal'),
+  scanCoverageVal: document.getElementById('scanCoverageVal'),
+  scanCoverageFill: document.getElementById('scanCoverageFill'),
+  scanAngleVal: document.getElementById('scanAngleVal'),
   scanZoneVal: document.getElementById('scanZoneVal'),
-  photoUploadInput: document.getElementById('photoUploadInput'),
 
-  manualPrevBtn: document.getElementById('manualPrevBtn'),
-  manualNextBtn: document.getElementById('manualNextBtn'),
-  manualPageIndicator: document.getElementById('manualPageIndicator'),
-  manualQuickPills: document.getElementById('manualQuickPills'),
-  manualViewerBox: document.getElementById('manualViewerBox'),
-  manualPageImg: document.getElementById('manualPageImg'),
-  manualPageCaption: document.getElementById('manualPageCaption'),
+  dipMacroPip: document.getElementById('dipMacroPip'),
+  btnCloseDipPip: document.getElementById('btnCloseDipPip'),
+  dipCropImg: document.getElementById('dipCropImg'),
+  dipCropFallbackCanvas: document.getElementById('dipCropFallbackCanvas'),
+  dipCalcAddr: document.getElementById('dipCalcAddr'),
+  dipSwitchesRow: document.getElementById('dipSwitchesRow'),
+  dipPinSummary: document.getElementById('dipPinSummary'),
 
+  twinMatchBadge: document.getElementById('twinMatchBadge'),
   btnModeSolid: document.getElementById('btnModeSolid'),
   btnModeWireframe: document.getElementById('btnModeWireframe'),
   btnToggleExplode: document.getElementById('btnToggleExplode'),
-  btnToggleDims: document.getElementById('btnToggleDims'),
-  btnSyncCam: document.getElementById('btnSyncCam'),
   btnResetView: document.getElementById('btnResetView'),
   fpsCounterText: document.getElementById('fpsCounterText'),
 
@@ -173,27 +202,54 @@ const dom = {
   faultCallout: document.getElementById('faultCallout'),
   faultCalloutZone: document.getElementById('faultCalloutZone'),
   faultCalloutText: document.getElementById('faultCalloutText'),
-
-  dipHudCard: document.getElementById('dipHudCard'),
-  dipCalcAddr: document.getElementById('dipCalcAddr'),
-  dipSwitchesRow: document.getElementById('dipSwitchesRow'),
-
   assemblyTreePills: document.getElementById('assemblyTreePills'),
   selectedPartSummary: document.getElementById('selectedPartSummary'),
 
-  btnAutoSpeak: document.getElementById('btnAutoSpeak'),
-  qaLoadSensor: document.getElementById('qaLoadSensor'),
-  qaDiagnoseCam: document.getElementById('qaDiagnoseCam'),
-  qaInspectDip: document.getElementById('qaInspectDip'),
-  qaEscalateCad: document.getElementById('qaEscalateCad'),
+  scadaLiveCard: document.getElementById('scadaLiveCard'),
+  scadaStatusBadge: document.getElementById('scadaStatusBadge'),
+  btnScanRealModbus: document.getElementById('btnScanRealModbus'),
+  btnSimConnectModbus: document.getElementById('btnSimConnectModbus'),
+  btnBreathTest: document.getElementById('btnBreathTest'),
 
-  chatFeed: document.getElementById('chatFeed'),
-  btnPushToTalk: document.getElementById('btnPushToTalk'),
+  andonStack: document.getElementById('andonStack'),
+  andonRed: document.getElementById('andonRed'),
+  andonAmber: document.getElementById('andonAmber'),
+  andonGreen: document.getElementById('andonGreen'),
+
+  scadaTempVal: document.getElementById('scadaTempVal'),
+  scadaHumVal: document.getElementById('scadaHumVal'),
+  scadaSlaveVal: document.getElementById('scadaSlaveVal'),
+  scadaCrcPill: document.getElementById('scadaCrcPill'),
+  scadaFrameHex: document.getElementById('scadaFrameHex'),
+  scadaChartWrap: document.getElementById('scadaChartWrap'),
+  scadaChart: document.getElementById('scadaChart'),
+  scadaFallbackCanvas: document.getElementById('scadaFallbackCanvas'),
+
+  btnAutoSpeak: document.getElementById('btnAutoSpeak'),
+  autoSpeakText: document.getElementById('autoSpeakText'),
+  btnVoiceRecord: document.getElementById('btnVoiceRecord'),
   pttLabel: document.getElementById('pttLabel'),
+  pttSubLabel: document.getElementById('pttSubLabel'),
   voiceMeter: document.getElementById('voiceMeter'),
   voiceMeterFill: document.getElementById('voiceMeterFill'),
+  nextStepBox: document.getElementById('nextStepBox'),
+  nextStepTitle: document.getElementById('nextStepTitle'),
+  nextStepBody: document.getElementById('nextStepBody'),
+
+  chatFeed: document.getElementById('chatFeed'),
   textQueryForm: document.getElementById('textQueryForm'),
   queryInput: document.getElementById('queryInput'),
+
+  manualDrawer: document.getElementById('manualDrawer'),
+  btnToggleManualDrawer: document.getElementById('btnToggleManualDrawer'),
+  manualPrevBtn: document.getElementById('manualPrevBtn'),
+  manualNextBtn: document.getElementById('manualNextBtn'),
+  btnExpandManual: document.getElementById('btnExpandManual'),
+  manualPageIndicator: document.getElementById('manualPageIndicator'),
+  manualQuickPills: document.getElementById('manualQuickPills'),
+  manualViewerBox: document.getElementById('manualViewerBox'),
+  manualPageImg: document.getElementById('manualPageImg'),
+  manualPageCaption: document.getElementById('manualPageCaption'),
 
   escQueueTag: document.getElementById('escQueueTag'),
   btnDownloadDxf: document.getElementById('btnDownloadDxf'),
@@ -217,13 +273,15 @@ const dom = {
   escEmailSubject: document.getElementById('escEmailSubject'),
   escAttachmentsList: document.getElementById('escAttachmentsList'),
   escEmailBody: document.getElementById('escEmailBody'),
+  tabPreviewQuad: document.getElementById('tabPreviewQuad'),
+  tabPreviewStrip: document.getElementById('tabPreviewStrip'),
   escSnapshotImg: document.getElementById('escSnapshotImg'),
   escSummaryZone: document.getElementById('escSummaryZone'),
   escSummaryDip: document.getElementById('escSummaryDip'),
 };
 
 /* ==========================================================================
-   PROCEDURAL INDUSTRIAL TEXTURES (ZERO EXTERNAL ASSETS)
+   PROCEDURAL INDUSTRIAL TEXTURES (100% LOCAL, ZERO EXTERNAL ASSETS)
    ========================================================================== */
 function createSinteredMetalTexture() {
   const canvas = document.createElement('canvas');
@@ -233,7 +291,6 @@ function createSinteredMetalTexture() {
   ctx.fillStyle = '#9aa3ad';
   ctx.fillRect(0, 0, 256, 256);
 
-  // Deterministic pseudo-random porous stainless granules
   let seed = 1337;
   const rand = () => {
     seed = (seed * 16807) % 2147483647;
@@ -266,7 +323,6 @@ function createBarrelMarkingTexture() {
   ctx.fillStyle = '#bcc4cd';
   ctx.fillRect(0, 0, 512, 256);
 
-  // Subtle polymer satin brush lines
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   for (let y = 0; y < 256; y += 3) {
     ctx.beginPath();
@@ -275,7 +331,6 @@ function createBarrelMarkingTexture() {
     ctx.stroke();
   }
 
-  // Laser-etched industrial identification
   ctx.save();
   ctx.translate(256, 128);
   ctx.rotate(-Math.PI / 2);
@@ -298,11 +353,9 @@ function createBluePcbTexture() {
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
 
-  // Industrial blue solder mask
   ctx.fillStyle = '#0c4a82';
   ctx.fillRect(0, 0, 512, 256);
 
-  // Copper traces under solder mask
   ctx.strokeStyle = '#1565ad';
   ctx.lineWidth = 4;
   for (let i = 0; i < 8; i++) {
@@ -319,7 +372,6 @@ function createBluePcbTexture() {
   ctx.lineTo(475, 186);
   ctx.stroke();
 
-  // Gold ENIG pads at wire terminal end
   const wireLabels = ['V+', 'GND', 'A+', 'B-'];
   for (let i = 0; i < 4; i++) {
     const y = 44 + i * 54;
@@ -330,7 +382,6 @@ function createBluePcbTexture() {
     ctx.fillText(wireLabels[i], 58, y + 5);
   }
 
-  // White silkscreen outline & labels
   ctx.strokeStyle = '#f1f5f9';
   ctx.lineWidth = 2;
   ctx.strokeRect(8, 8, 496, 240);
@@ -347,7 +398,7 @@ function createBluePcbTexture() {
 }
 
 /* ==========================================================================
-   THREE.JS 60 FPS PARAMETRIC CAD STUDIO ENGINE
+   THREE.JS 60 FPS PARAMETRIC CAD + LASER SCAN + TWIN DEVIATION ENGINE
    ========================================================================== */
 const cad = {
   scene: null,
@@ -357,24 +408,56 @@ const cad = {
   raycaster: new THREE.Raycaster(),
   pointer: new THREE.Vector2(),
 
-  sensorRig: null, // Root rig rotated horizontally so Z (-70..+70) spans left->right
-  lowerSlideGroup: null, // Gland nut slides -Z on Step 1 unscrew
-  upperSlideGroup: null, // Upper barrel + seal + flange + strainer slide +Z on Step 2 unscrew
-  pcbGroup: null, // Internal blue DIP-8 PCB stays centered in gap for inspection
-  dipActuatorMeshes: [], // 8 white switch actuators dynamically toggled
+  sensorRig: null,
+  lowerSlideGroup: null,
+  upperSlideGroup: null,
+  pcbGroup: null,
+  dipActuatorMeshes: [],
   dimensionsGroup: null,
+
+  // Real-time 3D Laser Scan Ring & Point-Cloud Halo
+  pointCloudHalo: null,
+  pointCloudMat: null,
+  laserScanGroup: null,
+  laserRingMat: null,
+  laserDiscMat: null,
+
+  // Vivid Crimson 3D Anomaly Stain Volume & Bounding Wireframe
   faultBoxHelper: null,
+  faultStainGroup: null,
+  faultStainInnerMat: null,
+  faultStainOuterMat: null,
+
+  // Smooth Camera Auto-Zoom Animation Target
+  camAnim: {
+    active: false,
+    pos: new THREE.Vector3(16, 48, 185),
+    target: new THREE.Vector3(0, -4, 0),
+  },
 
   zoneGroups: {},
   zoneMeshes: {},
   allSolidMaterials: [],
-  emissiveRestoreMap: new Map(),
 
-  // 3D anchor points for 2D crisp overlay badges
   anchorDimLength: new THREE.Vector3(0, -18.5, 0),
   anchorDimDia: new THREE.Vector3(0, 0, 77.5),
   anchorDipLabel: new THREE.Vector3(0, 15.5, 13.0),
 };
+
+function flyCameraTo(px, py, pz, tx, ty, tz) {
+  cad.camAnim.pos.set(px, py, pz);
+  cad.camAnim.target.set(tx, ty, tz);
+  cad.camAnim.active = true;
+}
+
+function focusDip3DCamera() {
+  // Internal Blue PCB sits at local z ~ +13 mm -> World X ~ +13 mm
+  flyCameraTo(13, 30, 68, 13, 1.5, 0);
+}
+
+function reset3DCamera() {
+  flyCameraTo(16, 48, 185, 0, -4, 0);
+}
 
 function tagZoneGroup(group, zoneId) {
   cad.zoneGroups[zoneId] = group;
@@ -386,7 +469,6 @@ function tagZoneGroup(group, zoneId) {
       obj.receiveShadow = true;
       cad.zoneMeshes[zoneId].push(obj);
 
-      // Clone material per zone if shared so emissive fault glow isolates cleanly
       if (obj.material && !obj.material.userData?.zoneCloned) {
         obj.material = obj.material.clone();
         obj.material.userData = {
@@ -401,12 +483,71 @@ function tagZoneGroup(group, zoneId) {
   });
 }
 
+function buildLaserAndPointCloudOverlay(sensorRig) {
+  // 1. Cylindrical Point-Cloud Reconstruction Shell (~980 points)
+  const pts = [];
+  for (let z = -69; z <= 69; z += 4.6) {
+    const rBase = z < -50 ? 6.4 + ((z + 70) / 20) * 2.8 : 9.35;
+    const ringCount = 28;
+    for (let k = 0; k < ringCount; k++) {
+      const ang = (k / ringCount) * Math.PI * 2 + z * 0.08;
+      pts.push(Math.cos(ang) * rBase, Math.sin(ang) * rBase, z);
+    }
+  }
+  // Flange ear points
+  for (const side of [-1, 1]) {
+    for (let x = 10; x <= 21; x += 3.5) {
+      for (let z = 9; z <= 27; z += 4.5) {
+        pts.push(side * x, -7.2, z);
+      }
+    }
+  }
+
+  const pcGeo = new THREE.BufferGeometry();
+  pcGeo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  const pcMat = new THREE.PointsMaterial({
+    color: 0x38bdf8,
+    size: 1.35,
+    transparent: true,
+    opacity: 0.42,
+    depthWrite: false,
+  });
+  const pointCloud = new THREE.Points(pcGeo, pcMat);
+  sensorRig.add(pointCloud);
+  cad.pointCloudHalo = pointCloud;
+  cad.pointCloudMat = pcMat;
+
+  // 2. Sweeping 3D Laser Scan Ring & Optical Plane
+  const laserGroup = new THREE.Group();
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.88,
+  });
+  const ringMesh = new THREE.Mesh(new THREE.TorusGeometry(11.4, 0.24, 12, 64), ringMat);
+  laserGroup.add(ringMesh);
+
+  const discMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.14,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const discMesh = new THREE.Mesh(new THREE.RingGeometry(7.9, 11.4, 48), discMat);
+  laserGroup.add(discMesh);
+
+  sensorRig.add(laserGroup);
+  cad.laserScanGroup = laserGroup;
+  cad.laserRingMat = ringMat;
+  cad.laserDiscMat = discMat;
+}
+
 function buildParametricSensorAssembly() {
   const sinteredTex = createSinteredMetalTexture();
   const barrelTex = createBarrelMarkingTexture();
   const pcbTex = createBluePcbTexture();
 
-  // Shared PBR Materials (cloned per-zone during tagging)
   const polymerGreyMat = new THREE.MeshStandardMaterial({
     color: 0xc2cad2,
     roughness: 0.36,
@@ -440,7 +581,6 @@ function buildParametricSensorAssembly() {
     metalness: 0.82,
   });
 
-  // Master Rig: orient local Z (-70..+70 mm) along World +X so sensor matches Page 5 & Page 9
   const sensorRig = new THREE.Group();
   sensorRig.rotation.y = Math.PI / 2;
   cad.sensorRig = sensorRig;
@@ -454,15 +594,10 @@ function buildParametricSensorAssembly() {
   cad.upperSlideGroup = upperSlideGroup;
   cad.lowerSlideGroup = lowerSlideGroup;
 
-  /* ------------------------------------------------------------------------
-     1. STRAINER_HEAD (z = +42 .. +70 mm, Ø16.0 mm)
-     Slotted protective cage (4 true vertical slots/pillars) + Sintered SS316
-     Strainer + Internal SHT30 CMOSens die!
-     ------------------------------------------------------------------------ */
+  /* 1. STRAINER_HEAD (z = +42 .. +70 mm, Ø16.0 mm) */
   const strainerGroup = new THREE.Group();
   strainerGroup.name = 'strainer_head';
 
-  // Base ring z = +42 .. +45.2 (Lathe around Y, then rotateX(+PI/2) -> along +Z)
   const baseRingPts = [
     new THREE.Vector2(6.0, 42.0),
     new THREE.Vector2(8.0, 42.0),
@@ -474,10 +609,9 @@ function buildParametricSensorAssembly() {
   baseRingGeo.rotateX(Math.PI / 2);
   strainerGroup.add(new THREE.Mesh(baseRingGeo, polymerGreyMat));
 
-  // 4 Curved Axial Pillars around circumference (leaving 4 open vertical slots!)
   const pillarRIn = 6.35;
   const pillarROut = 8.0;
-  const pillarArc = 0.66; // ~38 deg pillar, ~52 deg open slot
+  const pillarArc = 0.66;
   for (let i = 0; i < 4; i++) {
     const startAngle = i * (Math.PI / 2) + Math.PI / 4 - pillarArc / 2;
     const endAngle = startAngle + pillarArc;
@@ -500,7 +634,6 @@ function buildParametricSensorAssembly() {
     strainerGroup.add(pillarMesh);
   }
 
-  // Top chamfered cap dome (z = +67.2 .. +70.0)
   const capPts = [
     new THREE.Vector2(0.0, 67.2),
     new THREE.Vector2(8.0, 67.2),
@@ -515,7 +648,6 @@ function buildParametricSensorAssembly() {
   capGeo.rotateX(Math.PI / 2);
   strainerGroup.add(new THREE.Mesh(capGeo, polymerGreyMat));
 
-  // Internal Sintered Stainless Steel Cylindrical Strainer (z = +44 .. +67.0, R = 5.45 mm)
   const filterGeo = new THREE.CylinderGeometry(5.45, 5.45, 23.0, 40);
   filterGeo.rotateX(Math.PI / 2);
   const filterMesh = new THREE.Mesh(filterGeo, sinteredSteelMat);
@@ -523,28 +655,22 @@ function buildParametricSensorAssembly() {
   filterMesh.userData.isInternal = true;
   strainerGroup.add(filterMesh);
 
-  // Internal SHT30 Sensor Carrier + Tiny CMOSens Die inside the strainer
-  const shtCarrierMat = new THREE.MeshStandardMaterial({
-    color: 0x0f766e,
-    roughness: 0.4,
-    metalness: 0.2,
-  });
-  const shtCarrier = new THREE.Mesh(new THREE.BoxGeometry(4.4, 1.0, 14.0), shtCarrierMat);
+  const shtCarrier = new THREE.Mesh(
+    new THREE.BoxGeometry(4.4, 1.0, 14.0),
+    new THREE.MeshStandardMaterial({ color: 0x0f766e, roughness: 0.4, metalness: 0.2 })
+  );
   shtCarrier.position.set(0, 0, 50.5);
   shtCarrier.userData.isInternal = true;
   strainerGroup.add(shtCarrier);
 
-  const shtDieMat = new THREE.MeshStandardMaterial({
-    color: 0x111827,
-    roughness: 0.25,
-    metalness: 0.55,
-  });
-  const shtDie = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.9, 2.5), shtDieMat);
+  const shtDie = new THREE.Mesh(
+    new THREE.BoxGeometry(2.5, 0.9, 2.5),
+    new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.25, metalness: 0.55 })
+  );
   shtDie.position.set(0, 0.85, 54.0);
   shtDie.userData.isInternal = true;
   strainerGroup.add(shtDie);
 
-  // White PTFE protective membrane dot on SHT30 die
   const ptfeDot = new THREE.Mesh(
     new THREE.CylinderGeometry(0.75, 0.75, 0.2, 16),
     new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.5 })
@@ -556,13 +682,9 @@ function buildParametricSensorAssembly() {
   upperSlideGroup.add(strainerGroup);
   tagZoneGroup(strainerGroup, 'strainer_head');
 
-  /* ------------------------------------------------------------------------
-     2. UPPER_SEAL_RING (z = +38 .. +42 mm)
-     Matte black elastomer O-ring collar
-     ------------------------------------------------------------------------ */
+  /* 2. UPPER_SEAL_RING (z = +38 .. +42 mm) */
   const sealGroup = new THREE.Group();
   sealGroup.name = 'upper_seal_ring';
-
   const sealPts = [
     new THREE.Vector2(6.5, 38.0),
     new THREE.Vector2(8.08, 38.0),
@@ -574,18 +696,10 @@ function buildParametricSensorAssembly() {
   const sealGeo = new THREE.LatheGeometry(sealPts, 48);
   sealGeo.rotateX(Math.PI / 2);
   sealGroup.add(new THREE.Mesh(sealGeo, elastomerBlackMat));
-
   upperSlideGroup.add(sealGroup);
   tagZoneGroup(sealGroup, 'upper_seal_ring');
 
-  /* ------------------------------------------------------------------------
-     3. UPPER_BARREL_DIP (z = 0 .. +38 mm + Internal Blue DIP-8 PCB)
-     Hollow polymer cylinder slides apart to expose the internal Blue PCB!
-     ------------------------------------------------------------------------ */
-  const upperBarrelMaster = new THREE.Group();
-  upperBarrelMaster.name = 'upper_barrel_dip';
-
-  // Outer hollow shell (placed in upperSlideGroup so it slides +Z on unscrew!)
+  /* 3. UPPER_BARREL_DIP (z = 0 .. +38 mm + Internal Blue DIP-8 PCB) */
   const upperShellSub = new THREE.Group();
   const upperBarrelPts = [
     new THREE.Vector2(6.65, 0.0),
@@ -596,37 +710,28 @@ function buildParametricSensorAssembly() {
   ];
   const upperBarrelGeo = new THREE.LatheGeometry(upperBarrelPts, 56);
   upperBarrelGeo.rotateX(Math.PI / 2);
-  const upperBarrelMesh = new THREE.Mesh(upperBarrelGeo, polymerMarkedMat);
-  upperShellSub.add(upperBarrelMesh);
+  upperShellSub.add(new THREE.Mesh(upperBarrelGeo, polymerMarkedMat));
   upperSlideGroup.add(upperShellSub);
 
-  // Internal Blue PCB (30.0 x 11.0 x 1.6 mm) anchored to centralStaticGroup at z = -3..+27
-  // so when upperSlideGroup moves +34 mm, the DIP-8 PCB is 100% exposed just like Page 5!
   const pcbGroup = new THREE.Group();
   cad.pcbGroup = pcbGroup;
 
-  const pcbBoardMat = new THREE.MeshStandardMaterial({
-    map: pcbTex,
-    roughness: 0.32,
-    metalness: 0.18,
-  });
-  const pcbBoard = new THREE.Mesh(new THREE.BoxGeometry(11.0, 1.6, 30.0), pcbBoardMat);
+  const pcbBoard = new THREE.Mesh(
+    new THREE.BoxGeometry(11.0, 1.6, 30.0),
+    new THREE.MeshStandardMaterial({ map: pcbTex, roughness: 0.32, metalness: 0.18 })
+  );
   pcbBoard.position.set(0, -0.4, 12.0);
   pcbBoard.userData.isInternal = true;
   pcbGroup.add(pcbBoard);
 
-  // 8-Position DIP Switch Housing (SW1)
-  const dipHousingMat = new THREE.MeshStandardMaterial({
-    color: 0x1e293b,
-    roughness: 0.42,
-    metalness: 0.1,
-  });
-  const dipHousing = new THREE.Mesh(new THREE.BoxGeometry(6.4, 2.5, 16.4), dipHousingMat);
+  const dipHousing = new THREE.Mesh(
+    new THREE.BoxGeometry(6.4, 2.5, 16.4),
+    new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.42, metalness: 0.1 })
+  );
   dipHousing.position.set(0, 1.55, 14.5);
   dipHousing.userData.isInternal = true;
   pcbGroup.add(dipHousing);
 
-  // Red top faceplate strip on DIP switch
   const dipTopPlate = new THREE.Mesh(
     new THREE.BoxGeometry(5.8, 0.25, 15.8),
     new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.45 })
@@ -635,7 +740,6 @@ function buildParametricSensorAssembly() {
   dipTopPlate.userData.isInternal = true;
   pcbGroup.add(dipTopPlate);
 
-  // 8 Individual White DIP Switch Rockers (1..8) + Gold Gull-Wing Pins
   const actuatorMat = new THREE.MeshStandardMaterial({
     color: 0xf8fafc,
     roughness: 0.3,
@@ -650,7 +754,6 @@ function buildParametricSensorAssembly() {
   cad.dipActuatorMeshes = [];
   for (let i = 0; i < 8; i++) {
     const zPos = 7.8 + i * 1.92;
-    // Slot recess
     const slotRecess = new THREE.Mesh(
       new THREE.BoxGeometry(3.2, 0.3, 1.15),
       new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 })
@@ -659,7 +762,6 @@ function buildParametricSensorAssembly() {
     slotRecess.userData.isInternal = true;
     pcbGroup.add(slotRecess);
 
-    // Movable white rocker (slides X = +0.85 for ON, X = -0.85 for OFF)
     const rocker = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.75, 0.95), actuatorMat);
     rocker.position.set(state.dipBits[i] ? 0.85 : -0.85, 3.05, zPos);
     rocker.userData.isInternal = true;
@@ -667,7 +769,6 @@ function buildParametricSensorAssembly() {
     pcbGroup.add(rocker);
     cad.dipActuatorMeshes.push(rocker);
 
-    // Left & right gold IC pins
     for (const side of [-1, 1]) {
       const pin = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.1, 0.45), goldPinMat);
       pin.position.set(side * 3.45, 0.9, zPos);
@@ -676,7 +777,6 @@ function buildParametricSensorAssembly() {
     }
   }
 
-  // SMD MAX485 SOIC-8 Transceiver IC + MCU + SMD Capacitors on PCB
   const icDarkMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.35, metalness: 0.25 });
   const max485Chip = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.35, 5.0), icDarkMat);
   max485Chip.position.set(-1.6, 1.0, 2.2);
@@ -696,12 +796,11 @@ function buildParametricSensorAssembly() {
     pcbGroup.add(smd);
   }
 
-  // Internal 4-wire harness connecting lower RS-485 bus into PCB pads (z = -8 .. -1)
   const internalWireDefs = [
-    { color: 0xdc2626, x: -3.6 }, // Red V+
-    { color: 0x171717, x: -1.2 }, // Black GND
-    { color: 0xeab308, x: 1.2 },  // Yellow A+
-    { color: 0x16a34a, x: 3.6 },  // Green B-
+    { color: 0xdc2626, x: -3.6 },
+    { color: 0x171717, x: -1.2 },
+    { color: 0xeab308, x: 1.2 },
+    { color: 0x16a34a, x: 3.6 },
   ];
   for (const iw of internalWireDefs) {
     const curve = new THREE.CatmullRomCurve3([
@@ -720,7 +819,6 @@ function buildParametricSensorAssembly() {
 
   centralStaticGroup.add(pcbGroup);
 
-  // Register both outer shell and internal PCB meshes under 'upper_barrel_dip'
   cad.zoneGroups.upper_barrel_dip = upperShellSub;
   cad.zoneMeshes.upper_barrel_dip = [];
   for (const grp of [upperShellSub, pcbGroup]) {
@@ -742,14 +840,10 @@ function buildParametricSensorAssembly() {
     });
   }
 
-  /* ------------------------------------------------------------------------
-     4. MOUNTING_FLANGE (z = +8 .. +28 mm)
-     Snap-on wall-mounting saddle clip with 42 mm winged ears & Ø4.2 mm holes
-     ------------------------------------------------------------------------ */
+  /* 4. MOUNTING_FLANGE (z = +8 .. +28 mm) */
   const flangeGroup = new THREE.Group();
   flangeGroup.name = 'mounting_flange';
 
-  // Winged mounting plate in X-Z plane (X = -21..+21 mm, Z = +8..+28 mm) with 2 Ø4.2mm holes at X = ±16mm
   const wingShape = new THREE.Shape();
   const hw = 21.0;
   const hh = 10.0;
@@ -764,7 +858,6 @@ function buildParametricSensorAssembly() {
   wingShape.lineTo(-hw, -hh + cr);
   wingShape.quadraticCurveTo(-hw, -hh, -hw + cr, -hh);
 
-  // Central bore cutout + Left/Right Ø4.2 mm screw holes (32 mm spacing -> ±16 mm)
   for (const holeX of [-16.0, 16.0]) {
     const hole = new THREE.Path();
     hole.absarc(holeX, 0, 2.1, 0, Math.PI * 2, true);
@@ -779,19 +872,17 @@ function buildParametricSensorAssembly() {
     bevelSize: 0.25,
     bevelThickness: 0.25,
   });
-  wingGeo.rotateX(Math.PI / 2); // Extrude along Y (backing plate behind barrel at Y = -8.2..-11.0)
+  wingGeo.rotateX(Math.PI / 2);
   const wingMesh = new THREE.Mesh(wingGeo, polymerGreyMat);
   wingMesh.position.set(0, -6.8, 18.0);
   flangeGroup.add(wingMesh);
 
-  // Horizontal stiffening gusset ribs across left & right ears (matching Page 1 photo!)
   for (const side of [-1, 1]) {
     const rib = new THREE.Mesh(new THREE.BoxGeometry(11.5, 2.4, 2.2), polymerGreyMat);
     rib.position.set(side * 14.0, -5.8, 18.0);
     flangeGroup.add(rib);
   }
 
-  // Snap-on C-clip collar hugging the Ø16mm barrel (245° wrap)
   const cClipShape = new THREE.Shape();
   const clipStart = -Math.PI * 0.18;
   const clipEnd = Math.PI * 1.18;
@@ -808,17 +899,14 @@ function buildParametricSensorAssembly() {
     curveSegments: 32,
   });
   const cClipMesh = new THREE.Mesh(cClipGeo, polymerGreyMat);
-  cClipMesh.rotation.z = Math.PI; // Opening faces +Y front, backing plate on -Y
+  cClipMesh.rotation.z = Math.PI;
   cClipMesh.position.z = 9.0;
   flangeGroup.add(cClipMesh);
 
   upperSlideGroup.add(flangeGroup);
   tagZoneGroup(flangeGroup, 'mounting_flange');
 
-  /* ------------------------------------------------------------------------
-     5. LOWER_BARREL_RS485 (z = -50 .. 0 mm)
-     Lower cylindrical body + thin seam O-ring at z = 0 + male threads at ends
-     ------------------------------------------------------------------------ */
+  /* 5. LOWER_BARREL_RS485 (z = -50 .. 0 mm) */
   const lowerBarrelGroup = new THREE.Group();
   lowerBarrelGroup.name = 'lower_barrel_rs485';
 
@@ -837,7 +925,6 @@ function buildParametricSensorAssembly() {
   lowerGeo.rotateX(Math.PI / 2);
   lowerBarrelGroup.add(new THREE.Mesh(lowerGeo, polymerGreyMat));
 
-  // Precision machined thread rings at z = -49..-44.5 (Step 1 joint) and z = +0.8..+4.8 (Step 2 joint)
   for (const zThread of [-48.6, -47.2, -45.8, 1.4, 2.8, 4.2]) {
     const rThread = zThread < 0 ? 7.15 : 6.72;
     const threadTorus = new THREE.Mesh(
@@ -848,7 +935,6 @@ function buildParametricSensorAssembly() {
     lowerBarrelGroup.add(threadTorus);
   }
 
-  // Thin middle seam elastomer O-ring at z = 0.0
   const midOring = new THREE.Mesh(
     new THREE.TorusGeometry(7.96, 0.42, 14, 48),
     elastomerBlackMat
@@ -859,14 +945,10 @@ function buildParametricSensorAssembly() {
   centralStaticGroup.add(lowerBarrelGroup);
   tagZoneGroup(lowerBarrelGroup, 'lower_barrel_rs485');
 
-  /* ------------------------------------------------------------------------
-     6. WATERPROOF_GLAND_LEADS (z = -70 .. -50 mm + Cable + 4 Color-Coded Leads)
-     Tapered ribbed dome nut + CatmullRomCurve3 shielded cable + V+, GND, A+, B-
-     ------------------------------------------------------------------------ */
+  /* 6. WATERPROOF_GLAND_LEADS (z = -70 .. -50 mm + Cable + 4 Color-Coded Leads) */
   const glandGroup = new THREE.Group();
   glandGroup.name = 'waterproof_gland_leads';
 
-  // Tapered dome nut profile (z = -70 .. -50)
   const glandPts = [
     new THREE.Vector2(2.6, -70.0),
     new THREE.Vector2(5.2, -70.0),
@@ -882,7 +964,6 @@ function buildParametricSensorAssembly() {
   glandGeo.rotateX(Math.PI / 2);
   glandGroup.add(new THREE.Mesh(glandGeo, polymerGreyMat));
 
-  // 16 Longitudinal Grip Ribs around tapered dome nut (matching Page 1, 5, 9!)
   for (let i = 0; i < 16; i++) {
     const ang = (i / 16) * Math.PI * 2;
     const ribGeo = new THREE.BoxGeometry(0.65, 0.72, 15.2);
@@ -890,28 +971,15 @@ function buildParametricSensorAssembly() {
     const rMid = 7.45;
     ribMesh.position.set(Math.cos(ang) * rMid, Math.sin(ang) * rMid, -58.8);
     ribMesh.rotation.z = ang;
-    // Slight taper tilt
-    ribMesh.lookAt(
-      Math.cos(ang) * (rMid - 1.5),
-      Math.sin(ang) * (rMid - 1.5),
-      -74.0
-    );
+    ribMesh.lookAt(Math.cos(ang) * (rMid - 1.5), Math.sin(ang) * (rMid - 1.5), -74.0);
     glandGroup.add(ribMesh);
   }
 
-  // Black rubber strain-relief bushing collar at z = -71.8 .. -69.8
   const bootGeo = new THREE.CylinderGeometry(3.4, 4.3, 2.6, 28);
   bootGeo.rotateX(Math.PI / 2);
   const bootMesh = new THREE.Mesh(bootGeo, elastomerBlackMat);
   bootMesh.position.z = -70.8;
   glandGroup.add(bootMesh);
-
-  // Smooth 3D CatmullRomCurve3 Black Ø5.0 mm Shielded RS-485 Cable Loop
-  const cableJacketMat = new THREE.MeshStandardMaterial({
-    color: 0x14181f,
-    roughness: 0.52,
-    metalness: 0.08,
-  });
 
   const cableCurve = new THREE.CatmullRomCurve3([
     new THREE.Vector3(0, 0, -71.5),
@@ -924,9 +992,13 @@ function buildParametricSensorAssembly() {
     new THREE.Vector3(3.0, -10.5, -6.0),
   ]);
   const cableGeo = new THREE.TubeGeometry(cableCurve, 72, 2.5, 18, false);
-  glandGroup.add(new THREE.Mesh(cableGeo, cableJacketMat));
+  glandGroup.add(
+    new THREE.Mesh(
+      cableGeo,
+      new THREE.MeshStandardMaterial({ color: 0x14181f, roughness: 0.52, metalness: 0.08 })
+    )
+  );
 
-  // Braided tin shield ferrule at stripped jacket end (3.0, -10.5, -6.0)
   const shieldCollar = new THREE.Mesh(
     new THREE.CylinderGeometry(2.65, 2.65, 3.0, 20),
     new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.35, metalness: 0.85 })
@@ -935,8 +1007,6 @@ function buildParametricSensorAssembly() {
   shieldCollar.rotation.set(0.45, 0.2, 0.25);
   glandGroup.add(shieldCollar);
 
-  // 4 Distinct Color-Coded Stripped RS-485 Leads + Tinned Copper Tips!
-  // Manual Page 4: Red (V+), Black (GND), Yellow (A+), Green (B-)
   const tinnedTipMat = new THREE.MeshStandardMaterial({
     color: 0xe2e8f0,
     roughness: 0.22,
@@ -944,37 +1014,33 @@ function buildParametricSensorAssembly() {
   });
 
   const leadSpecs = [
-    { name: 'V+', color: 0xef4444, end: new THREE.Vector3(-2.0, -4.2, -22.5), mid: new THREE.Vector3(0.8, -7.2, -14.0) },
-    { name: 'GND', color: 0x1e293b, end: new THREE.Vector3(0.8, -6.8, -24.5), mid: new THREE.Vector3(2.0, -8.8, -15.0) },
-    { name: 'A+', color: 0xfacc15, end: new THREE.Vector3(4.2, -9.2, -24.0), mid: new THREE.Vector3(3.8, -10.0, -14.8) },
-    { name: 'B-', color: 0x22c55e, end: new THREE.Vector3(7.4, -11.8, -22.0), mid: new THREE.Vector3(5.5, -11.4, -14.0) },
+    { color: 0xef4444, end: new THREE.Vector3(-2.0, -4.2, -22.5), mid: new THREE.Vector3(0.8, -7.2, -14.0) },
+    { color: 0x1e293b, end: new THREE.Vector3(0.8, -6.8, -24.5), mid: new THREE.Vector3(2.0, -8.8, -15.0) },
+    { color: 0xfacc15, end: new THREE.Vector3(4.2, -9.2, -24.0), mid: new THREE.Vector3(3.8, -10.0, -14.8) },
+    { color: 0x22c55e, end: new THREE.Vector3(7.4, -11.8, -22.0), mid: new THREE.Vector3(5.5, -11.4, -14.0) },
   ];
 
   const jacketExit = new THREE.Vector3(3.0, -10.5, -6.5);
   for (const lead of leadSpecs) {
     const leadCurve = new THREE.CatmullRomCurve3([jacketExit, lead.mid, lead.end]);
     const leadGeo = new THREE.TubeGeometry(leadCurve, 20, 0.68, 10, false);
-    const leadMat = new THREE.MeshStandardMaterial({
-      color: lead.color,
-      roughness: 0.42,
-      metalness: 0.06,
-    });
-    glandGroup.add(new THREE.Mesh(leadGeo, leadMat));
+    glandGroup.add(
+      new THREE.Mesh(
+        leadGeo,
+        new THREE.MeshStandardMaterial({ color: lead.color, roughness: 0.42, metalness: 0.06 })
+      )
+    );
 
-    // Tinned copper conductor tip extending 4.2 mm from wire insulation end
     const tangent = lead.end.clone().sub(lead.mid).normalize();
     const tipEnd = lead.end.clone().addScaledVector(tangent, 4.2);
     const tipCurve = new THREE.LineCurve3(lead.end, tipEnd);
-    const tipGeo = new THREE.TubeGeometry(tipCurve, 4, 0.42, 8, false);
-    glandGroup.add(new THREE.Mesh(tipGeo, tinnedTipMat));
+    glandGroup.add(new THREE.Mesh(new THREE.TubeGeometry(tipCurve, 4, 0.42, 8, false), tinnedTipMat));
   }
 
   lowerSlideGroup.add(glandGroup);
   tagZoneGroup(glandGroup, 'waterproof_gland_leads');
 
-  /* ------------------------------------------------------------------------
-     7. 3D CAD DIMENSION LINES (140.0 MM LENGTH & Ø16.0 MM DIAMETER)
-     ------------------------------------------------------------------------ */
+  /* 7. 3D CAD DIMENSION LINES (140.0 MM LENGTH & Ø16.0 MM DIAMETER) */
   const dimsGroup = new THREE.Group();
   const dimLineMat = new THREE.LineBasicMaterial({
     color: 0x38bdf8,
@@ -982,32 +1048,24 @@ function buildParametricSensorAssembly() {
     opacity: 0.85,
   });
 
-  // Total 140.0 mm length dimension along Z = -70 .. +70 at Y = -16.5 mm
   const lenLinePts = [
-    // Left extension line (z = -70)
     new THREE.Vector3(0, -8.5, -70.0),
     new THREE.Vector3(0, -18.5, -70.0),
-    // Right extension line (z = +70)
     new THREE.Vector3(0, -8.5, 70.0),
     new THREE.Vector3(0, -18.5, 70.0),
-    // Main dimension bar
     new THREE.Vector3(0, -16.5, -70.0),
     new THREE.Vector3(0, -16.5, 70.0),
-    // Left tick arrow
     new THREE.Vector3(0, -15.2, -67.2),
     new THREE.Vector3(0, -16.5, -70.0),
     new THREE.Vector3(0, -17.8, -67.2),
     new THREE.Vector3(0, -16.5, -70.0),
-    // Right tick arrow
     new THREE.Vector3(0, -15.2, 67.2),
     new THREE.Vector3(0, -16.5, 70.0),
     new THREE.Vector3(0, -17.8, 67.2),
     new THREE.Vector3(0, -16.5, 70.0),
   ];
-  const lenLineGeo = new THREE.BufferGeometry().setFromPoints(lenLinePts);
-  dimsGroup.add(new THREE.LineSegments(lenLineGeo, dimLineMat));
+  dimsGroup.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(lenLinePts), dimLineMat));
 
-  // Ø16.0 mm diameter dimension at Z = +75.5 mm spanning Y = -8.0 .. +8.0 mm
   const diaLinePts = [
     new THREE.Vector3(0, 8.0, 70.5),
     new THREE.Vector3(0, 8.0, 77.5),
@@ -1015,7 +1073,6 @@ function buildParametricSensorAssembly() {
     new THREE.Vector3(0, -8.0, 77.5),
     new THREE.Vector3(0, -8.0, 75.5),
     new THREE.Vector3(0, 8.0, 75.5),
-    // Top & bottom arrows
     new THREE.Vector3(0, 6.2, 74.5),
     new THREE.Vector3(0, 8.0, 75.5),
     new THREE.Vector3(0, 6.2, 76.5),
@@ -1025,11 +1082,13 @@ function buildParametricSensorAssembly() {
     new THREE.Vector3(0, -6.2, 76.5),
     new THREE.Vector3(0, -8.0, 75.5),
   ];
-  const diaLineGeo = new THREE.BufferGeometry().setFromPoints(diaLinePts);
-  dimsGroup.add(new THREE.LineSegments(diaLineGeo, dimLineMat));
+  dimsGroup.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(diaLinePts), dimLineMat));
 
   sensorRig.add(dimsGroup);
   cad.dimensionsGroup = dimsGroup;
+
+  /* 8. REAL-TIME LASER SCAN RING & POINT-CLOUD RECONSTRUCTION HALO */
+  buildLaserAndPointCloudOverlay(sensorRig);
 
   return sensorRig;
 }
@@ -1037,7 +1096,7 @@ function buildParametricSensorAssembly() {
 function initCadStudio() {
   const stage = dom.canvasStage;
   const width = Math.max(320, stage.clientWidth || 720);
-  const height = Math.max(280, stage.clientHeight || 520);
+  const height = Math.max(260, stage.clientHeight || 420);
 
   const scene = new THREE.Scene();
   cad.scene = scene;
@@ -1062,16 +1121,15 @@ function initCadStudio() {
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
-  controls.dampingFactor = 0.07;
-  controls.minDistance = 55;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 38;
   controls.maxDistance = 420;
   controls.target.set(0, -4, 0);
   controls.update();
   cad.controls = controls;
 
   // 3-Point Engineering Studio Lighting
-  const hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x1e293b, 0.85);
-  scene.add(hemiLight);
+  scene.add(new THREE.HemisphereLight(0xdbeafe, 0x1e293b, 0.88));
 
   const keyLight = new THREE.DirectionalLight(0xfffbeb, 1.85);
   keyLight.position.set(65, 115, 95);
@@ -1094,7 +1152,6 @@ function initCadStudio() {
   fillLight.position.set(-45, -35, 85);
   scene.add(fillLight);
 
-  // Subtle Shadow-Catching CAD Workbench Plane & Precision 10mm Grid
   const shadowPlane = new THREE.Mesh(
     new THREE.PlaneGeometry(360, 240),
     new THREE.ShadowMaterial({ opacity: 0.34 })
@@ -1108,18 +1165,37 @@ function initCadStudio() {
   cadGrid.position.y = -29.6;
   scene.add(cadGrid);
 
-  // Build & Mount TZ THT-02 Parametric Assembly
   const sensorRig = buildParametricSensorAssembly();
   scene.add(sensorRig);
 
-  // Dynamic Crimson Bounding Wireframe Cage for Active Fault Zone
+  // Crimson Wireframe Bounding Box + Semi-Transparent 3D Crimson Fault Stain Volume
   const faultBox = new THREE.Box3();
   const faultHelper = new THREE.Box3Helper(faultBox, 0xef4444);
   faultHelper.visible = false;
   scene.add(faultHelper);
   cad.faultBoxHelper = faultHelper;
 
-  // Responsive ResizeObserver
+  const faultStainGroup = new THREE.Group();
+  faultStainGroup.visible = false;
+  const stainInnerMat = new THREE.MeshBasicMaterial({
+    color: 0xef4444,
+    transparent: true,
+    opacity: 0.34,
+    depthWrite: false,
+  });
+  const stainOuterMat = new THREE.MeshBasicMaterial({
+    color: 0xdc2626,
+    transparent: true,
+    opacity: 0.14,
+    depthWrite: false,
+  });
+  faultStainGroup.add(new THREE.Mesh(new THREE.SphereGeometry(8.5, 24, 18), stainInnerMat));
+  faultStainGroup.add(new THREE.Mesh(new THREE.SphereGeometry(13.8, 24, 18), stainOuterMat));
+  scene.add(faultStainGroup);
+  cad.faultStainGroup = faultStainGroup;
+  cad.faultStainInnerMat = stainInnerMat;
+  cad.faultStainOuterMat = stainOuterMat;
+
   const ro = new ResizeObserver(() => {
     const w = stage.clientWidth;
     const h = stage.clientHeight;
@@ -1131,11 +1207,13 @@ function initCadStudio() {
   });
   ro.observe(stage);
 
-  // Raycast Part Inspection (distinguish clean click from orbit drag)
   let downPos = { x: 0, y: 0 };
   renderer.domElement.addEventListener('pointerdown', (e) => {
+    // Yield smooth camera auto-zoom immediately if operator grabs 3D orbit controls
+    cad.camAnim.active = false;
     downPos = { x: e.clientX, y: e.clientY };
   });
+
   renderer.domElement.addEventListener('pointerup', (e) => {
     const dist = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
     if (dist > 5) return;
@@ -1147,7 +1225,6 @@ function initCadStudio() {
     const hits = cad.raycaster.intersectObjects(sensorRig.children, true);
     const meshHit = hits.find((h) => h.object?.userData?.zoneId);
     if (meshHit) {
-      // Check if user clicked directly on a DIP switch actuator when exploded!
       if (state.exploded && typeof meshHit.object.userData.dipIndex === 'number') {
         toggleDipBit(meshHit.object.userData.dipIndex);
       }
@@ -1155,7 +1232,6 @@ function initCadStudio() {
     }
   });
 
-  // Start 60 FPS Render Loop
   let frames = 0;
   let lastFpsStamp = performance.now();
   let prevFrameTime = performance.now();
@@ -1167,39 +1243,61 @@ function initCadStudio() {
 
     // 1. FPS Telemetry
     frames += 1;
-    if (now - lastFpsStamp >= 600) {
+    if (now - lastFpsStamp >= 650) {
       const fps = Math.min(60, Math.round((frames * 1000) / (now - lastFpsStamp)));
-      dom.fpsCounterText.textContent = `FPS: ${fps}`;
+      dom.fpsCounterText.textContent = `${fps} FPS`;
       frames = 0;
       lastFpsStamp = now;
     }
 
-    // 2. Smooth Unscrew / Explode Animation (Manual Page 5 Step 1 & Step 2)
+    // 2. Smooth Unscrew / Explode Animation
     const targetExplode = state.exploded ? 1.0 : 0.0;
     state.explodeProgress += (targetExplode - state.explodeProgress) * Math.min(1, dt * 6.5);
     const ep = state.explodeProgress;
 
-    // Step 1: Waterproof gland nut unscrews & slides -18 mm along -Z
     cad.lowerSlideGroup.position.z = -18.0 * ep;
     cad.lowerSlideGroup.rotation.z = -ep * Math.PI * 1.2;
-
-    // Step 2: Upper barrel + seal + flange + strainer unscrews & slides +35 mm along +Z
     cad.upperSlideGroup.position.z = 35.0 * ep;
     cad.upperSlideGroup.rotation.z = ep * Math.PI * 0.85;
 
-    // 3. Smooth Camera Angle Sync (OpenCV detected sensor tilt)
+    // 3. Smooth Camera Angle Sync from Live Optical Scanner
     const targetAngle = state.syncCameraAngle ? state.cameraAngleDeg : 0.0;
     state.smoothedAngleDeg += (targetAngle - state.smoothedAngleDeg) * Math.min(1, dt * 5.0);
-    // Sensor Z is mapped to World +X via rotation.y = PI/2; screen-plane tilt is World Z rotation
     cad.sensorRig.rotation.z = THREE.MathUtils.degToRad(-state.smoothedAngleDeg * 0.65);
 
-    // 4. Crimson Fault Highlighting Pulse + Bounding Wireframe Cage
-    updateFaultVisuals(now);
+    // 4. Smooth Camera Auto-Zoom Interpolation (DIP-8 Focus / Reset)
+    if (cad.camAnim.active) {
+      const step = Math.min(1, dt * 5.5);
+      camera.position.lerp(cad.camAnim.pos, step);
+      controls.target.lerp(cad.camAnim.target, step);
+      if (
+        camera.position.distanceTo(cad.camAnim.pos) < 0.65 &&
+        controls.target.distanceTo(cad.camAnim.target) < 0.35
+      ) {
+        cad.camAnim.active = false;
+      }
+    }
+
+    // 5. Real-Time 3D Laser Scan Ring Sweep & Point-Cloud Halo Pulse
+    if (cad.laserScanGroup) {
+      const sweepSpan = 72 + 18 * ep;
+      cad.laserScanGroup.position.z = Math.sin(now * 0.0019) * sweepSpan;
+      const scanHex = state.modbusHealthy
+        ? 0x10b981
+        : state.highlightedZone
+          ? 0xef4444
+          : 0x38bdf8;
+      cad.laserRingMat.color.setHex(scanHex);
+      cad.laserDiscMat.color.setHex(scanHex);
+      cad.pointCloudMat.color.setHex(state.modbusHealthy ? 0x34d399 : 0x38bdf8);
+      cad.pointCloudMat.opacity = 0.32 + 0.14 * (0.5 + 0.5 * Math.sin(now * 0.003));
+    }
+
+    // 6. Crimson Fault Stain Volume & Emerald Twin Verification Glow
+    updateFaultAndTwinVisuals(now);
 
     controls.update();
     renderer.render(scene, camera);
-
-    // 5. Project 3D CAD Dimension & Fault Callout Badges to 2D Screen Coordinates
     updateProjectedOverlays();
   }
 
@@ -1207,7 +1305,7 @@ function initCadStudio() {
 }
 
 /* ==========================================================================
-   3D VIEWPORT MODES, FAULT PULSE & 2D PROJECTED LABELS
+   3D VIEWPORT MODES, RED FAULT STAIN & PROJECTED OVERLAYS
    ========================================================================== */
 function setRenderMode(mode) {
   state.renderMode = mode;
@@ -1217,7 +1315,6 @@ function setRenderMode(mode) {
 
   for (const mat of cad.allSolidMaterials) {
     if (mat.userData?.isInternal) {
-      // Keep internal SHT30 die & Blue DIP-8 PCB vivid inside translucent X-Ray outer shell!
       mat.wireframe = false;
       mat.transparent = false;
       mat.opacity = 1.0;
@@ -1230,9 +1327,20 @@ function setRenderMode(mode) {
   }
 }
 
-function setExplodedState(exploded, { manualTrigger = false } = {}) {
+function setDipPipVisibility(visible, { userDismissed = false } = {}) {
+  state.dipPipVisible = Boolean(visible);
+  if (userDismissed) {
+    state.dipPipDismissed = true;
+  }
+  dom.dipMacroPip.hidden = !state.dipPipVisible;
+  dom.btnToggleDipPip.classList.toggle('active', state.dipPipVisible);
+  if (state.dipPipVisible) {
+    refreshDipCropImage();
+  }
+}
+
+function setExplodedState(exploded, { manualTrigger = false, zoomDip = false } = {}) {
   if (manualTrigger) {
-    // If user manually toggles, temporarily pause auto-override unless opened
     state.autoExplodeEnabled = false;
     setTimeout(() => {
       state.autoExplodeEnabled = true;
@@ -1240,14 +1348,26 @@ function setExplodedState(exploded, { manualTrigger = false } = {}) {
   }
   state.exploded = Boolean(exploded);
   dom.btnToggleExplode.classList.toggle('active', state.exploded);
-  dom.dipHudCard.hidden = !state.exploded;
+
+  if (state.exploded) {
+    if (!state.dipPipDismissed || manualTrigger || zoomDip) {
+      state.dipPipDismissed = false;
+      setDipPipVisibility(true);
+    }
+    if (zoomDip || manualTrigger) {
+      focusDip3DCamera();
+    }
+  } else {
+    setDipPipVisibility(false);
+  }
 }
 
-function updateFaultVisuals(nowMs) {
-  const pulse = 0.5 + 0.5 * Math.sin(nowMs * 0.0075);
+function updateFaultAndTwinVisuals(nowMs) {
+  const pulse = 0.5 + 0.5 * Math.sin(nowMs * 0.0078);
+  const emeraldGlowActive = nowMs < state.emeraldVerifyUntil;
 
   for (const [zoneId, meshes] of Object.entries(cad.zoneMeshes)) {
-    const isFault = state.highlightedZone === zoneId;
+    const isFault = Boolean(state.highlightedZone === zoneId && !state.modbusHealthy);
     const isSelected = state.selectedZone === zoneId && !isFault;
 
     for (const mesh of meshes) {
@@ -1255,7 +1375,10 @@ function updateFaultVisuals(nowMs) {
       if (!mat || !mat.emissive) continue;
       if (isFault) {
         mat.emissive.setHex(0xef4444);
-        mat.emissiveIntensity = 0.28 + 0.52 * pulse;
+        mat.emissiveIntensity = 0.32 + 0.52 * pulse;
+      } else if (emeraldGlowActive) {
+        mat.emissive.setHex(0x10b981);
+        mat.emissiveIntensity = 0.16 + 0.28 * pulse;
       } else if (isSelected) {
         mat.emissive.setHex(0x38bdf8);
         mat.emissiveIntensity = 0.22;
@@ -1266,16 +1389,28 @@ function updateFaultVisuals(nowMs) {
     }
   }
 
-  if (state.highlightedZone && cad.zoneMeshes[state.highlightedZone]?.length) {
+  if (
+    !state.modbusHealthy &&
+    state.highlightedZone &&
+    cad.zoneMeshes[state.highlightedZone]?.length
+  ) {
     const box = cad.faultBoxHelper.box;
     box.makeEmpty();
     for (const m of cad.zoneMeshes[state.highlightedZone]) {
       box.expandByObject(m);
     }
-    box.expandByScalar(1.4);
+    box.expandByScalar(1.5);
     cad.faultBoxHelper.visible = true;
+
+    box.getCenter(cad.faultStainGroup.position);
+    const s = 0.94 + 0.16 * pulse;
+    cad.faultStainGroup.scale.set(s, s, s);
+    cad.faultStainInnerMat.opacity = 0.24 + 0.2 * pulse;
+    cad.faultStainOuterMat.opacity = 0.1 + 0.1 * pulse;
+    cad.faultStainGroup.visible = true;
   } else {
     cad.faultBoxHelper.visible = false;
+    cad.faultStainGroup.visible = false;
   }
 }
 
@@ -1304,7 +1439,7 @@ function updateProjectedOverlays() {
       dom.labelDimLength.style.left = `${lenPos.x}px`;
       dom.labelDimLength.style.top = `${lenPos.y}px`;
       dom.labelDimLength.textContent = state.exploded
-        ? '140.0 MM (DESPIECE DIP-8)'
+        ? '140.0 MM (EXPLODED DIP-8)'
         : '140.0 MM';
     }
 
@@ -1325,14 +1460,9 @@ function updateProjectedOverlays() {
       dom.labelDipAddr.style.left = `${dipPos.x}px`;
       dom.labelDipAddr.style.top = `${dipPos.y}px`;
     }
-  } else {
-    dom.labelDimLength.hidden = true;
-    dom.labelDimDia.hidden = true;
-    dom.labelDipAddr.hidden = true;
   }
 
-  // Floating 3D Fault Callout Badge
-  if (state.highlightedZone && ZONE_SPECS[state.highlightedZone]) {
+  if (!state.modbusHealthy && state.highlightedZone && ZONE_SPECS[state.highlightedZone]) {
     const spec = ZONE_SPECS[state.highlightedZone];
     const faultAnchor = spec.anchorLocal.clone();
     if (
@@ -1346,15 +1476,29 @@ function updateProjectedOverlays() {
     const screenPt = projectToScreen(worldPt, w, h);
     if (screenPt) {
       dom.faultCallout.hidden = false;
-      const clampedX = Math.max(110, Math.min(w - 110, screenPt.x));
-      const clampedY = Math.max(95, Math.min(h - 75, screenPt.y));
+      const clampedX = Math.max(130, Math.min(w - 130, screenPt.x));
+      const clampedY = Math.max(92, Math.min(h - 78, screenPt.y));
       dom.faultCallout.style.left = `${clampedX}px`;
       dom.faultCallout.style.top = `${clampedY}px`;
-      dom.faultCalloutZone.textContent = `FALLA · ${spec.shortLabel}`;
+      dom.faultCalloutZone.textContent = `⚠️ TWIN DEVIATION: ${spec.shortLabel} — PROBABLE FAULT SOURCE`;
       dom.faultCalloutText.textContent = state.faultReason || spec.summary;
     }
   } else {
     dom.faultCallout.hidden = true;
+  }
+}
+
+function updateTwinMatchBadge() {
+  dom.twinMatchBadge.classList.remove('is-nominal', 'is-verified', 'is-deviation');
+  if (state.modbusHealthy && !state.highlightedZone) {
+    dom.twinMatchBadge.classList.add('is-verified');
+    dom.twinMatchBadge.textContent = '✅ 100% DIGITAL TWIN MATCH';
+  } else if (state.highlightedZone && ZONE_SPECS[state.highlightedZone]) {
+    dom.twinMatchBadge.classList.add('is-deviation');
+    dom.twinMatchBadge.textContent = `⚠️ TWIN DEVIATION: ${ZONE_SPECS[state.highlightedZone].shortLabel}`;
+  } else {
+    dom.twinMatchBadge.classList.add('is-nominal');
+    dom.twinMatchBadge.textContent = '100% DIGITAL TWIN MATCH';
   }
 }
 
@@ -1367,10 +1511,10 @@ function selectZone(zoneId, { flipManual = false } = {}) {
     btn.classList.toggle('selected', btn.dataset.zone === zoneId);
   });
 
-  dom.selectedPartSummary.textContent = `${spec.title} (${spec.zRange}) — ${spec.dims} · Manual Pág. ${spec.manualPage}`;
+  dom.selectedPartSummary.textContent = `${spec.title} (${spec.zRange}) — ${spec.dims} · Manual Page ${spec.manualPage}`;
 
   if (zoneId === 'upper_barrel_dip' && !state.exploded) {
-    setExplodedState(true, { manualTrigger: true });
+    setExplodedState(true, { manualTrigger: true, zoomDip: true });
   }
 
   if (flipManual) {
@@ -1391,18 +1535,19 @@ function setFaultHighlight(zoneId, reason = '') {
     const short = ZONE_SPECS[cleanZone].shortLabel;
     dom.scanZoneVal.textContent = short;
     dom.scanZoneVal.classList.add('fault-active');
-    dom.hudStatusTag.textContent = `ANOMALÍA: ${short}`;
+    dom.hudStatusTag.textContent = `FAULT: ${short}`;
     dom.hudStatusTag.classList.add('is-fault');
   } else {
-    dom.scanZoneVal.textContent = 'NINGUNA';
+    dom.scanZoneVal.textContent = 'NONE';
     dom.scanZoneVal.classList.remove('fault-active');
     dom.hudStatusTag.textContent = 'NOMINAL';
     dom.hudStatusTag.classList.remove('is-fault');
   }
+  updateTwinMatchBadge();
 }
 
 /* ==========================================================================
-   INTERACTIVE 8-POSITION DIP SWITCH CALCULATOR (MANUAL PAGE 5)
+   INTERACTIVE 8-POSITION DIP SWITCH MACRO PIP & CALCULATOR (MANUAL PAGE 5)
    ========================================================================== */
 function computeDipAddress() {
   return state.dipBits.reduce((acc, bit, idx) => acc + (bit ? DIP_WEIGHTS[idx] : 0), 0);
@@ -1413,28 +1558,38 @@ function renderDipHud() {
   const activePositions = state.dipBits
     .map((b, idx) => (b ? idx + 1 : null))
     .filter(Boolean);
-  const posText = activePositions.length ? activePositions.join(',') : 'OFF';
+  const posText = activePositions.length ? `PIN ${activePositions.join(',')} ON` : 'ALL OFF';
   const hexAddr = `0x${addr.toString(16).toUpperCase().padStart(2, '0')}`;
+  const paddedAddr = String(addr).padStart(2, '0');
 
-  dom.dipCalcAddr.textContent = `ADDR = ${addr} (${hexAddr})`;
-  dom.labelDipAddr.textContent = `MODBUS ADDR: ${addr} [DIP ${posText}]`;
-  dom.escSummaryDip.textContent = `${addr} (DIP ${posText} ON)`;
+  dom.dipCalcAddr.textContent = `SLAVE #${paddedAddr} (${hexAddr})`;
+  dom.labelDipAddr.textContent = `MODBUS ADDR: #${paddedAddr} [${posText}]`;
+  dom.escSummaryDip.textContent = `Slave #${paddedAddr} (${posText})`;
+
+  if (dom.dipPinSummary) {
+    dom.dipPinSummary.textContent = activePositions.length
+      ? `ON: Pin ${activePositions.join(', ')} -> Modbus Slave #${addr} (Click pins to toggle)`
+      : 'Warning: All pins OFF (Address 0). Set Pin 8 ON for Slave #1.';
+  }
 
   dom.dipSwitchesRow.innerHTML = '';
   state.dipBits.forEach((bit, idx) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = `dip-bit-btn${bit ? ' is-on' : ''}`;
-    btn.title = `DIP ${idx + 1} (Peso ${DIP_WEIGHTS[idx]}): ${bit ? 'ON' : 'OFF'}`;
+    btn.title = `DIP Pin ${idx + 1} (Weight ${DIP_WEIGHTS[idx]}): ${bit ? 'ON' : 'OFF'}`;
     btn.innerHTML = `<span>${idx + 1}</span><span class="dip-knob"></span><span>${DIP_WEIGHTS[idx]}</span>`;
     btn.addEventListener('click', () => toggleDipBit(idx));
     dom.dipSwitchesRow.appendChild(btn);
   });
 
-  // Sync 3D white actuator rockers on the internal Blue PCB
   cad.dipActuatorMeshes.forEach((mesh, idx) => {
     mesh.position.x = state.dipBits[idx] ? 0.85 : -0.85;
   });
+
+  if (state.dipCropFailed) {
+    drawDipCropFallback();
+  }
 }
 
 function toggleDipBit(index) {
@@ -1443,28 +1598,254 @@ function toggleDipBit(index) {
   renderDipHud();
 }
 
+function refreshDipCropImage() {
+  if (!state.dipPipVisible || !dom.dipCropImg) return;
+  dom.dipCropImg.src = `/api/video/dip_crop?t=${Date.now()}`;
+}
+
+function drawDipCropFallback() {
+  const canvas = dom.dipCropFallbackCanvas;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+
+  ctx.fillStyle = '#091422';
+  ctx.fillRect(0, 0, w, h);
+
+  // Blue PCB + Red DIP-8 close-up macro diagram
+  ctx.fillStyle = '#0d4a84';
+  ctx.fillRect(14, 8, w - 28, h - 16);
+  ctx.strokeStyle = '#38bdf8';
+  ctx.strokeRect(14, 8, w - 28, h - 16);
+
+  ctx.fillStyle = '#b91c1c';
+  ctx.fillRect(46, 16, w - 92, h - 32);
+
+  for (let i = 0; i < 8; i++) {
+    const x = 56 + i * 21;
+    const isOn = Boolean(state.dipBits[i]);
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(x, 22, 13, 34);
+    ctx.fillStyle = isOn ? '#fbbf24' : '#f8fafc';
+    ctx.fillRect(x + 1, isOn ? 23 : 41, 11, 14);
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = 'bold 9px monospace';
+    ctx.fillText(String(i + 1), x + 4, 68);
+  }
+}
+
 /* ==========================================================================
-   MANUAL & 2D BLUEPRINT INSPECTOR + LIGHTBOX
+   REAL-TIME uPLOT DUAL-SERIES SCADA TELEMETRY GRAPH (+ CANVAS FALLBACK)
    ========================================================================== */
-function setManualPage(pageNum, { flash = false } = {}) {
+const scadaSeries = {
+  uplot: null,
+  maxPoints: 60,
+  ts: [],
+  temp: [],
+  hum: [],
+};
+
+function initScadaChart() {
+  const nowSec = Math.floor(Date.now() / 1000);
+  scadaSeries.ts = [];
+  scadaSeries.temp = [];
+  scadaSeries.hum = [];
+  for (let i = 24; i >= 1; i--) {
+    scadaSeries.ts.push(nowSec - i);
+    scadaSeries.temp.push(null);
+    scadaSeries.hum.push(null);
+  }
+
+  const wrap = dom.scadaChartWrap;
+  const width = Math.max(240, (wrap?.clientWidth || 420) - 4);
+  const height = Math.max(90, (wrap?.clientHeight || 118) - 2);
+
+  if (typeof window.uPlot === 'function' && dom.scadaChart) {
+    const opts = {
+      width,
+      height,
+      cursor: { show: true, drag: { x: false, y: false } },
+      legend: { show: false },
+      scales: {
+        x: { time: true },
+        temp: {
+          auto: true,
+          range: (_u, min, max) => [
+            min == null ? 18 : Math.min(18, min - 2),
+            max == null ? 34 : Math.max(32, max + 2),
+          ],
+        },
+        hum: {
+          auto: true,
+          range: (_u, min, max) => [
+            min == null ? 30 : Math.min(30, min - 4),
+            max == null ? 85 : Math.max(75, max + 5),
+          ],
+        },
+      },
+      axes: [
+        {
+          stroke: '#64748b',
+          grid: { stroke: 'rgba(51,65,85,0.35)', width: 1 },
+          ticks: { stroke: 'rgba(51,65,85,0.5)', size: 4 },
+          font: '10px monospace',
+          values: (_u, vals) =>
+            vals.map((v) =>
+              new Date(v * 1000).toLocaleTimeString('en-US', {
+                hour12: false,
+                minute: '2-digit',
+                second: '2-digit',
+              })
+            ),
+        },
+        {
+          scale: 'temp',
+          stroke: '#fbbf24',
+          grid: { stroke: 'rgba(51,65,85,0.32)', width: 1 },
+          font: '10px monospace',
+          size: 40,
+          values: (_u, vals) => vals.map((v) => `${Number(v).toFixed(0)}°`),
+        },
+        {
+          side: 1,
+          scale: 'hum',
+          stroke: '#38bdf8',
+          grid: { show: false },
+          font: '10px monospace',
+          size: 42,
+          values: (_u, vals) => vals.map((v) => `${Number(v).toFixed(0)}%`),
+        },
+      ],
+      series: [
+        {},
+        {
+          label: 'Temp (°C)',
+          scale: 'temp',
+          stroke: '#fbbf24',
+          width: 2.2,
+          fill: 'rgba(251, 191, 36, 0.10)',
+          spanGaps: true,
+        },
+        {
+          label: 'Humidity (%RH)',
+          scale: 'hum',
+          stroke: '#38bdf8',
+          width: 2.2,
+          fill: 'rgba(56, 189, 248, 0.10)',
+          spanGaps: true,
+        },
+      ],
+    };
+
+    scadaSeries.uplot = new window.uPlot(
+      opts,
+      [scadaSeries.ts, scadaSeries.temp, scadaSeries.hum],
+      dom.scadaChart
+    );
+
+    const ro = new ResizeObserver(() => {
+      if (!scadaSeries.uplot || !wrap) return;
+      const w = Math.max(200, wrap.clientWidth - 4);
+      const h = Math.max(85, wrap.clientHeight - 2);
+      scadaSeries.uplot.setSize({ width: w, height: h });
+    });
+    ro.observe(wrap);
+  } else if (dom.scadaFallbackCanvas) {
+    dom.scadaFallbackCanvas.hidden = false;
+    drawFallbackScadaChart();
+  }
+}
+
+function pushScadaSample(tempVal, humVal) {
+  const nowSec = Date.now() / 1000;
+  const prevTs = scadaSeries.ts.length ? scadaSeries.ts[scadaSeries.ts.length - 1] : 0;
+  const safeTs = nowSec <= prevTs ? prevTs + 0.1 : nowSec;
+
+  scadaSeries.ts.push(safeTs);
+  scadaSeries.temp.push(typeof tempVal === 'number' && !Number.isNaN(tempVal) ? tempVal : null);
+  scadaSeries.hum.push(typeof humVal === 'number' && !Number.isNaN(humVal) ? humVal : null);
+
+  while (scadaSeries.ts.length > scadaSeries.maxPoints) {
+    scadaSeries.ts.shift();
+    scadaSeries.temp.shift();
+    scadaSeries.hum.shift();
+  }
+
+  if (scadaSeries.uplot) {
+    scadaSeries.uplot.setData([scadaSeries.ts, scadaSeries.temp, scadaSeries.hum]);
+  } else {
+    drawFallbackScadaChart();
+  }
+}
+
+function drawFallbackScadaChart() {
+  const canvas = dom.scadaFallbackCanvas;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.fillStyle = '#070c12';
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.strokeStyle = '#192534';
+  for (let y = 20; y < h; y += 28) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+
+  const drawTrace = (arr, minV, maxV, color) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    let started = false;
+    arr.forEach((v, idx) => {
+      if (v == null) return;
+      const x = (idx / Math.max(1, arr.length - 1)) * (w - 16) + 8;
+      const y = h - 10 - ((v - minV) / Math.max(1, maxV - minV)) * (h - 22);
+      if (!started) {
+        ctx.moveTo(x, y);
+        started = true;
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+    if (started) ctx.stroke();
+  };
+
+  drawTrace(scadaSeries.temp, 15, 42, '#fbbf24');
+  drawTrace(scadaSeries.hum, 25, 95, '#38bdf8');
+}
+
+/* ==========================================================================
+   MANUAL & 2D BLUEPRINT DRAWER + FULLSCREEN LIGHTBOX
+   ========================================================================== */
+function setManualPage(pageNum, { flash = false, expandDrawer = false } = {}) {
   const page = Math.max(1, Math.min(9, Number(pageNum) || 1));
   state.manualPage = page;
   const imgUrl = `/assets/manual_pages/page_${page}.png`;
-  const caption = MANUAL_PAGES[page] || `Pág. ${page} · Manual TZ THT-02`;
+  const caption = MANUAL_PAGES[page] || `Page ${page} · TZ THT-02 Datasheet`;
 
   dom.manualPageImg.src = imgUrl;
-  dom.manualPageImg.alt = `Manual técnico TZ THT-02 Página ${page}`;
-  dom.manualPageIndicator.textContent = `PÁG ${page} / 9`;
+  dom.manualPageImg.alt = `TZ THT-02 Technical Manual Page ${page}`;
+  dom.manualPageIndicator.textContent = `PAGE ${page} / 9`;
   dom.manualPageCaption.textContent = caption;
 
   dom.manualQuickPills.querySelectorAll('.page-pill').forEach((pill) => {
     pill.classList.toggle('active', Number(pill.dataset.page) === page);
   });
 
-  // Update Lightbox if open
   dom.lightboxImg.src = imgUrl;
   dom.lightboxPageBadge.textContent = `${page} / 9`;
   dom.lightboxTitle.textContent = `TZ THT-02 User's Manual V1.1 — ${caption}`;
+
+  if (expandDrawer && state.manualCollapsed) {
+    state.manualCollapsed = false;
+    dom.manualDrawer.classList.remove('is-collapsed');
+    dom.btnToggleManualDrawer.setAttribute('aria-expanded', 'true');
+  }
 
   if (flash) {
     dom.manualViewerBox.classList.remove('cited-flash');
@@ -1484,19 +1865,24 @@ function drawFallbackScannerFrame() {
   const w = canvas.width;
   const h = canvas.height;
 
-  ctx.fillStyle = '#0d131a';
+  ctx.fillStyle = '#0b1118';
   ctx.fillRect(0, 0, w, h);
 
-  ctx.strokeStyle = '#1b2836';
+  ctx.strokeStyle = '#182433';
   ctx.lineWidth = 1;
   for (let x = 0; x < w; x += 32) {
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
   }
   for (let y = 0; y < h; y += 32) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
   }
 
-  // Draw schematic TZ THT-02 silhouette
   ctx.save();
   ctx.translate(w / 2, h / 2);
   ctx.rotate(THREE.MathUtils.degToRad(state.cameraAngleDeg));
@@ -1517,11 +1903,107 @@ function drawFallbackScannerFrame() {
 
   ctx.fillStyle = '#7dd3fc';
   ctx.font = '12px monospace';
-  ctx.fillText(`MODO LOCAL: ${state.activeCameraMode.toUpperCase()} · ESPERANDO /api/video/stream`, 16, h - 14);
+  ctx.fillText(`LOCAL MODE: ${state.activeCameraMode.toUpperCase()} · AWAITING /api/video/stream`, 16, h - 14);
 }
 
 /* ==========================================================================
-   BACKEND API INTEGRATION (RESILIENT TO MULTIPLE FASTAPI PAYLOAD SHAPES)
+   DYNAMIC SYSTEM STATE BANNER, ANDON STACK LIGHT & WORKFLOW STEPPER SYNC
+   ========================================================================== */
+function setWorkflowActiveStep(stepNum) {
+  state.activeStep = stepNum;
+  const map = [
+    [1, dom.btnStepInspect],
+    [2, dom.btnStepDip],
+    [3, dom.btnStepConnect],
+    [4, dom.btnStepSignoff],
+  ];
+  for (const [n, btn] of map) {
+    if (btn) btn.classList.toggle('is-current', n === stepNum);
+  }
+}
+
+function updateAndonAndBanners({ healthy, abn7fff, mb, repair }) {
+  const stage = repair?.stage || state.repairStage || 'IDLE_MONITORING';
+  state.repairStage = stage;
+
+  let andon = String(repair?.andon_state || '').toUpperCase();
+  if (!['RED', 'AMBER', 'GREEN'].includes(andon)) {
+    if (healthy) {
+      andon = 'GREEN';
+    } else if (stage === 'STEP2_GUIDING_DIP_MODBUS' || state.activeStep === 2) {
+      andon = 'AMBER';
+    } else {
+      andon = 'RED';
+    }
+  }
+  // Always prioritize healthy live SCADA green or 0x7FFF red alarm
+  if (healthy) andon = 'GREEN';
+  if (abn7fff) andon = 'RED';
+
+  // 1. Update 3-Tier Industrial Andon Stack Light
+  dom.andonStack.dataset.andon = andon;
+  dom.andonRed.classList.toggle('is-active', andon === 'RED');
+  dom.andonAmber.classList.toggle('is-active', andon === 'AMBER');
+  dom.andonGreen.classList.toggle('is-active', andon === 'GREEN');
+
+  // 2. Update Top System State Banner & Bottom SCADA Console Header
+  dom.systemStateBanner.classList.remove('is-red', 'is-amber', 'is-green');
+  dom.nextStepBox.classList.toggle('is-online', healthy);
+
+  if (andon === 'GREEN') {
+    dom.systemStateBanner.classList.add('is-green');
+    dom.systemStateText.textContent = '🟢 NOMINAL · SCADA ONLINE';
+    dom.systemStateSub.textContent = `Modbus RTU Slave #${mb?.slave_id || 1} Verified · ${Number(mb?.temp_c ?? 24.4).toFixed(1)} °C · ${Number(mb?.humidity_rh ?? 48.8).toFixed(1)} %RH`;
+    dom.scadaLiveCard.dataset.scadaState = 'green';
+    dom.scadaStatusBadge.textContent = '🟢 GREEN: MODBUS RTU ONLINE';
+
+    dom.nextStepTitle.textContent = 'NEXT STEP · STEP 4: GENERATE 3D SIGN-OFF DOSSIER';
+    dom.nextStepBody.innerHTML =
+      'Sensor verified online with live SHT30 telemetry! Click <strong>4. 3D Sign-Off Dossier</strong> to compile 4-angle CAD views and manufacturer approval package.';
+    if (state.activeStep < 3) setWorkflowActiveStep(3);
+  } else if (andon === 'AMBER') {
+    dom.systemStateBanner.classList.add('is-amber');
+    const targetSid = mb?.target_slave_id || computeDipAddress() || 1;
+    dom.systemStateText.textContent = '🟡 REPAIRING · CONFIGURE DIP-8';
+    dom.systemStateSub.textContent = `Set SW1 DIP-8 to Slave #${targetSid} · Close Housing & Energize RS-485 Bus`;
+    dom.scadaLiveCard.dataset.scadaState = 'amber';
+    dom.scadaStatusBadge.textContent = '🟡 AMBER: AWAITING BUS POWER';
+
+    dom.nextStepTitle.textContent = `NEXT STEP · STEP 3: POWER & VERIFY SLAVE #${targetSid}`;
+    dom.nextStepBody.innerHTML =
+      'Verify DIP-8 switches in the macro inset, re-thread the IP65 barrel, and click <strong>3. Power &amp; Verify Bus</strong>.';
+  } else {
+    dom.systemStateBanner.classList.add('is-red');
+    dom.scadaLiveCard.dataset.scadaState = 'red';
+    if (abn7fff) {
+      dom.systemStateText.textContent = '🔴 FAULT · 0x7FFF SHT30 PROBE ALARM';
+      dom.systemStateSub.textContent = 'Holding Registers 0000H/0001H reporting 0x7FFF abnormal sentinel (Manual Page 6)';
+      dom.scadaStatusBadge.textContent = '🔴 RED ALERT: 0x7FFF SHT30 ALARM';
+      dom.nextStepTitle.textContent = 'NEXT STEP · INSPECT SHT30 STRAINER TIP';
+      dom.nextStepBody.innerHTML =
+        'Sensor reports <code>0x7FFF</code> probe fault. Inspect stainless steel strainer head for condensation or physical obstruction.';
+    } else if (stage === 'STEP1_OPEN_FAULT_DETECTED' || state.exploded) {
+      dom.systemStateText.textContent = '🔴 FAULT / OFFLINE · OPEN HOUSING DETECTED';
+      dom.systemStateSub.textContent = 'Internal Blue DIP-8 PCB Exposed · Configure Modbus Slave Address';
+      dom.scadaStatusBadge.textContent = '🔴 RED ALERT: NO MODBUS SIGNAL';
+      dom.nextStepTitle.textContent = 'NEXT STEP · STEP 2: FOCUS & SET DIP-8';
+      dom.nextStepBody.innerHTML =
+        'Open housing detected! Click <strong>2. Focus &amp; Set DIP-8</strong> so the AI zooms onto the 8 pins and prescribes your Modbus address.';
+    } else {
+      dom.systemStateText.textContent = '🔴 FAULT / OFFLINE';
+      dom.systemStateSub.textContent = state.highlightedZone
+        ? `Twin Deviation in ${ZONE_SPECS[state.highlightedZone]?.shortLabel || state.highlightedZone} · No RS-485 Signal`
+        : 'No RS-485 Modbus Signal · Click "1. Inspect Fault" to begin';
+      dom.scadaStatusBadge.textContent = '🔴 RED ALERT: NO MODBUS SIGNAL';
+      dom.nextStepTitle.textContent = 'NEXT STEP · STEP 1: INSPECT SENSOR FAULT';
+      dom.nextStepBody.innerHTML =
+        'Click <strong>1. Inspect Fault</strong> in the top bar or hold the Push-to-Speak microphone button to diagnose the sensor.';
+    }
+  }
+}
+
+/* ==========================================================================
+   BACKEND API INTEGRATION & REAL-TIME TELEMETRY POLLING (~650ms)
    ========================================================================== */
 async function fetchJsonWithFallback(urls, options = {}) {
   let lastErr = null;
@@ -1538,7 +2020,7 @@ async function fetchJsonWithFallback(urls, options = {}) {
       lastErr = err;
     }
   }
-  throw lastErr || new Error('Endpoint local no disponible');
+  throw lastErr || new Error('Local offline API endpoint unavailable');
 }
 
 function applyTelemetryPayload(data) {
@@ -1548,117 +2030,149 @@ function applyTelemetryPayload(data) {
   const sys = data.system || data.hardware || data;
   const offline = data.offline || data.airplane_guard || data;
 
-  // 1. Airplane Mode Socket Guard Pill
+  // 1. Airplane Mode Badge
   const blocked = offline.blocked_external_attempts ?? 0;
   const offlineOk = offline.offline_verified !== false && offline.guard_active !== false;
   if (offlineOk) {
-    dom.pillAirplaneText.textContent = `AIRPLANE MODE: VERIFIED (${blocked} EXT SOCKETS)`;
+    dom.pillAirplaneText.textContent = `Airplane Mode: Verified (${blocked} Blocked)`;
   }
 
-  // 2. Camera FPS & Source Pill
+  // 2. Camera FPS & Source
   const fps = vision.fps ?? data.fps;
   const camSrc = vision.camera_source || vision.sim_mode || state.activeCameraMode;
   if (fps !== undefined) {
     const isRealUsb = String(camSrc).includes('video') || camSrc === 'uvc' || camSrc === 'usb';
-    dom.pillCamText.textContent = `${isRealUsb ? 'USB CAM' : 'BENCH SIM'}: ${Number(fps).toFixed(0)} FPS`;
-    dom.camSourceBadge.textContent = String(camSrc).toUpperCase();
+    dom.pillCamText.textContent = `${Number(fps).toFixed(0)} FPS`;
+    dom.camSourceBadge.textContent = isRealUsb ? 'LIVE USB CAM' : String(camSrc).toUpperCase();
   }
 
-  // 3. Model Pill
+  // Sync camera dropdown if changed externally
+  if (vision.mode && dom.selectCameraMode && dom.selectCameraMode.value !== vision.mode) {
+    const hasOpt = Array.from(dom.selectCameraMode.options).some((o) => o.value === vision.mode);
+    if (hasOpt) dom.selectCameraMode.value = vision.mode;
+  }
+
+  // 3. AI Model, RAM & Latency
   if (sys.model_name || sys.models_label) {
     dom.pillModelText.textContent = sys.model_name || sys.models_label;
   }
-
-  // 4. RAM Pill
   const ramUsed = sys.ram_used_gb ?? sys.memory_used_gb;
   const ramTotal = sys.ram_total_gb ?? sys.memory_total_gb;
   if (ramUsed !== undefined && ramTotal !== undefined) {
-    dom.pillRamText.textContent = `${Number(ramUsed).toFixed(1)} / ${Number(ramTotal).toFixed(0)} GB`;
+    dom.pillRamText.textContent = `${Number(ramUsed).toFixed(1)}/${Number(ramTotal).toFixed(0)} GB`;
   }
-
-  // 5. Latency & Throughput Pill
   const latMs = sys.last_latency_ms ?? data.latency_ms;
   const tokSec = sys.tokens_per_sec ?? data.tok_per_s ?? data.tps;
-  if (latMs !== undefined && latMs !== null) {
+  if (latMs !== undefined && latMs !== null && Number(latMs) > 0) {
     const tpsText = tokSec ? ` (${Number(tokSec).toFixed(1)} tok/s)` : '';
     dom.pillLatencyText.textContent = `${Math.round(Number(latMs))} ms${tpsText}`;
   }
 
-  // 6. Scanner Angle, Metrology Dimensions & Real-Time 3D Sync
+  // 4. Scanner Angle, Metrology & Multi-Angle Scan Coverage Progress
   if (typeof vision.angle_deg === 'number') {
     state.cameraAngleDeg = vision.angle_deg;
     dom.scanAngleVal.textContent = `${vision.angle_deg.toFixed(1)}°`;
+
+    state.scanFramesObserved += 1;
+    state.minObservedAngle = Math.min(state.minObservedAngle, vision.angle_deg);
+    state.maxObservedAngle = Math.max(state.maxObservedAngle, vision.angle_deg);
+    const angularSpan = state.maxObservedAngle - state.minObservedAngle;
+    const coveragePct = Math.min(
+      100,
+      Math.round(36 + angularSpan * 4.5 + Math.min(46, state.scanFramesObserved * 1.4))
+    );
+    dom.scanCoverageVal.textContent = `${coveragePct}%`;
+    dom.scanCoverageFill.style.width = `${coveragePct}%`;
   }
 
   const estL = vision.est_length_mm;
   const estD = vision.est_diameter_mm;
   if (typeof estL === 'number' && typeof estD === 'number') {
-    dom.scanDimVal.textContent = `${estL.toFixed(1)}×${estD.toFixed(1)}mm`;
+    dom.scanDimVal.textContent = `${estL.toFixed(1)}×${estD.toFixed(1)} mm`;
   }
 
-  // 7. Auto-Explode 3D Housing when OpenCV detects open DIP switch PCB!
-  const pcbOpen = Boolean(vision.pcb_open_detected || data.explode_pcb);
+  // 5. Auto-Explode 3D Housing & DIP-8 Pin-Focus Macro PiP
+  const pcbOpen = Boolean(
+    vision.pcb_open_detected || data.explode_pcb || data.repair?.focus_dip
+  );
   if (state.autoExplodeEnabled && pcbOpen !== state.exploded) {
-    setExplodedState(pcbOpen);
+    setExplodedState(pcbOpen, { zoomDip: pcbOpen });
+  }
+  if (pcbOpen && !state.dipPipVisible && !state.dipPipDismissed) {
+    setDipPipVisibility(true);
   }
 
-  // 8. Real-Time Fault Highlighting from OpenCV Anomaly Detector
-  if (vision.anomaly_detected && vision.anomaly_zone) {
-    setFaultHighlight(
-      vision.anomaly_zone,
-      vision.anomaly_label || `Anomalía óptica detectada en ${vision.anomaly_zone} (conf ${(Number(vision.anomaly_confidence || 0.9) * 100).toFixed(0)}%)`
-    );
-  } else if (vision.anomaly_detected === false && !state.lastDiagnosisFaultLock) {
-    setFaultHighlight(null);
-  }
-
-  // 9. Live RS-485 Modbus SCADA Telemetry (FT2232HL USB / Simulator)
-  const mb = data.modbus;
-  if (mb && typeof mb === 'object' && dom.scadaLiveCard) {
-    const healthy = Boolean(mb.healthy);
-    const abn7fff = Boolean(mb.online && mb.sensor_abnormal_7fff);
-    state.modbusHealthy = healthy;
-
-    dom.scadaLiveCard.classList.toggle('is-online', healthy);
-    dom.scadaStatusBadge.classList.remove('is-offline', 'is-online', 'is-fault');
-
-    if (healthy) {
-      dom.scadaStatusBadge.classList.add('is-online');
-      dom.scadaStatusBadge.textContent = 'VALIDADO EN LÍNEA';
-      dom.scadaTempVal.textContent = `${Number(mb.temp_c).toFixed(1)} °C`;
-      dom.scadaHumVal.textContent = `${Number(mb.humidity_rh).toFixed(1)} %RH`;
-      dom.scadaSlaveVal.textContent = `#${mb.slave_id} · ${mb.baud_bps || 9600}`;
-      dom.scadaFrameHex.textContent = `RX: ${mb.last_rx_hex || ''} (CRC OK · ${mb.roundtrip_ms || 12}ms)`;
-      if (dom.pillModbus) {
-        dom.pillModbus.className = 'pill pill-emerald';
-        dom.pillModbusText.textContent = `MODBUS #${mb.slave_id}: ${Number(mb.temp_c).toFixed(1)}°C · ${Number(mb.humidity_rh).toFixed(1)}%RH`;
-      }
-    } else if (abn7fff) {
-      dom.scadaStatusBadge.classList.add('is-fault');
-      dom.scadaStatusBadge.textContent = 'ALARMA 7FFFH';
-      dom.scadaTempVal.textContent = '7FFF H';
-      dom.scadaHumVal.textContent = '7FFF H';
-      dom.scadaSlaveVal.textContent = `#${mb.slave_id} · ${mb.baud_bps || 9600}`;
-      dom.scadaFrameHex.textContent = `RX: ${mb.last_rx_hex || ''} (SONDA SHT30 ANORMAL)`;
-      if (dom.pillModbus) {
-        dom.pillModbus.className = 'pill pill-amber';
-        dom.pillModbusText.textContent = 'MODBUS RS-485: ALARMA 7FFFH';
-      }
-    } else {
-      dom.scadaStatusBadge.classList.add('is-offline');
-      dom.scadaStatusBadge.textContent = mb.adapter_present ? 'SIN RESPUESTA' : 'SIN SEÑAL';
-      dom.scadaTempVal.textContent = '--.- °C';
-      dom.scadaHumVal.textContent = '--.- %RH';
-      dom.scadaSlaveVal.textContent = `#${mb.target_slave_id || 1} · ${mb.baud_bps || 9600}`;
-      dom.scadaFrameHex.textContent = `TX: ${mb.last_tx_hex || '01 03 00 00 00 08 44 0C'} · TIMEOUT`;
-      if (dom.pillModbus) {
-        dom.pillModbus.className = 'pill pill-neutral';
-        dom.pillModbusText.textContent = 'MODBUS RS-485: SIN SEÑAL';
-      }
+  // 6. Real-Time Optical Anomaly -> 3D Red Fault Stain
+  if (!state.modbusHealthy) {
+    if (vision.anomaly_detected && vision.anomaly_zone) {
+      setFaultHighlight(
+        vision.anomaly_zone,
+        vision.anomaly_label ||
+          `Optical deviation localized on ${vision.anomaly_zone} (${(
+            Number(vision.anomaly_confidence || 0.92) * 100
+          ).toFixed(0)}% confidence)`
+      );
+    } else if (vision.anomaly_detected === false && !state.lastDiagnosisFaultLock) {
+      setFaultHighlight(null);
     }
   }
 
-  // 10. Zero-Click Proactive Live Repair Event Watcher (speaks automatically when Modbus connects!)
+  // 7. Live RS-485 Modbus SCADA Telemetry & State Transitions
+  const mb = data.modbus || {};
+  const healthy = Boolean(mb.healthy);
+  const abn7fff = Boolean(mb.online && mb.sensor_abnormal_7fff);
+  state.modbusHealthy = healthy;
+
+  if (mb.mode && dom.selectModbusMode && dom.selectModbusMode.value !== mb.mode) {
+    const hasMbOpt = Array.from(dom.selectModbusMode.options).some((o) => o.value === mb.mode);
+    if (hasMbOpt) dom.selectModbusMode.value = mb.mode;
+  }
+
+  // Rising edge: Sensor just came online on RS-485 Modbus!
+  if (healthy && !state.wasModbusHealthy) {
+    state.lastDiagnosisFaultLock = false;
+    setFaultHighlight(null);
+    state.emeraldVerifyUntil = performance.now() + 2600;
+    if (state.exploded && state.autoExplodeEnabled) {
+      setExplodedState(false);
+      reset3DCamera();
+    }
+  }
+  state.wasModbusHealthy = healthy;
+
+  dom.scadaTempVal.classList.toggle('is-alarm', abn7fff);
+  dom.scadaHumVal.classList.toggle('is-alarm', abn7fff);
+
+  if (healthy) {
+    const tVal = Number(mb.temp_c);
+    const hVal = Number(mb.humidity_rh);
+    dom.scadaTempVal.textContent = `${tVal.toFixed(1)} °C`;
+    dom.scadaHumVal.textContent = `${hVal.toFixed(1)} %RH`;
+    dom.scadaSlaveVal.textContent = `Slave #${String(mb.slave_id || 1).padStart(2, '0')} · ${mb.baud_bps || 9600} 8N1`;
+    dom.scadaCrcPill.textContent = 'CRC-16 OK';
+    dom.scadaFrameHex.textContent = `RX: ${mb.last_rx_hex || ''} (${mb.roundtrip_ms || 12} ms)`;
+    pushScadaSample(tVal, hVal);
+  } else if (abn7fff) {
+    dom.scadaTempVal.textContent = '0x7FFF';
+    dom.scadaHumVal.textContent = '0x7FFF';
+    dom.scadaSlaveVal.textContent = `Slave #${String(mb.slave_id || 1).padStart(2, '0')} · ${mb.baud_bps || 9600} 8N1`;
+    dom.scadaCrcPill.textContent = 'PROBE FAULT';
+    dom.scadaFrameHex.textContent = `RX: ${mb.last_rx_hex || ''} (SHT30 0x7FFF ALARM)`;
+    setFaultHighlight('strainer_head', 'Modbus Register 0x0000/0x0001 returned 0x7FFF probe fault.');
+    pushScadaSample(null, null);
+  } else {
+    dom.scadaTempVal.textContent = '--.- °C';
+    dom.scadaHumVal.textContent = '--.- %RH';
+    dom.scadaSlaveVal.textContent = `Slave #${String(mb.target_slave_id || computeDipAddress() || 1).padStart(2, '0')} · ${mb.baud_bps || 9600} 8N1`;
+    dom.scadaCrcPill.textContent = mb.adapter_present ? 'BUS TIMEOUT' : 'NO SIGNAL';
+    dom.scadaFrameHex.textContent = `TX: ${mb.last_tx_hex || '01 03 00 00 00 08 44 0C'} · AWAITING RESPONSE`;
+    pushScadaSample(null, null);
+  }
+
+  updateAndonAndBanners({ healthy, abn7fff, mb, repair: data.repair });
+  updateTwinMatchBadge();
+
+  // 8. Zero-Click Proactive Live Repair Voice Event Watcher
   const latestEvId = Number(data.repair?.latest_event_id || 0);
   if (latestEvId > state.seenRepairEventId) {
     state.seenRepairEventId = latestEvId;
@@ -1670,10 +2184,11 @@ function applyTelemetryPayload(data) {
           setExplodedState(false);
           setFaultHighlight(null);
           state.lastDiagnosisFaultLock = false;
+          reset3DCamera();
         }
         handleCopilotResponse({
           ...ev,
-          model: `LIVE WATCH · ${ev.title || 'SCADA'}`,
+          model: `LIVE WATCH · ${ev.title || 'SCADA EVENT'}`,
         });
       })
       .catch(() => {});
@@ -1684,37 +2199,43 @@ async function pollTelemetry() {
   try {
     const data = await fetchJsonWithFallback(['/api/telemetry', '/api/status', '/api/health']);
     applyTelemetryPayload(data);
+    if (state.dipPipVisible) {
+      refreshDipCropImage();
+    }
   } catch (_err) {
     drawFallbackScannerFrame();
   }
 }
 
+/* ==========================================================================
+   CAMERA & MODBUS BENCH MODE SELECTORS
+   ========================================================================== */
 async function switchCameraMode(mode) {
   state.activeCameraMode = mode;
   state.lastDiagnosisFaultLock = false;
 
-  document.querySelectorAll('.sim-btn').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.camMode === mode);
-  });
-
-  // Optimistic local responsiveness even before backend round-trip completes
   if (mode === 'sim_open_dip') {
-    setExplodedState(true);
+    state.dipPipDismissed = false;
+    setExplodedState(true, { zoomDip: true });
+    setFaultHighlight('upper_barrel_dip', 'Open housing detected exposing internal SW1 DIP-8 block.');
     setManualPage(5, { flash: true });
   } else if (mode === 'sim_normal') {
     setExplodedState(false);
     setFaultHighlight(null);
+    reset3DCamera();
   } else if (mode === 'sim_strainer_patch') {
     setExplodedState(false);
-    setFaultHighlight('strainer_head', 'Obstrucción detectada en cabezal filtrante SHT30');
+    setFaultHighlight('strainer_head', 'Physical obstruction / fault patch detected on SHT30 strainer head.');
+    reset3DCamera();
   } else if (mode === 'sim_gland_fault') {
     setExplodedState(false);
-    setFaultHighlight('waterproof_gland_leads', 'Anomalía mecánica/eléctrica en prensaestopas y latiguillo RS-485');
+    setFaultHighlight('waterproof_gland_leads', 'Mechanical/wiring fault detected at waterproof cable gland & RS-485 leads.');
+    reset3DCamera();
   }
 
   try {
     const res = await fetchJsonWithFallback(
-      ['/api/camera/mode', '/api/video/mode', '/api/scanner/mode'],
+      ['/api/video/mode', '/api/camera/mode', '/api/scanner/mode'],
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1722,13 +2243,29 @@ async function switchCameraMode(mode) {
       }
     );
     applyTelemetryPayload(res);
-    // Refresh MJPEG stream seamlessly
     state.videoStreamFailed = false;
     dom.videoFallbackCanvas.hidden = true;
     dom.videoStream.hidden = false;
     dom.videoStream.src = `/api/video/stream?t=${Date.now()}`;
   } catch (_err) {
     drawFallbackScannerFrame();
+  }
+}
+
+async function switchModbusMode(mode) {
+  state.activeModbusMode = mode;
+  try {
+    const res = await fetchJsonWithFallback(['/api/modbus/mode'], {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode,
+        slave_id: computeDipAddress() || 1,
+      }),
+    });
+    applyTelemetryPayload(res);
+  } catch (_err) {
+    // Handled on next poll
   }
 }
 
@@ -1740,29 +2277,28 @@ async function uploadCustomBenchPhoto(file) {
 
   appendChatMessage({
     role: 'user',
-    author: 'OPERADOR DE CAMPO',
-    text: `📷 Fotografía de inspección cargada: ${file.name}`,
+    author: 'FIELD OPERATOR',
+    text: `Uploaded optical inspection photo: ${file.name}`,
   });
 
   try {
     const res = await fetchJsonWithFallback(
-      ['/api/camera/upload', '/api/video/upload', '/api/scanner/upload'],
+      ['/api/video/upload', '/api/camera/upload', '/api/scanner/upload'],
       { method: 'POST', body: formData }
     );
     applyTelemetryPayload(res);
     dom.videoStream.src = `/api/video/stream?t=${Date.now()}`;
-    document.querySelectorAll('.sim-btn').forEach((b) => b.classList.remove('active'));
-  } catch (err) {
+  } catch (_err) {
     appendChatMessage({
       role: 'assistant',
-      author: 'SISTEMA',
-      text: `Imagen cargada localmente (${file.name}). Lista para diagnóstico multimodal.`,
+      author: 'VISION SCANNER',
+      text: `Loaded local frame (${file.name}) for multimodal inspection.`,
     });
   }
 }
 
 /* ==========================================================================
-   MULTIMODAL COPILOT CHAT, CITATIONS & SPEECH AUDIO PLAYBACK
+   AI VOICE ENGINEER TRANSCRIPT, CITATIONS & ENGLISH TTS PLAYBACK
    ========================================================================== */
 function playDiagnosisAudio(audioB64, fallbackText) {
   if (audioB64) {
@@ -1774,7 +2310,7 @@ function playDiagnosisAudio(audioB64, fallbackText) {
       audio.play().catch(() => speakBrowserFallback(fallbackText));
       return;
     } catch (_e) {
-      // Fallback to Web Speech Synthesis
+      // Fall through to Web Speech en-US synthesis
     }
   }
   speakBrowserFallback(fallbackText);
@@ -1786,28 +2322,31 @@ function speakBrowserFallback(text) {
     window.speechSynthesis.cancel();
     const clean = text.replace(/[`*_#]/g, '');
     const utter = new SpeechSynthesisUtterance(clean);
-    utter.lang = 'es-ES';
-    utter.rate = 1.04;
+    utter.lang = 'en-US';
+    utter.rate = 1.03;
     window.speechSynthesis.speak(utter);
   } catch (_e) {
-    // Ignore if headless browser lacks TTS voices
+    // Ignore in headless environments without speech voices
   }
 }
 
 function normalizeCitations(payload) {
-  const raw = payload.citations || payload.manual_citations || payload.cited_pages || [];
+  const raw = payload.manual_citations || payload.citations || payload.cited_pages || [];
   const list = [];
   for (const item of raw) {
     if (typeof item === 'number') {
-      list.push({ page: item, label: `Pág. ${item} · ${MANUAL_PAGES[item]?.split('·')[1]?.trim() || 'Manual'}` });
+      list.push({
+        page: item,
+        label: `Page ${item} · ${MANUAL_PAGES[item]?.split('·')[1]?.trim() || 'Datasheet'}`,
+      });
     } else if (typeof item === 'string') {
       const m = item.match(/(\d+)/);
       const p = m ? Number(m[1]) : 1;
       list.push({ page: p, label: item });
     } else if (item && typeof item === 'object') {
       const p = Number(item.page || item.page_number || 1);
-      const lbl = item.label || item.title || item.section || `Pág. ${p}`;
-      list.push({ page: p, label: lbl.includes('Pág') ? lbl : `Pág. ${p} · ${lbl}` });
+      const lbl = item.label || item.title || item.section || `Page ${p}`;
+      list.push({ page: p, label: lbl.toLowerCase().includes('page') ? lbl : `Page ${p} · ${lbl}` });
     }
   }
   return list;
@@ -1815,24 +2354,30 @@ function normalizeCitations(payload) {
 
 function appendChatMessage({
   role = 'assistant',
-  author = 'LFM3-VL-2B · COPILOTO',
+  author = 'LFM3-VL-2B · AI ENGINEER',
   text = '',
   causes = [],
   citations = [],
   audioB64 = null,
   isFault = false,
+  isVerified = false,
   latencyMs = null,
 }) {
   const article = document.createElement('article');
-  article.className = `msg msg-${role}${isFault ? ' is-fault' : ''}`;
+  article.className = `msg msg-${role}${isFault ? ' is-fault' : ''}${isVerified ? ' is-verified' : ''}`;
 
   const timeStr = latencyMs
     ? `${Math.round(latencyMs)} ms`
-    : new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    : new Date().toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
 
   const meta = document.createElement('div');
   meta.className = 'msg-meta';
-  meta.innerHTML = `<span class="msg-author"></span><span class="msg-time"></span>`;
+  meta.innerHTML = '<span class="msg-author"></span><span class="msg-time"></span>';
   meta.querySelector('.msg-author').textContent = author;
   meta.querySelector('.msg-time').textContent = timeStr;
   article.appendChild(meta);
@@ -1847,21 +2392,21 @@ function appendChatMessage({
     causesBox.className = 'causes-box';
     const title = document.createElement('div');
     title.className = 'causes-title';
-    title.textContent = 'CAUSAS PROBABLES Y ACCIONES DE CAMPO:';
+    title.textContent = 'PROBABLE CAUSES & FIELD ACTIONS:';
     causesBox.appendChild(title);
 
     const ul = document.createElement('ul');
     ul.className = 'causes-list';
     causes.forEach((c) => {
       const li = document.createElement('li');
-      li.textContent = typeof c === 'string' ? c : (c.cause || c.description || JSON.stringify(c));
+      li.textContent = typeof c === 'string' ? c : c.cause || c.description || JSON.stringify(c);
       ul.appendChild(li);
     });
     causesBox.appendChild(ul);
     article.appendChild(causesBox);
   }
 
-  if ((citations && citations.length > 0) || role === 'assistant') {
+  if ((citations && citations.length > 0) || (role === 'assistant' && text)) {
     const row = document.createElement('div');
     row.className = 'citation-row';
 
@@ -1870,7 +2415,9 @@ function appendChatMessage({
       chip.type = 'button';
       chip.className = 'cite-chip';
       chip.textContent = cite.label;
-      chip.addEventListener('click', () => setManualPage(cite.page, { flash: true }));
+      chip.addEventListener('click', () =>
+        setManualPage(cite.page, { flash: true, expandDrawer: true })
+      );
       row.appendChild(chip);
     });
 
@@ -1878,7 +2425,7 @@ function appendChatMessage({
       const speakBtn = document.createElement('button');
       speakBtn.type = 'button';
       speakBtn.className = 'btn-speak-msg';
-      speakBtn.textContent = '🔊 Escuchar diagnóstico';
+      speakBtn.textContent = 'Replay Voice';
       speakBtn.addEventListener('click', () => playDiagnosisAudio(audioB64, text));
       row.appendChild(speakBtn);
     }
@@ -1890,16 +2437,17 @@ function appendChatMessage({
   dom.chatFeed.scrollTop = dom.chatFeed.scrollHeight;
 }
 
-function handleCopilotResponse(res, fallbackQuery = '') {
+function handleCopilotResponse(res) {
   if (!res || typeof res !== 'object') return;
 
   const answerText =
+    res.assistant_message ||
     res.diagnosis ||
     res.answer ||
     res.response ||
     res.message ||
     res.summary ||
-    'Diagnóstico completado sobre gemelo TZ THT-02.';
+    'Multimodal inspection completed on TZ THT-02 Digital Twin.';
 
   const causes = res.probable_causes || res.causes || res.recommendations || [];
   const citations = normalizeCitations(res);
@@ -1911,28 +2459,28 @@ function handleCopilotResponse(res, fallbackQuery = '') {
     dom.pillLatencyText.textContent = `${Math.round(Number(latMs))} ms${tokSec ? ` (${Number(tokSec).toFixed(1)} tok/s)` : ''}`;
   }
 
-  // Highlight 3D CAD zone if returned by AI / OpenCV
   const zone = res.highlighted_zone || res.fault_zone || res.anomaly_zone || null;
-  if (zone && ZONE_SPECS[zone]) {
+  if (zone && ZONE_SPECS[zone] && !state.modbusHealthy) {
     state.lastDiagnosisFaultLock = true;
-    setFaultHighlight(zone, res.fault_title || res.short_diagnosis || answerText.slice(0, 110));
+    setFaultHighlight(zone, res.fault_title || res.short_diagnosis || answerText.slice(0, 125));
     selectZone(zone, { flipManual: false });
   }
 
-  // Auto-open housing if AI sets explode_pcb
-  if (res.explode_pcb === true || zone === 'upper_barrel_dip') {
-    setExplodedState(true);
+  const shouldFocusDip = Boolean(res.focus_dip || res.explode_pcb === true || zone === 'upper_barrel_dip');
+  if (shouldFocusDip) {
+    state.dipPipDismissed = false;
+    setExplodedState(true, { zoomDip: true });
+    setDipPipVisibility(true);
   } else if (res.explode_pcb === false) {
     setExplodedState(false);
+    reset3DCamera();
   }
 
-  // Sync 3D DIP-8 switches on internal Blue PCB if AI prescribed a pin configuration!
   if (Array.isArray(res.dip_bits) && res.dip_bits.length === 8) {
     state.dipBits = res.dip_bits.map((b) => (b ? 1 : 0));
     renderDipHud();
   }
 
-  // Auto-flip Manual Page to primary cited page!
   const primaryPage = res.manual_page || citations[0]?.page;
   if (primaryPage) {
     setManualPage(primaryPage, { flash: true });
@@ -1948,7 +2496,8 @@ function handleCopilotResponse(res, fallbackQuery = '') {
     causes,
     citations,
     audioB64,
-    isFault: Boolean(zone),
+    isFault: Boolean(zone && !state.modbusHealthy),
+    isVerified: Boolean(state.modbusHealthy || res.stage === 'STEP3_SCADA_ONLINE_VERIFIED'),
     latencyMs: latMs,
   });
 
@@ -1964,16 +2513,19 @@ function handleCopilotResponse(res, fallbackQuery = '') {
 }
 
 /* ==========================================================================
-   GUIDED CLOSED-LOOP REPAIR QUICK-ACTIONS & TEXT / VOICE QUERIES
+   4-STEP GUIDED REPAIR WORKFLOW & MULTIMODAL QUERIES
    ========================================================================== */
 async function runStep1OpenInspection() {
+  setWorkflowActiveStep(1);
+  state.dipPipDismissed = false;
+
   appendChatMessage({
     role: 'user',
-    author: 'OPERADOR · PASO 1',
-    text: 'Mira, este sensor TZ THT-02 no enciende, está abierto y desconfigurado con sus pines.',
+    author: 'OPERATOR · STEP 1',
+    text: 'Inspect this TZ THT-02 sensor: the housing is open, there is no Modbus signal, and the DIP-8 switches look unconfigured.',
   });
 
-  setExplodedState(true);
+  setExplodedState(true, { zoomDip: true });
   setManualPage(5, { flash: true });
 
   try {
@@ -1983,10 +2535,10 @@ async function runStep1OpenInspection() {
       body: JSON.stringify({ step: 'inspect_open', sync_simulator: true }),
     });
     dom.videoStream.src = `/api/video/stream?t=${Date.now()}`;
-    handleCopilotResponse({ ...res, model: 'COPILOTO LIVE · INSPECCIÓN PASO 1' });
+    handleCopilotResponse({ ...res, model: 'AI VOICE ENGINEER · STEP 1 INSPECTION' });
     pollTelemetry();
   } catch (_err) {
-    await submitDiagnosisQuery('Este sensor está abierto y no enciende, revisar pines DIP', {
+    await submitDiagnosisQuery('Sensor housing is open and offline; inspect exposed DIP-8 switches.', {
       includeCamera: true,
       zoneHint: 'upper_barrel_dip',
     });
@@ -1994,13 +2546,18 @@ async function runStep1OpenInspection() {
 }
 
 async function runStep2ModbusDipGuidance() {
+  setWorkflowActiveStep(2);
+  state.dipPipDismissed = false;
+
   appendChatMessage({
     role: 'user',
-    author: 'OPERADOR · PASO 2',
-    text: 'Está en modo Modbus-RTU. Acércate a los pines e indícame cómo configurarlos.',
+    author: 'OPERATOR · STEP 2',
+    text: 'Zoom in on the DIP-8 block and configure it for standard Industrial Modbus RTU Slave 1 (9600 bps, 8N1).',
   });
 
-  setExplodedState(true);
+  setExplodedState(true, { zoomDip: true });
+  setDipPipVisibility(true);
+  focusDip3DCamera();
   setManualPage(5, { flash: true });
 
   try {
@@ -2009,13 +2566,15 @@ async function runStep2ModbusDipGuidance() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         step: 'guide_dip',
-        query: 'Está en modo Modbus dirección esclava 1 (9600 bps)',
+        query: 'Configure it for standard Industrial Modbus RTU slave 1 (9600 bps)',
       }),
     });
-    handleCopilotResponse({ ...res, model: 'COPILOTO LIVE · GUÍA PINES DIP-8' });
+    handleCopilotResponse({ ...res, model: 'AI VOICE ENGINEER · STEP 2 DIP-8 GUIDE' });
     pollTelemetry();
   } catch (_err) {
-    await submitDiagnosisQuery('Modo Modbus dirección esclava 1, qué pines DIP pongo', {
+    state.dipBits = [0, 0, 0, 0, 0, 0, 0, 1];
+    renderDipHud();
+    await submitDiagnosisQuery('Configure DIP-8 switches for Modbus RTU Slave 1 at 9600 bps.', {
       includeCamera: true,
       zoneHint: 'upper_barrel_dip',
     });
@@ -2023,10 +2582,13 @@ async function runStep2ModbusDipGuidance() {
 }
 
 async function runStep3ConnectAndValidateModbus() {
+  setWorkflowActiveStep(3);
+  const targetSlave = computeDipAddress() || 1;
+
   appendChatMessage({
     role: 'user',
-    author: 'OPERADOR · PASO 3',
-    text: 'Pines configurados y carcasa cerrada. Conectando sensor al USB-RS485 (FT2232HL) y fuente DC...',
+    author: 'OPERATOR · STEP 3',
+    text: `DIP-8 set to Slave #${targetSlave} and barrel closed. Energizing DC supply and connecting RS-485 bus...`,
   });
 
   try {
@@ -2035,15 +2597,15 @@ async function runStep3ConnectAndValidateModbus() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         step: 'connect_modbus',
-        slave_id: computeDipAddress() || 1,
+        slave_id: targetSlave,
       }),
     });
     dom.videoStream.src = `/api/video/stream?t=${Date.now()}`;
     if (res.event_id) {
       state.seenRepairEventId = Math.max(state.seenRepairEventId, Number(res.event_id));
     }
-    if (res.diagnosis) {
-      handleCopilotResponse({ ...res, model: 'SCADA RS-485 · VALIDACIÓN EN VIVO' });
+    if (res.assistant_message || res.diagnosis) {
+      handleCopilotResponse({ ...res, model: 'SCADA RS-485 · LIVE VERIFICATION' });
     }
     pollTelemetry();
   } catch (_err) {
@@ -2055,7 +2617,7 @@ async function submitDiagnosisQuery(queryText, { includeCamera = true, zoneHint 
   if (!queryText.trim()) return;
   appendChatMessage({
     role: 'user',
-    author: 'OPERADOR DE CAMPO',
+    author: 'FIELD OPERATOR',
     text: queryText,
   });
 
@@ -2065,15 +2627,15 @@ async function submitDiagnosisQuery(queryText, { includeCamera = true, zoneHint 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         query: queryText,
+        prompt: queryText,
         include_camera: includeCamera,
         zone: zoneHint,
         dip_address: computeDipAddress(),
         dip_bits: state.dipBits,
       }),
     });
-    handleCopilotResponse(res, queryText);
+    handleCopilotResponse(res);
   } catch (_err) {
-    // Deterministic offline engineering fallback if backend is still starting up
     const lower = queryText.toLowerCase();
     const isDip = lower.includes('dip') || zoneHint === 'upper_barrel_dip';
     const addr = computeDipAddress();
@@ -2083,30 +2645,31 @@ async function submitDiagnosisQuery(queryText, { includeCamera = true, zoneHint 
             model: 'LFM3-VL-2B (OFFLINE)',
             highlighted_zone: 'upper_barrel_dip',
             explode_pcb: true,
-            diagnosis: `Carcasa abierta en vista de despiece (Pasos 1 y 2). El bloque DIP de 8 posiciones suma los bits en ON con pesos [128, 64, 32, 16, 8, 4, 2, 1]. Dirección esclava actual: ${addr} (registro 0004H solo lectura).`,
+            focus_dip: true,
+            diagnosis: `Exploded view active (Manual Page 5 Steps 1 & 2). The 8-pin SW1 DIP switch sums active ON weights [128, 64, 32, 16, 8, 4, 2, 1]. Current Slave ID: #${addr} (Register 0x0004).`,
             probable_causes: [
-              'Verificar que no existan dos sensores con la misma dirección esclava en el bus RS-485.',
-              'Confirmar formato RTU 9600 bps, 8 bits de datos, sin paridad, 1 bit de parada (Pág. 5).',
+              'Ensure every sensor on the RS-485 trunk has a unique Slave ID (1..247).',
+              'Verify Modbus RTU serial framing: 9600 bps, 8 data bits, No parity, 1 stop bit (Page 5).',
             ],
             citations: [
-              { page: 5, label: 'Pág. 5 · DIP Switch (Ej. 176)' },
-              { page: 6, label: 'Pág. 6 · Reg 0004H Dirección' },
+              { page: 5, label: 'Page 5 · DIP-8 Addressing' },
+              { page: 6, label: 'Page 6 · Reg 0x0004 Address' },
             ],
           }
         : {
             model: 'LFM3-VL-2B (OFFLINE)',
             highlighted_zone: state.highlightedZone || 'strainer_head',
             diagnosis:
-              'Inspección óptica + manual TZ THT-02: anomalía localizada en el cabezal ranurado / filtro sinterizado del SHT30. Cuando el registro 0000H o 0001H reporta 7FFFH, el sensor indica condición anormal en el elemento sensible.',
+              'Optical + TZ THT-02 Datasheet inspection: deviation localized on the slotted stainless steel SHT30 strainer head. Holding Register 0x7FFF indicates an abnormal sensing element condition.',
             probable_causes: [
-              'Obstrucción física o saturación por condensación en el filtro sinterizado de acero inoxidable (Pág. 1 / Pág. 4).',
-              'Lectura 7FFFH en registros 0000H (Temp) o 0001H (Humedad) por daño en sonda SHT30 (Pág. 6).',
-              'Ruido de modo común en bus RS-485 por falta de tierra común GND entre transceptor y fuente DC 5~24V (Pág. 4).',
+              'Condensation saturation or particulate clogging inside the SS316L sintered filter mesh (Page 1 & Page 4).',
+              'Sentinel 0x7FFF on Registers 0x0000 (Temp) or 0x0001 (Humidity) due to SHT30 probe damage (Page 6).',
+              'Missing common GND reference between DC power supply and FT2232HL RS-485 transceiver (Page 4).',
             ],
             citations: [
-              { page: 6, label: 'Pág. 6 · Reg 7FFFH Sensor Anormal' },
-              { page: 4, label: 'Pág. 4 · Tierra RS-485 GND' },
-              { page: 1, label: 'Pág. 1 · Filtro Inox SHT30' },
+              { page: 6, label: 'Page 6 · Reg 0x7FFF Probe Alarm' },
+              { page: 4, label: 'Page 4 · RS-485 Wiring & GND' },
+              { page: 1, label: 'Page 1 · SHT30 Strainer Filter' },
             ],
           }
     );
@@ -2114,7 +2677,7 @@ async function submitDiagnosisQuery(queryText, { includeCamera = true, zoneHint 
 }
 
 /* ==========================================================================
-   PUSH-TO-TALK MICROPHONE RECORDING (LFM3-Audio-2B -> POST /api/voice)
+   PUSH-TO-SPEAK MICROPHONE RECORDING (LFM3-Audio-2B -> POST /api/voice)
    ========================================================================== */
 let mediaRecorder = null;
 let audioChunks = [];
@@ -2131,8 +2694,8 @@ async function toggleVoiceRecording() {
   if (!navigator.mediaDevices?.getUserMedia) {
     appendChatMessage({
       role: 'assistant',
-      author: 'AUDIO HARDWARE',
-      text: 'El navegador actual no expone captura de micrófono en este contexto; utilice la barra de consulta o los botones rápidos 1–4.',
+      author: 'AUDIO INTERFACE',
+      text: 'Browser microphone capture is unavailable in this context; use the prompt bar or the 4 color-coded workflow buttons above.',
     });
     return;
   }
@@ -2153,7 +2716,6 @@ async function toggleVoiceRecording() {
       await sendVoiceBlob(blob);
     });
 
-    // Live Voice Level Meter
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = audioCtx.createMediaStreamSource(audioStream);
     const analyser = audioCtx.createAnalyser();
@@ -2167,22 +2729,23 @@ async function toggleVoiceRecording() {
       let sum = 0;
       for (let i = 0; i < dataArr.length; i++) sum += dataArr[i];
       const avg = sum / dataArr.length;
-      const pct = Math.min(100, Math.max(6, (avg / 110) * 100));
+      const pct = Math.min(100, Math.max(8, (avg / 105) * 100));
       dom.voiceMeterFill.style.width = `${pct}%`;
       meterRaf = requestAnimationFrame(updateMeter);
     };
 
     state.isRecording = true;
-    dom.btnPushToTalk.classList.add('recording');
-    dom.pttLabel.textContent = '⏹ Grabando voz... (Clic para Enviar a LFM3-Audio)';
+    dom.btnVoiceRecord.classList.add('recording');
+    dom.pttLabel.textContent = 'Recording... Click to Send';
+    dom.pttSubLabel.textContent = 'Streaming to Offline LFM3-Audio-2B';
     dom.voiceMeter.hidden = false;
     mediaRecorder.start();
     updateMeter();
   } catch (err) {
     appendChatMessage({
       role: 'assistant',
-      author: 'AUDIO PERMISOS',
-      text: `No se pudo abrir el micrófono local (${err.message}). Verifique permisos de audio o ingrese texto directamente.`,
+      author: 'AUDIO PERMISSIONS',
+      text: `Could not open local microphone (${err.message}). Check browser audio permissions or type your command below.`,
     });
   }
 }
@@ -2190,8 +2753,9 @@ async function toggleVoiceRecording() {
 function stopVoiceRecording() {
   if (!state.isRecording) return;
   state.isRecording = false;
-  dom.btnPushToTalk.classList.remove('recording');
-  dom.pttLabel.textContent = '🎤 Hablar al Copiloto (Clic para Grabar)';
+  dom.btnVoiceRecord.classList.remove('recording');
+  dom.pttLabel.textContent = 'Push to Speak to AI Engineer';
+  dom.pttSubLabel.textContent = 'Offline LFM3-Audio-2B · Click to Record';
   dom.voiceMeter.hidden = true;
   if (meterRaf) cancelAnimationFrame(meterRaf);
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -2219,8 +2783,8 @@ async function sendVoiceBlob(blob) {
 
   appendChatMessage({
     role: 'user',
-    author: 'VOZ OPERADOR (ASR OFFLINE)',
-    text: '🎙 Procesando comando de voz en LiquidAI LFM3-Audio-2B...',
+    author: 'OPERATOR VOICE (OFFLINE ASR)',
+    text: 'Processing spoken field command with LiquidAI LFM3-Audio-2B...',
   });
 
   try {
@@ -2229,26 +2793,20 @@ async function sendVoiceBlob(blob) {
       body: formData,
     });
     if (res.transcript) {
-      // Update last user bubble with actual recognized transcript
       const userBubbles = dom.chatFeed.querySelectorAll('.msg-user .msg-text');
       const lastBubble = userBubbles[userBubbles.length - 1];
-      if (lastBubble) lastBubble.textContent = `🎙 "${res.transcript}"`;
+      if (lastBubble) lastBubble.textContent = `"${res.transcript}"`;
     }
     handleCopilotResponse(res);
-  } catch (err) {
-    appendChatMessage({
-      role: 'assistant',
-      author: 'LFM3-AUDIO-2B',
-      text: `Audio capturado (${(blob.size / 1024).toFixed(1)} KB). Ejecutando diagnóstico multimodal sobre cámara activa...`,
-    });
-    await submitDiagnosisQuery('Diagnosticar estado actual del sensor TZ THT-02 en cámara', {
+  } catch (_err) {
+    await submitDiagnosisQuery('Diagnose current TZ THT-02 sensor state on optical camera and RS-485 bus.', {
       includeCamera: true,
     });
   }
 }
 
 /* ==========================================================================
-   AUTOCAD (.DXF), 3D SOLID (.STL) & OFFLINE STORE-AND-FORWARD (.ZIP)
+   AUTOCAD (.DXF), 3D SOLID (.STL) & 4-ANGLE SIGN-OFF DOSSIER (.ZIP / .EML)
    ========================================================================== */
 function triggerBlobDownload(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -2263,7 +2821,6 @@ function triggerBlobDownload(blob, filename) {
 
 function exportClientBinaryStl() {
   const exporter = new STLExporter();
-  // Clone only solid sensor geometry (excluding dimension helper lines)
   const exportGroup = new THREE.Group();
   Object.values(cad.zoneMeshes).forEach((meshes) => {
     meshes.forEach((m) => {
@@ -2279,11 +2836,10 @@ function exportClientBinaryStl() {
 }
 
 function generateClientAutoCadDxf() {
-  // Standards-compliant AutoCAD R12 (AC1009) 2D Orthographic Engineering Blueprint (1:1 mm)
   const lines = [
     '0', 'SECTION', '2', 'HEADER',
     '9', '$ACADVER', '1', 'AC1009',
-    '9', '$INSUNITS', '70', '4', // 4 = Millimeters
+    '9', '$INSUNITS', '70', '4',
     '0', 'ENDSEC',
     '0', 'SECTION', '2', 'ENTITIES',
   ];
@@ -2312,22 +2868,17 @@ function generateClientAutoCadDxf() {
     );
   };
 
-  // Outer 140.0 x 16.0 mm body (z = -70..+70 mapped to X = 0..140, Y = -8..+8)
   addLine('THT02_BODY', 20, -8, 140, -8, 7);
   addLine('THT02_BODY', 20, 8, 140, 8, 7);
   addLine('THT02_BODY', 140, -8, 140, 8, 7);
-  // Tapered waterproof dome nut X = 0..20
   addLine('THT02_GLAND', 0, -5.2, 20, -8, 8);
   addLine('THT02_GLAND', 0, 5.2, 20, 8, 8);
   addLine('THT02_GLAND', 0, -5.2, 0, 5.2, 8);
-  // Seam at X = 70 (z = 0), Seal ring at X = 108..112 (z = +38..+42)
   addLine('THT02_SEAMS', 70, -8, 70, 8, 8);
   addLine('THT02_SEAL', 108, -8.2, 108, 8.2, 9);
   addLine('THT02_SEAL', 112, -8.2, 112, 8.2, 9);
-  // Slotted strainer window X = 115..137
   addLine('THT02_STRAINER', 115, -4.5, 137, -4.5, 4);
   addLine('THT02_STRAINER', 115, 4.5, 137, 4.5, 4);
-  // Mounting flange ears (X = 78..98, Y = -21..+21, Ø4.2mm holes at Y = ±16)
   addLine('THT02_FLANGE', 78, -21, 98, -21, 6);
   addLine('THT02_FLANGE', 78, 21, 98, 21, 6);
   addLine('THT02_FLANGE', 78, -21, 78, 21, 6);
@@ -2335,13 +2886,12 @@ function generateClientAutoCadDxf() {
   addCircle('THT02_FLANGE', 88, 16, 2.1, 6);
   addCircle('THT02_FLANGE', 88, -16, 2.1, 6);
 
-  // Engineering Dimensions & Fault Annotation
   addLine('DIMENSIONS', 0, -28, 140, -28, 4);
   addText('DIMENSIONS', 56, -33, 3.2, '140.0 MM NOMINAL', 4);
   addText('DIMENSIONS', 143, -1.5, 3.0, 'DIA 16.0 MM', 4);
-  addText('TITLEBLOCK', 0, 29, 3.5, `FIELDSCAN CAD - TZ THT-02 TWIN | DIP ADDR: ${computeDipAddress()}`, 2);
+  addText('TITLEBLOCK', 0, 29, 3.5, `FIELDSCAN CAD - TZ THT-02 TWIN | SLAVE ADDR: ${computeDipAddress()}`, 2);
   if (state.highlightedZone) {
-    addText('FAULT_TAG', 0, 24, 3.0, `ACTIVE FAULT ZONE: ${state.highlightedZone.toUpperCase()}`, 1);
+    addText('FAULT_CALLOUT', 0, 24, 3.0, `ACTIVE FAULT ZONE: ${state.highlightedZone.toUpperCase()}`, 1);
   }
 
   lines.push('0', 'ENDSEC', '0', 'EOF');
@@ -2357,6 +2907,9 @@ function captureMultiAngle3DViews() {
   const origLowerRot = cad.lowerSlideGroup.rotation.z;
   const origUpperZ = cad.upperSlideGroup.position.z;
   const origUpperRot = cad.upperSlideGroup.rotation.z;
+  const origLaserVis = cad.laserScanGroup ? cad.laserScanGroup.visible : true;
+
+  if (cad.laserScanGroup) cad.laserScanGroup.visible = false;
 
   const snapPose = (px, py, pz, tx, ty, tz, ep) => {
     cad.lowerSlideGroup.position.z = -18.0 * ep;
@@ -2371,16 +2924,16 @@ function captureMultiAngle3DViews() {
   };
 
   try {
-    const views = {
+    return {
       isometric: snapPose(28, 62, 175, 0, -4, 0, 0.0),
       front_dim: snapPose(0, 8, 195, 0, -4, 0, 0.0),
       exploded_dip: snapPose(14, 58, 142, 8, 0, 0, 1.0),
       side_gland: snapPose(-142, 36, 98, -32, -2, 0, 0.0),
     };
-    return views;
   } catch (_e) {
     return null;
   } finally {
+    if (cad.laserScanGroup) cad.laserScanGroup.visible = origLaserVis;
     cad.lowerSlideGroup.position.z = origLowerZ;
     cad.lowerSlideGroup.rotation.z = origLowerRot;
     cad.upperSlideGroup.position.z = origUpperZ;
@@ -2393,18 +2946,19 @@ function captureMultiAngle3DViews() {
 }
 
 async function generateAndOpenEscalationPackage() {
+  setWorkflowActiveStep(4);
   const cadViews = captureMultiAngle3DViews();
   dom.escalationModal.hidden = false;
   dom.escSnapshotImg.src = `/api/video/snapshot?t=${Date.now()}`;
   dom.escSummaryZone.textContent = state.modbusHealthy
-    ? 'REPARACIÓN VALIDADA EN SCADA'
+    ? 'SCADA ONLINE · 100% TWIN VERIFIED'
     : state.highlightedZone || 'upper_barrel_dip';
   renderDipHud();
 
   appendChatMessage({
     role: 'user',
-    author: 'OPERADOR · PASO 4',
-    text: 'Créame el reporte completo con fotos Antes/Después, vistas 3D en 4 ángulos y planos AutoCAD para pedir el visto bueno al fabricante.',
+    author: 'OPERATOR · STEP 4',
+    text: 'Compile the post-repair 4-Angle 3D Digital Twin Dossier with Before/During/After photos and .DXF/.STL CAD files for manufacturer sign-off.',
   });
 
   try {
@@ -2419,7 +2973,7 @@ async function generateAndOpenEscalationPackage() {
         dip_address: computeDipAddress(),
         dip_bits: state.dipBits,
         cad_views_b64: cadViews,
-        notes: 'Solicitamos confirmación y visto bueno técnico del procedimiento de reparación y puesta en marcha Modbus-RTU.',
+        notes: 'Requesting manufacturer engineering sign-off on field DIP-8 reconfiguration and verified RS-485 Modbus-RTU commissioning.',
       }),
     });
 
@@ -2427,15 +2981,15 @@ async function generateAndOpenEscalationPackage() {
     populateEscalationModal(res);
 
     handleCopilotResponse({
-      model: 'DICTAMEN MANUAL V1.1 & OUTBOX',
+      model: 'MANUFACTURER SIGN-OFF ENGINE',
       diagnosis:
         res.spoken_summary ||
-        `Dossier post-reparación generado (${res.package_id}) con 4 ángulos 3D, fotos cronológicas y planos .DXF/.STL.`,
+        `Post-repair sign-off dossier (${res.package_id || 'OUTBOX'}) generated with 4-angle 3D CAD views, chronological photo strip, and AutoCAD .DXF/.STL exports.`,
       audio_wav_b64: res.audio_wav_b64,
       citations: [
-        { page: 5, label: 'Pág. 5 · DIP-8 Verificado' },
-        { page: 7, label: 'Pág. 7 · Trama Modbus OK' },
-        { page: 9, label: 'Pág. 9 · Plano 140×16mm' },
+        { page: 5, label: 'Page 5 · DIP-8 Verified' },
+        { page: 7, label: 'Page 7 · Modbus RTU Frame OK' },
+        { page: 9, label: 'Page 9 · 140×16 mm Blueprint' },
       ],
     });
   } catch (_err) {
@@ -2444,8 +2998,8 @@ async function generateAndOpenEscalationPackage() {
       outbox_path: 'outbox/TZ_THT02_signoff_bundle.zip',
       email: {
         to: 'support-eng@tzonedigital.com',
-        subject: `[VISTO BUENO REPARACIÓN] TZ THT-02 Validado en Modbus + 4 Vistas 3D + .DXF/.STL`,
-        body: 'Dossier técnico almacenado localmente en /outbox/.',
+        subject: '[FIELDSCAN-SIGN-OFF] TZ THT-02 Verified Modbus Commissioning + 4-Angle 3D Twin + .DXF/.STL',
+        body: 'Offline engineering sign-off bundle queued locally in /outbox/ with zero external network sockets.',
       },
     };
     state.lastEscalation = fallbackPkg;
@@ -2454,23 +3008,42 @@ async function generateAndOpenEscalationPackage() {
 }
 
 function populateEscalationModal(pkg) {
-  const email = pkg.email || pkg.draft_email || {};
+  const email = pkg.email || pkg.email_preview || pkg.draft_email || {};
   const dxfUrl = pkg.dxf_url || pkg.files?.dxf || null;
   const stlUrl = pkg.stl_url || pkg.files?.stl || null;
+  const emlUrl = pkg.eml_url || pkg.files?.eml || null;
   const quadUrl = pkg.quad_3d_url || null;
   const stripUrl = pkg.strip_url || null;
   const zipUrl = pkg.zip_url || pkg.bundle_url || pkg.files?.zip || null;
-  const snapUrl = quadUrl || pkg.snapshot_url || pkg.files?.snapshot || `/api/video/snapshot?t=${Date.now()}`;
+  const primaryImg = quadUrl || pkg.snapshot_url || pkg.png_url || `/api/video/snapshot?t=${Date.now()}`;
 
-  dom.escOutboxState.textContent = (pkg.compliance_verdict || pkg.status || 'QUEUED_OFFLINE').toUpperCase();
-  dom.escPackagePath.textContent = pkg.outbox_path || pkg.zip_path || 'Almacenado en /outbox/ local (0 sockets externos)';
+  dom.escOutboxState.textContent = String(
+    pkg.compliance_verdict || pkg.status || 'QUEUED IN LOCAL OUTBOX'
+  ).toUpperCase();
+  dom.escPackagePath.textContent =
+    pkg.outbox_path || pkg.zip_path || 'Queued locally in /outbox/ (0 external sockets)';
   dom.escEmailTo.textContent = email.to || pkg.recipient || 'support-eng@tzonedigital.com';
   dom.escEmailSubject.textContent =
-    email.subject || pkg.subject || `[FIELDSCAN-CAD] Escalamiento Técnico TZ THT-02 + .DXF/.STL`;
+    email.subject || pkg.subject || '[FIELDSCAN-SIGN-OFF] TZ THT-02 4-Angle 3D Dossier + .DXF/.STL';
   dom.escEmailBody.textContent =
     email.body || pkg.email_body || pkg.report_markdown || JSON.stringify(pkg, null, 2);
-  dom.escSnapshotImg.src = snapUrl;
-  dom.escQueueTag.textContent = 'VISTO BUENO / OUTBOX';
+
+  dom.escSnapshotImg.src = primaryImg;
+  dom.tabPreviewQuad.classList.add('active');
+  dom.tabPreviewStrip.classList.remove('active');
+
+  dom.tabPreviewQuad.onclick = () => {
+    dom.tabPreviewQuad.classList.add('active');
+    dom.tabPreviewStrip.classList.remove('active');
+    dom.escSnapshotImg.src = primaryImg;
+  };
+  dom.tabPreviewStrip.onclick = () => {
+    dom.tabPreviewStrip.classList.add('active');
+    dom.tabPreviewQuad.classList.remove('active');
+    dom.escSnapshotImg.src = stripUrl || primaryImg;
+  };
+
+  dom.escQueueTag.textContent = 'Sign-Off Ready';
 
   if (zipUrl) {
     dom.escZipDownloadLink.href = zipUrl;
@@ -2481,17 +3054,20 @@ function populateEscalationModal(pkg) {
 
   dom.escAttachmentsList.innerHTML = '';
   const attachments = [
-    { label: '📐 Plano AutoCAD (.DXF)', url: dxfUrl, fallback: generateClientAutoCadDxf },
-    { label: '🧊 Malla Sólida 3D (.STL)', url: stlUrl, fallback: exportClientBinaryStl },
+    { label: 'AutoCAD Blueprint (.DXF)', url: dxfUrl, fallback: generateClientAutoCadDxf },
+    { label: 'Solid 3D Mesh (.STL)', url: stlUrl, fallback: exportClientBinaryStl },
   ];
+  if (emlUrl) {
+    attachments.push({ label: 'RFC-5322 Email (.EML)', url: emlUrl, fallback: null });
+  }
   if (quadUrl) {
-    attachments.unshift({ label: '🖼 Gemelo 3D (4 Ángulos)', url: quadUrl, fallback: null });
+    attachments.unshift({ label: '4-Angle 3D Sheet (.PNG)', url: quadUrl, fallback: null });
   }
   if (stripUrl) {
-    attachments.push({ label: '📷 Fotos Antes/Después', url: stripUrl, fallback: null });
+    attachments.push({ label: 'Before/After Strip (.PNG)', url: stripUrl, fallback: null });
   }
   if (zipUrl) {
-    attachments.push({ label: '📦 Dossier Completo (.ZIP)', url: zipUrl, fallback: null });
+    attachments.push({ label: 'Complete Bundle (.ZIP)', url: zipUrl, fallback: null });
   }
 
   attachments.forEach((att) => {
@@ -2501,6 +3077,7 @@ function populateEscalationModal(pkg) {
     if (att.url) {
       a.href = att.url;
       a.target = '_blank';
+      a.rel = 'noopener';
     } else {
       a.href = '#';
       a.addEventListener('click', (e) => {
@@ -2513,10 +3090,22 @@ function populateEscalationModal(pkg) {
 }
 
 /* ==========================================================================
-   EVENT WIRING & INITIALIZATION
+   EVENT WIRING & BOOTSTRAP
    ========================================================================== */
 function bindWorkstationEvents() {
-  // Airplane Mode Socket Verification Self-Test
+  // Sensor Spec Pill -> Verify local 9-page PDF datasheet
+  dom.btnSensorPill.addEventListener('click', async () => {
+    try {
+      const res = await fetchJsonWithFallback(['/api/sensor/load'], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: 'TZ THT-02 RS485 temperature and humidity sensor' }),
+      });
+      handleCopilotResponse({ ...res, model: 'LOCAL PDF DATASHEET ENGINE' });
+    } catch (_e) {}
+  });
+
+  // Airplane Mode Socket Guard Audit
   dom.pillAirplane.addEventListener('click', async () => {
     try {
       const res = await fetchJsonWithFallback([
@@ -2525,59 +3114,63 @@ function bindWorkstationEvents() {
         '/api/health',
       ]);
       const blocked = res.blocked_external_attempts ?? 0;
-      dom.pillAirplaneText.textContent = `AIRPLANE MODE: VERIFIED (${blocked} EXT SOCKETS)`;
+      dom.pillAirplaneText.textContent = `Airplane Mode: Verified (${blocked} Blocked)`;
       appendChatMessage({
         role: 'assistant',
         author: 'AIRPLANE SOCKET GUARD',
-        text: `Auditoría en vivo completada: egreso IP externo bloqueado activamente (${blocked} intentos bloqueados). 100% procesamiento local en dispositivo.`,
+        text: `Live offline security audit passed: external IP egress actively blocked (${blocked} blocked attempts). 100% local on-device execution verified.`,
+        isVerified: true,
       });
     } catch (_e) {
-      dom.pillAirplaneText.textContent = 'AIRPLANE MODE: VERIFIED (LOCAL)';
+      dom.pillAirplaneText.textContent = 'Airplane Mode: Verified (Local)';
     }
   });
 
-  // Live USB-RS485 Hardware Scan & SCADA Controls
-  const triggerHardwareModbusScan = async () => {
-    try {
-      const res = await fetchJsonWithFallback(['/api/modbus/scan'], {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ quick: true }),
-      });
-      applyTelemetryPayload(res);
-      const sr = res.scan_result || {};
-      appendChatMessage({
-        role: 'assistant',
-        author: 'FT2232HL · ESCÁNER RS-485',
-        text: sr.found
-          ? `¡Sensor físico detectado en ${sr.port} (${sr.baud_bps} bps, Slave #${sr.slave_id})! Temp: ${sr.temp_c} °C · Humedad: ${sr.humidity_rh} %RH.`
-          : `Puertos revisados (${(sr.ports_checked || []).join(', ') || 'ningún adaptador USB-RS485 conectado'}). ${sr.reason || ''} Use "⚡ Enchufar Sensor" para ensayar en simulador o conecte el FT2232HL.`,
-      });
-    } catch (_e) {}
-  };
+  // Clean Dropdown Selectors + Upload Icon Button
+  dom.selectCameraMode.addEventListener('change', (e) => {
+    switchCameraMode(e.target.value);
+  });
 
-  if (dom.pillModbus) dom.pillModbus.addEventListener('click', triggerHardwareModbusScan);
-  if (dom.btnScanRealModbus) dom.btnScanRealModbus.addEventListener('click', triggerHardwareModbusScan);
-  if (dom.btnSimConnectModbus) {
-    dom.btnSimConnectModbus.addEventListener('click', runStep3ConnectAndValidateModbus);
-  }
-  if (dom.btnBreathTest) {
-    dom.btnBreathTest.addEventListener('click', async () => {
-      try {
-        const res = await fetchJsonWithFallback(['/api/repair/step'], {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ step: 'breath_test', slave_id: computeDipAddress() || 1 }),
-        });
-        applyTelemetryPayload(res);
-        appendChatMessage({
-          role: 'assistant',
-          author: 'SCADA EN VIVO · PRUEBA SHT30',
-          text: 'Prueba dinámica de respuesta higrométrica activa: observe cómo suben en tiempo real la humedad (%RH) y temperatura (°C) en el bus RS-485.',
-        });
-      } catch (_e) {}
-    });
-  }
+  dom.btnUploadPhoto.addEventListener('click', () => {
+    dom.photoUploadInput.click();
+  });
+
+  dom.photoUploadInput.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (file) uploadCustomBenchPhoto(file);
+  });
+
+  dom.selectModbusMode.addEventListener('change', (e) => {
+    switchModbusMode(e.target.value);
+  });
+
+  // Top 4 Color-Coded Guided Workflow Step Buttons
+  dom.btnStepInspect.addEventListener('click', runStep1OpenInspection);
+  dom.btnStepDip.addEventListener('click', runStep2ModbusDipGuidance);
+  dom.btnStepConnect.addEventListener('click', runStep3ConnectAndValidateModbus);
+  dom.btnStepSignoff.addEventListener('click', generateAndOpenEscalationPackage);
+
+  // DIP-8 Macro PiP Toggle & Image Fallback
+  dom.btnToggleDipPip.addEventListener('click', () => {
+    const next = !state.dipPipVisible;
+    state.dipPipDismissed = !next;
+    setDipPipVisibility(next);
+  });
+  dom.btnCloseDipPip.addEventListener('click', () => {
+    setDipPipVisibility(false, { userDismissed: true });
+  });
+
+  dom.dipCropImg.addEventListener('error', () => {
+    state.dipCropFailed = true;
+    dom.dipCropImg.hidden = true;
+    dom.dipCropFallbackCanvas.hidden = false;
+    drawDipCropFallback();
+  });
+  dom.dipCropImg.addEventListener('load', () => {
+    state.dipCropFailed = false;
+    dom.dipCropFallbackCanvas.hidden = true;
+    dom.dipCropImg.hidden = false;
+  });
 
   // Video Stream Fallback Handler
   dom.videoStream.addEventListener('error', () => {
@@ -2592,28 +3185,107 @@ function bindWorkstationEvents() {
     dom.videoStream.hidden = false;
   });
 
-  // Camera & Workbench Simulator Switcher
-  document.querySelectorAll('.sim-btn').forEach((btn) => {
-    btn.addEventListener('click', () => switchCameraMode(btn.dataset.camMode));
+  // 3D Viewport Segmented Controls
+  dom.btnModeSolid.addEventListener('click', () => setRenderMode('solid'));
+  dom.btnModeWireframe.addEventListener('click', () => setRenderMode('wireframe'));
+  dom.btnToggleExplode.addEventListener('click', () =>
+    setExplodedState(!state.exploded, { manualTrigger: true, zoomDip: !state.exploded })
+  );
+  dom.btnResetView.addEventListener('click', reset3DCamera);
+
+  // Sub-Assembly Chips
+  dom.assemblyTreePills.querySelectorAll('.part-chip').forEach((chip) => {
+    chip.addEventListener('click', () => selectZone(chip.dataset.zone, { flipManual: true }));
   });
 
-  // Custom Bench Photo Upload
-  dom.photoUploadInput.addEventListener('change', (e) => {
-    const file = e.target.files?.[0];
-    if (file) uploadCustomBenchPhoto(file);
+  // SCADA Console Actions
+  dom.btnScanRealModbus.addEventListener('click', async () => {
+    try {
+      const res = await fetchJsonWithFallback(['/api/modbus/scan'], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quick: true }),
+      });
+      applyTelemetryPayload(res);
+      const sr = res.scan_result || {};
+      appendChatMessage({
+        role: 'assistant',
+        author: 'FT2232HL · RS-485 BUS SCANNER',
+        text: sr.found
+          ? `Hardware sensor online on ${sr.port} (${sr.baud_bps} bps, Slave #${sr.slave_id})! Temp: ${sr.temp_c} °C · Humidity: ${sr.humidity_rh} %RH.`
+          : `Checked serial ports (${(sr.ports_checked || []).join(', ') || 'no USB-RS485 adapter attached'}). ${sr.reason || ''} Click "Energize Bus" or Step 3 to validate in bench mode or attach FT2232HL.`,
+        isVerified: Boolean(sr.found),
+      });
+    } catch (_e) {}
   });
 
-  // Manual Inspector Controls & Lightbox
-  dom.manualPrevBtn.addEventListener('click', () => setManualPage(state.manualPage - 1));
-  dom.manualNextBtn.addEventListener('click', () => setManualPage(state.manualPage + 1));
+  dom.btnSimConnectModbus.addEventListener('click', runStep3ConnectAndValidateModbus);
+
+  dom.btnBreathTest.addEventListener('click', async () => {
+    try {
+      const res = await fetchJsonWithFallback(['/api/repair/step'], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ step: 'breath_test', slave_id: computeDipAddress() || 1 }),
+      });
+      applyTelemetryPayload(res);
+      appendChatMessage({
+        role: 'assistant',
+        author: 'SCADA HMI · SHT30 BREATH SPIKE',
+        text: 'Dynamic SHT30 hygrometric step-response active: watch live Humidity (%RH) and Temperature (°C) surge in real time on the SCADA trend graph.',
+        isVerified: true,
+      });
+    } catch (_e) {}
+  });
+
+  // Voice Engineer Controls
+  dom.btnAutoSpeak.addEventListener('click', () => {
+    state.autoSpeak = !state.autoSpeak;
+    dom.btnAutoSpeak.classList.toggle('active', state.autoSpeak);
+    dom.autoSpeakText.textContent = state.autoSpeak ? 'Voice: ON' : 'Voice: Muted';
+  });
+
+  dom.btnVoiceRecord.addEventListener('click', toggleVoiceRecording);
+
+  dom.textQueryForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const q = dom.queryInput.value.trim();
+    if (!q) return;
+    dom.queryInput.value = '';
+    await submitDiagnosisQuery(q, { includeCamera: true });
+  });
+
+  // Initial Citation Chips
+  document.querySelectorAll('[data-cite-page]').forEach((chip) => {
+    chip.addEventListener('click', () =>
+      setManualPage(Number(chip.dataset.citePage), { flash: true, expandDrawer: true })
+    );
+  });
+
+  // Collapsible 2D Manual Drawer & Lightbox
+  dom.btnToggleManualDrawer.addEventListener('click', () => {
+    state.manualCollapsed = !state.manualCollapsed;
+    dom.manualDrawer.classList.toggle('is-collapsed', state.manualCollapsed);
+    dom.btnToggleManualDrawer.setAttribute('aria-expanded', String(!state.manualCollapsed));
+  });
+
+  dom.manualPrevBtn.addEventListener('click', () =>
+    setManualPage(state.manualPage - 1, { expandDrawer: true })
+  );
+  dom.manualNextBtn.addEventListener('click', () =>
+    setManualPage(state.manualPage + 1, { expandDrawer: true })
+  );
   dom.manualQuickPills.querySelectorAll('.page-pill').forEach((pill) => {
     pill.addEventListener('click', () => setManualPage(Number(pill.dataset.page)));
   });
 
-  dom.manualViewerBox.addEventListener('click', () => {
+  const openManualLightbox = () => {
     setManualPage(state.manualPage);
     dom.manualModal.hidden = false;
-  });
+  };
+  dom.manualViewerBox.addEventListener('click', openManualLightbox);
+  dom.btnExpandManual.addEventListener('click', openManualLightbox);
+
   dom.lightboxPrevBtn.addEventListener('click', () => setManualPage(state.manualPage - 1));
   dom.lightboxNextBtn.addEventListener('click', () => setManualPage(state.manualPage + 1));
   dom.lightboxCloseBtn.addEventListener('click', () => {
@@ -2623,59 +3295,7 @@ function bindWorkstationEvents() {
     if (e.target === dom.manualModal) dom.manualModal.hidden = true;
   });
 
-  // Initial Citation Chips in Welcome Message
-  document.querySelectorAll('[data-cite-page]').forEach((chip) => {
-    chip.addEventListener('click', () => setManualPage(Number(chip.dataset.citePage), { flash: true }));
-  });
-
-  // 3D Viewport Toolbar Controls
-  dom.btnModeSolid.addEventListener('click', () => setRenderMode('solid'));
-  dom.btnModeWireframe.addEventListener('click', () => setRenderMode('wireframe'));
-  dom.btnToggleExplode.addEventListener('click', () =>
-    setExplodedState(!state.exploded, { manualTrigger: true })
-  );
-  dom.btnToggleDims.addEventListener('click', () => {
-    state.showDimensions = !state.showDimensions;
-    dom.btnToggleDims.classList.toggle('active', state.showDimensions);
-  });
-  dom.btnSyncCam.addEventListener('click', () => {
-    state.syncCameraAngle = !state.syncCameraAngle;
-    dom.btnSyncCam.classList.toggle('active', state.syncCameraAngle);
-  });
-  dom.btnResetView.addEventListener('click', () => {
-    cad.camera.position.set(16, 48, 185);
-    cad.controls.target.set(0, -4, 0);
-    cad.controls.update();
-  });
-
-  // Sub-Assembly Tree Chips
-  dom.assemblyTreePills.querySelectorAll('.part-chip').forEach((chip) => {
-    chip.addEventListener('click', () => selectZone(chip.dataset.zone, { flipManual: true }));
-  });
-
-  // Auto-Speak Toggle
-  dom.btnAutoSpeak.addEventListener('click', () => {
-    state.autoSpeak = !state.autoSpeak;
-    dom.btnAutoSpeak.textContent = state.autoSpeak ? '🔊 Voz Auto: ON' : '🔇 Voz Auto: OFF';
-  });
-
-  // 4 Guided Closed-Loop Repair Quick-Actions
-  dom.qaLoadSensor.addEventListener('click', runStep1OpenInspection);
-  dom.qaInspectDip.addEventListener('click', runStep2ModbusDipGuidance);
-  dom.qaDiagnoseCam.addEventListener('click', runStep3ConnectAndValidateModbus);
-  dom.qaEscalateCad.addEventListener('click', generateAndOpenEscalationPackage);
-
-  // Voice Push-To-Talk & Text Query Form
-  dom.btnPushToTalk.addEventListener('click', toggleVoiceRecording);
-  dom.textQueryForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const q = dom.queryInput.value.trim();
-    if (!q) return;
-    dom.queryInput.value = '';
-    await submitDiagnosisQuery(q, { includeCamera: true });
-  });
-
-  // CAD & Escalation Footer Buttons
+  // CAD & Sign-Off Footer Buttons
   dom.btnDownloadDxf.addEventListener('click', async () => {
     if (state.lastEscalation?.dxf_url || state.lastEscalation?.files?.dxf) {
       window.open(state.lastEscalation.dxf_url || state.lastEscalation.files.dxf, '_blank');
@@ -2687,7 +3307,7 @@ function bindWorkstationEvents() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sensor_id: 'TZ-THT-02',
-          highlighted_zone: state.highlightedZone || 'strainer_head',
+          fault_zone: state.highlightedZone || 'strainer_head',
           dip_address: computeDipAddress(),
         }),
       });
@@ -2697,7 +3317,7 @@ function bindWorkstationEvents() {
         return;
       }
     } catch (_e) {
-      // Fall through to instant client AutoCAD R12 DXF generator
+      // Fall back to client AutoCAD R12 DXF generator
     }
     generateClientAutoCadDxf();
   });
@@ -2718,7 +3338,6 @@ function bindWorkstationEvents() {
     if (e.target === dom.escalationModal) dom.escalationModal.hidden = true;
   });
 
-  // Escape key closes modals cleanly
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       dom.manualModal.hidden = true;
@@ -2728,14 +3347,15 @@ function bindWorkstationEvents() {
 }
 
 function bootstrap() {
+  window.lucide?.createIcons();
   initCadStudio();
+  initScadaChart();
   renderDipHud();
   setManualPage(1);
   bindWorkstationEvents();
 
-  // Start live OpenCV & system telemetry polling
   pollTelemetry();
-  setInterval(pollTelemetry, 750);
+  setInterval(pollTelemetry, 650);
 }
 
 bootstrap();

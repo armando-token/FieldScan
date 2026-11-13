@@ -1,40 +1,47 @@
-# 03 — Pegamento Geométrico: Manual PDF 2D (`TZ THT-02`) ↔ `Three.js` 60 FPS ↔ AutoCAD `.DXF`/`.STL`
+# 03 — Geometric CAD & Widescreen HMI Glue: 2D PDF Manual (`TZ THT-02`) ↔ `Three.js v0.170` & `uPlot` ↔ AutoCAD `.DXF` / `.STL`
 
-Este documento detalla cómo se conectan el **plano esquemático 2D del PDF**, el **escáner `OpenCV`** y el **gemelo paramétrico `Three.js` + exportador CAD** usando un único sistema de coordenadas compartido en milímetros reales.
+This document explains how the **2D PDF engineering datasheet**, **`OpenCV` 30 FPS optical scanner**, **open-source widescreen HMI (`Three.js v0.170` + `uPlot v1.6.32`)**, and **AutoCAD exporter** share a single 1:1 millimeter coordinate frame with zero external CDN dependencies.
 
 ---
 
-## 1. Sistema de Coordenadas Unificado (`1 unidad = 1.0 mm`)
+## 1. Unified Millimeter Coordinate Frame (`1 unit = 1.0 mm`)
 
-El error más frecuente al unir visión por computadora con `Three.js` y `AutoCAD DXF` es que cada módulo use escalas o centros distintos. Aquí todos comparten **exactamente el mismo eje longitudinal `Z` centrado en `0.0 mm`** (`[-70.0 mm, +70.0 mm] = 140.0 mm` totales, diámetro exterior `Ø16.0 mm` de la página 9 del manual):
+The most common failure when bridging computer vision with `Three.js` and `AutoCAD DXF` is mismatched origins or arbitrary scaling. In FieldScan CAD v2.0, every subsystem shares **the exact same longitudinal `Z` axis centered at `0.0 mm`** (`[-70.0 mm, +70.0 mm] = 140.0 mm` overall length, `Ø16.0 mm` outer barrel diameter per Manual Page 9):
 
-| ID de Zona Canónico | Rango `Z (mm)` | Parte Física Real (`TZ THT-02`) | Página Manual | Falla Típica Detectada |
+| Canonical Zone ID | `Z` Span (`mm`) | Physical `TZ THT-02` Sub-Assembly | Manual Page | Typical Fault & Red Stain Trigger |
 | :--- | :---: | :--- | :---: | :--- |
-| `strainer_head` | `+42` a `+70` | Jaula ranurada + filtro sinterizado inox + chip `SHT30` | Pág. 1, 3, 6 | Obstrucción/condensación → Registro `0x0000`/`0x0001` devuelve **`7FFF H` (`Abnormal`)** |
-| `upper_seal_ring` | `+38` a `+42` | Anillo O-ring negro superior | Pág. 1 | Pérdida de sello ambiental |
-| `upper_barrel_dip` | `0` a `+38` | Cilindro medio desenroscable + **PCB azul con DIP-8 (`128..1`)** | Pág. 5, 6 | Carcasa abierta / dirección Modbus DIP mal configurada (ej. `1,3,4 ON = 176`) |
-| `mounting_flange` | `+8` a `+28` | Abrazadera mural (`42 mm` ancho, 2 agujeros `Ø4.2 mm`) | Pág. 1 | Fractura mecánica de oreja de sujeción |
-| `lower_barrel_rs485` | `-50` a `0` | Cuerpo inferior (transceptor RS-485 `5~24V DC`, `5 mA`) | Pág. 3, 4, 8 | Sin respuesta Modbus / CRC-16 (`0xA001`) |
-| `waterproof_gland_leads` | `-70` a `-50` | Prensaestopas impermeable + cable `1 m` (`Rojo V+`, `Negro GND`, `Amarillo A+`, `Verde B-`) | Pág. 1, 4, 5 | Prensaestopas flojo o falta de tierra común `GND` (voltaje en modo común RS-485) |
+| `strainer_head` | `+42` to `+70` | Slotted cage + sintered stainless filter + `SHT30` CMOSens probe | Pages 1, 3, 6 | Filter clogging / condensation → Register `0x0000`/`0x0001` returns **`7FFF H` (`Abnormal`)** |
+| `upper_seal_ring` | `+38` to `+42` | Upper black elastomer O-ring seal | Page 1 | IP65 environmental seal breach |
+| `upper_barrel_dip` | `0` to `+38` | Unscrewable middle barrel + **internal blue `DIP-8` switch PCB (`128..1`)** | Pages 5, 6 | Open housing / misconfigured Modbus `DIP-8` address (e.g., `Pins 1, 3, 4 ON = Slave 176`) |
+| `mounting_flange` | `+8` to `+28` | Wall-mounting flange (`42.0 mm` width, dual `Ø4.2 mm` holes) | Page 1 | Cracked or sheared mounting ear |
+| `lower_barrel_rs485` | `-50` to `0` | Lower housing (`5–24V DC`, `5 mA` RS-485 transceiver stage) | Pages 3, 4, 8 | Silent Modbus-RTU bus / CRC-16 (`0xA001`) framing error |
+| `waterproof_gland_leads` | `-70` to `-50` | IP65 cable gland + `1 m` 4-wire pigtail (`Red V+`, `Black GND`, `Yellow A+`, `Green B-`) | Pages 1, 4, 5 | Loose gland nut or missing common `GND` reference on RS-485 differential pair |
 
 ---
 
-## 2. Cómo `Three.js` Funciona 100% Sin Internet (Cero CDNs)
+## 2. 100% Offline Open-Source Widescreen Industrial HMI (`static/vendor/` · `0` External CDNs)
 
-**Trampa mortal cuando apagan el Wi-Fi**: Si cargas `three.js` desde `unpkg.com` o `cdn.jsdelivr.net`, al cortar el Wi-Fi la pantalla queda en blanco.
+**Deadly Hackathon Pitfall When Wi-Fi Turns Off**: Any `import` or `<link>` pointing to `unpkg.com`, `cdn.jsdelivr.net`, or Google Fonts blanks out the UI the moment judges disconnect venue Wi-Fi.
 
-**Pegamento probado**:
-1. Extraer localmente `three.module.min.js` → `static/vendor/three.module.js`, `OrbitControls.js` y `STLExporter.js`.
-2. Reemplazar el import interno bare specifier `from 'three'` por ruta relativa local:
-   ```bash
-   sed -i "s|from 'three'|from './three.module.js'|g" static/vendor/OrbitControls.js static/vendor/STLExporter.js
-   ```
-3. Importar en `static/app.js` directamente desde `/static/vendor/...` — **cero peticiones externas**.
+**Verified Self-Contained Vendor Bundle in `static/vendor/`**:
+1. **`Three.js v0.170`** (`three.module.js`, `OrbitControls.js`, `STLExporter.js`):
+   - Internal bare specifiers are rewritten locally (`sed -i "s|from 'three'|from './three.module.js'|g"`), enabling `60 FPS` 1:1 parametric 3D reconstruction, animated `DIP-8` rocker switches, housing explosion kinematics, and real-time **red fault stain comparison** mapped directly from `OpenCV` longitudinal fault detections.
+2. **`uPlot v1.6.32`** (`uPlot.iife.min.js` + `uPlot.min.css`):
+   - Grafana's high-frequency canvas time-series engine plotting live Modbus-RTU SCADA temperature (`°C`) and relative humidity (`%RH`) telemetry with sub-millisecond rendering overhead.
+3. **`Lucide v1.72`**:
+   - Crisp industrial vector icons bundled locally with zero external sprite or font fetches.
+4. **`Open Props`**:
+   - Local CSS design-system tokens (`open-props.min.css`) driving consistent spacing, typography, and high-contrast dark SCADA surfaces across widescreen displays.
+5. **Virtual / Physical 3-Tier Andon Stack Light (`Red / Amber / Green`)**:
+   - Synchronized industrial tower indicator reflecting live repair state at a glance:
+     - **Red**: Fault active (`Open Housing`, `0x7FFF` probe error, external red fault stain, or `RS-485 NO SIGNAL`).
+     - **Amber**: Guided `DIP-8` switch reconfiguration in progress (`Pins 1..7 OFF`, `Pin 8 ON` = `Slave 1`).
+     - **Green**: Validated closed-loop Modbus-RTU telemetry online (`CRC-16 0xA001 OK`).
 
 ---
 
-## 3. Exportación Instantánea AutoCAD `.DXF` + `.STL` (`< 60 ms`)
+## 3. Instant AutoCAD `.DXF` + Binary `.STL` Export (`< 60 ms`)
 
-Como el usuario solo dispone del PDF 2D (sin CAD previo del fabricante), `src/fieldscan/cad_exporter.py` construye desde `THT02_spec.json`:
-- **`.DXF` R2010 (`ezdxf`)**: Vista lateral acotada (`140.0 MM × 16.0 MM`) + sección frontal con brida de montaje (`42.0 MM`) + capa roja `FAULT_CALLOUT` señalando exactamente el tramo `z_start_mm..z_end_mm` dañado. Abre directo en **AutoCAD, LibreCAD, FreeCAD o DWG TrueView**.
-- **`.STL` Binario 3D**: Sólido mallado a escala real `1:1` en milímetros para revisión 3D o impresión de repuesto en planta.
+Because field technicians rarely have native 3D CAD files for legacy sensors—only a flat 2D PDF manual—`src/fieldscan/cad_exporter.py` synthesizes production CAD deliverables directly from `THT02_spec.json`:
+- **AutoCAD `.DXF` R2010 (`ezdxf`)**: Dimensioned longitudinal elevation (`140.0 MM × 16.0 MM`) + front mounting flange cross-section (`42.0 MM`) + dedicated red `FAULT_CALLOUT` layer marking the exact `z_start_mm..z_end_mm` damaged span. Opens natively in **AutoCAD, LibreCAD, FreeCAD, and DWG TrueView**.
+- **Binary 3D `.STL`**: Watertight 1:1 millimeter solid mesh ready for mechanical inspection or on-site 3D printing of replacement brackets and housings.

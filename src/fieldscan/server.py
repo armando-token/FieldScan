@@ -273,8 +273,8 @@ async def api_video_telemetry() -> dict[str, Any]:
 
 
 @app.get("/api/video/snapshot")
-async def api_video_snapshot() -> Response:
-    jpg = await asyncio.to_thread(_SCANNER.get_latest_jpeg)
+async def api_video_snapshot(raw: bool = False) -> Response:
+    jpg = await asyncio.to_thread(_SCANNER.get_raw_jpeg if raw else _SCANNER.get_latest_jpeg)
     return Response(
         content=jpg,
         media_type="image/jpeg",
@@ -293,18 +293,18 @@ async def api_video_dip_crop() -> Response:
 
 
 @app.get("/api/video/stream")
-async def api_video_stream(request: Request) -> StreamingResponse:
+async def api_video_stream(request: Request, raw: bool = False) -> StreamingResponse:
     async def frame_generator():
         while True:
             if await request.is_disconnected():
                 break
-            jpg = _SCANNER.get_latest_jpeg()
+            jpg = _SCANNER.get_raw_jpeg() if raw else _SCANNER.get_latest_jpeg()
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n"
                 b"Cache-Control: no-store\r\n\r\n" + jpg + b"\r\n"
             )
-            await asyncio.sleep(1.0 / 24.0)
+            await asyncio.sleep(1.0 / 28.0)
 
     return StreamingResponse(
         frame_generator(),

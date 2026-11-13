@@ -187,28 +187,40 @@ def test_opencv_realtime_scanner_all_modes() -> None:
 
 
 def test_hand_and_screwdriver_occlusion_masking_isolates_sensor_only() -> None:
-    """Verify operator hand + red-handled precision screwdriver are detected, masked out, and never drawn or misclassified in 3D."""
+    """Verify Style 3 Spatial Vision telemetry + operator hand & screwdriver 3D exclusion lock."""
     scanner = VisionScanner(initial_mode="sim_normal", auto_start=False)
     # Lock clean baseline sensor pose first, then bring operator hand + screwdriver into frame
     base_t = scanner.step_once()
     assert base_t["detected"] is True
+    assert base_t["sensor_quad"] is not None and len(base_t["sensor_quad"]) == 4
+    assert len(base_t["keypoints"]) >= 3
 
     t_occ = scanner.set_mode("sim_hand_screwdriver")
-    assert t_occ["detected"] is True
-    assert t_occ["hand_detected"] is True
-    assert t_occ["tool_detected"] is True
-    assert t_occ["occlusion_filtered"] is True
-    assert t_occ["isolated_3d_target"] == "TZ-THT-02_SENSOR_ONLY"
-    assert t_occ["hand_bbox"] is not None and t_occ["hand_bbox"][2] > 20
-    assert t_occ["tool_bbox"] is not None and t_occ["tool_bbox"][2] > 10
+    # Step a second frame after small delay to verify optical hand velocity & trail tracking
+    import time as _time
+
+    _time.sleep(0.05)
+    t_occ2 = scanner.step_once()
+
+    assert t_occ2["detected"] is True
+    assert t_occ2["hand_detected"] is True
+    assert t_occ2["tool_detected"] is True
+    assert t_occ2["occlusion_filtered"] is True
+    assert t_occ2["isolated_3d_target"] == "TZ-THT-02_SENSOR_ONLY"
+    assert t_occ2["hand_bbox"] is not None and t_occ2["hand_bbox"][2] > 20
+    assert len(t_occ2["hand_contour"]) >= 3
+    assert t_occ2["hand_center"] is not None
+    assert len(t_occ2["hand_trail"]) >= 2
+    assert t_occ2["tool_bbox"] is not None and t_occ2["tool_bbox"][2] > 10
+    assert t_occ2["tool_shaft"] is not None
+    assert t_occ2["tool_tip_pt"] is not None
 
     # Ensure red screwdriver grip does NOT trigger a false strainer_head or gland red-patch fault,
     # while internal open blue DIP-8 PCB remains accurately detected and sensor length stays 1:1 stable!
-    assert t_occ["pcb_open_detected"] is True
-    assert t_occ["anomaly_zone"] == "upper_barrel_dip"
-    assert 115.0 <= t_occ["est_length_mm"] <= 162.0
-    assert t_occ["est_diameter_mm"] == 16.0
-
+    assert t_occ2["pcb_open_detected"] is True
+    assert t_occ2["anomaly_zone"] == "upper_barrel_dip"
+    assert 115.0 <= t_occ2["est_length_mm"] <= 162.0
+    assert t_occ2["est_diameter_mm"] == 16.0
 
 
 def test_full_fastapi_stack_with_live_lfm3_and_voice() -> None:
@@ -238,6 +250,9 @@ def test_full_fastapi_stack_with_live_lfm3_and_voice() -> None:
         r_snap = client.get("/api/video/snapshot")
         assert r_snap.status_code == 200
         assert r_snap.headers["content-type"].startswith("image/jpeg")
+        r_snap_raw = client.get("/api/video/snapshot?raw=1")
+        assert r_snap_raw.status_code == 200
+        assert r_snap_raw.content[:2] == b"\xff\xd8"
 
         r_diag = client.post(
             "/api/diagnose",

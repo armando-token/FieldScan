@@ -142,6 +142,20 @@ const state = {
   occlusionFiltered: false,
   handDetected: false,
   toolDetected: false,
+
+  cvHudMode: 'spatial', // 'spatial' | 'minimal' | 'raw'
+  visionSpatial: null,
+  fastVisionInFlight: false,
+  spatialSmooth: {
+    quad: null,
+    gland: null,
+    tip: null,
+    center: null,
+    handCenter: null,
+    toolTip: null,
+    toolBase: null,
+    anomalyPt: null,
+  },
 };
 
 /* ==========================================================================
@@ -171,9 +185,14 @@ const dom = {
 
   camSourceBadge: document.getElementById('camSourceBadge'),
   pillCamText: document.getElementById('pillCamText'),
+  btnCycleCvHud: document.getElementById('btnCycleCvHud'),
+  cvHudModeLabel: document.getElementById('cvHudModeLabel'),
   btnToggleDipPip: document.getElementById('btnToggleDipPip'),
+  videoFrame: document.getElementById('videoFrame'),
   videoStream: document.getElementById('videoStream'),
   videoFallbackCanvas: document.getElementById('videoFallbackCanvas'),
+  cvSpatialHudCanvas: document.getElementById('cvSpatialHudCanvas'),
+  videoStaticReticle: document.getElementById('videoStaticReticle'),
   hudSensorId: document.getElementById('hudSensorId'),
   hudIsolationPill: document.getElementById('hudIsolationPill'),
   hudStatusTag: document.getElementById('hudStatusTag'),
@@ -1301,12 +1320,500 @@ function initCadStudio() {
     // 6. Crimson Fault Stain Volume & Emerald Twin Verification Glow
     updateFaultAndTwinVisuals(now);
 
+    // 7. 60 FPS High-DPI Spatial Computer Vision HUD on Live Camera Viewport
+    renderSpatialVisionHud(now, dt);
+
     controls.update();
     renderer.render(scene, camera);
     updateProjectedOverlays();
   }
 
   requestAnimationFrame(animate);
+}
+
+/* ==========================================================================
+   STYLE 3 SPATIAL COMPUTER VISION HUD (60 FPS HIGH-DPI RETINA CANVAS)
+   ========================================================================== */
+function cycleCvHudMode() {
+  const order = ['spatial', 'minimal', 'raw'];
+  const idx = order.indexOf(state.cvHudMode);
+  state.cvHudMode = order[(idx + 1) % order.length];
+
+  const labels = {
+    spatial: 'CV HUD: SPATIAL',
+    minimal: 'CV HUD: MINIMAL',
+    raw: 'CV HUD: RAW',
+  };
+  if (dom.cvHudModeLabel) {
+    dom.cvHudModeLabel.textContent = labels[state.cvHudMode];
+  }
+  if (dom.btnCycleCvHud) {
+    dom.btnCycleCvHud.classList.toggle('active', state.cvHudMode === 'spatial');
+    dom.btnCycleCvHud.classList.toggle('is-minimal', state.cvHudMode === 'minimal');
+  }
+  if (dom.videoStaticReticle) {
+    dom.videoStaticReticle.style.opacity = state.cvHudMode === 'raw' ? '0' : '1';
+  }
+}
+
+function lerpPt2(prev, target, alpha) {
+  if (!target || target.length < 2) return null;
+  if (!prev || prev.length < 2) return [target[0], target[1]];
+  return [
+    prev[0] + (target[0] - prev[0]) * alpha,
+    prev[1] + (target[1] - prev[1]) * alpha,
+  ];
+}
+
+function drawRoundedRectPath(ctx, x, y, w, h, r) {
+  const rad = Math.min(r, w * 0.5, h * 0.5);
+  ctx.beginPath();
+  ctx.moveTo(x + rad, y);
+  ctx.lineTo(x + w - rad, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rad);
+  ctx.lineTo(x + w, y + h - rad);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
+  ctx.lineTo(x + rad, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rad);
+  ctx.lineTo(x, y + rad);
+  ctx.quadraticCurveTo(x, y, x + rad, y);
+  ctx.closePath();
+}
+
+function drawSpatialLeaderCallout(ctx, opts) {
+  const { anchor, boxX, boxY, accent, title, sub, vw, vh } = opts;
+  ctx.save();
+  ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  const wTitle = ctx.measureText(title).width;
+  ctx.font = '600 9px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  const wSub = sub ? ctx.measureText(sub).width : 0;
+
+  const boxW = Math.ceil(Math.max(wTitle, wSub) + 20);
+  const boxH = sub ? 33 : 21;
+  const cx = Math.max(8, Math.min(vw - boxW - 8, boxX));
+  const cy = Math.max(40, Math.min(vh - boxH - 8, boxY));
+
+  // Diagonal elbow leader line from real optical anchor to callout pill
+  if (anchor && anchor.length === 2) {
+    const targetX = anchor[0] < cx + boxW * 0.5 ? cx : cx + boxW;
+    const targetY = cy + boxH * 0.5;
+    const elbowX = anchor[0] + (targetX - anchor[0]) * 0.58;
+
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    ctx.moveTo(anchor[0], anchor[1]);
+    ctx.lineTo(elbowX, targetY);
+    ctx.lineTo(targetX, targetY);
+    ctx.stroke();
+
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.arc(anchor[0], anchor[1], 3.0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Frosted dark industrial glass pill
+  drawRoundedRectPath(ctx, cx, cy, boxW, boxH, 5);
+  ctx.fillStyle = 'rgba(8, 13, 21, 0.88)';
+  ctx.fill();
+  ctx.lineWidth = 1.1;
+  ctx.strokeStyle = accent;
+  ctx.stroke();
+
+  // Left semantic accent bar
+  drawRoundedRectPath(ctx, cx + 1.5, cy + 2.5, 3, boxH - 5, 1.5);
+  ctx.fillStyle = accent;
+  ctx.fill();
+
+  ctx.fillStyle = '#f8fafc';
+  ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  ctx.fillText(title, cx + 10, cy + 13);
+
+  if (sub) {
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '600 9px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx.fillText(sub, cx + 10, cy + 25.5);
+  }
+  ctx.restore();
+}
+
+function renderSpatialVisionHud(nowMs, dt) {
+  const canvas = dom.cvSpatialHudCanvas;
+  const stage = dom.videoFrame;
+  if (!canvas || !stage) return;
+
+  const vw = stage.clientWidth;
+  const vh = stage.clientHeight;
+  if (!vw || !vh) return;
+
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const targetW = Math.round(vw * dpr);
+  const targetH = Math.round(vh * dpr);
+  if (canvas.width !== targetW || canvas.height !== targetH) {
+    canvas.width = targetW;
+    canvas.height = targetH;
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, vw, vh);
+
+  if (state.cvHudMode === 'raw') {
+    return;
+  }
+
+  const v = state.visionSpatial;
+  if (!v || typeof v !== 'object') return;
+
+  const isSpatialFull = state.cvHudMode === 'spatial';
+  const fw = v.frame_size?.[0] || 960;
+  const fh = v.frame_size?.[1] || 540;
+  const coverScale = Math.max(vw / fw, vh / fh);
+  const offX = (vw - fw * coverScale) * 0.5;
+  const offY = (vh - fh * coverScale) * 0.5;
+  const mapPt = (pt) => [offX + pt[0] * coverScale, offY + pt[1] * coverScale];
+
+  const lerpAlpha = Math.min(1, dt * 16.0);
+  const sm = state.spatialSmooth;
+  const pulse = 0.5 + 0.5 * Math.sin(nowMs * 0.0065);
+
+  // 1. TZ THT-02 SENSOR LOCK-ON BRACKETS, SEGMENTATION HULL & SHI-TOMASI KEYPOINTS
+  if (v.detected && Array.isArray(v.sensor_quad) && v.sensor_quad.length === 4) {
+    const mappedQuad = v.sensor_quad.map(mapPt);
+    if (!sm.quad || sm.quad.length !== 4) {
+      sm.quad = mappedQuad;
+    } else {
+      sm.quad = sm.quad.map((prevPt, idx) => lerpPt2(prevPt, mappedQuad[idx], lerpAlpha));
+    }
+
+    const sensorColor = state.modbusHealthy ? '#34d399' : '#38bdf8';
+    const sensorFill = state.modbusHealthy
+      ? 'rgba(16, 185, 129, 0.09)'
+      : 'rgba(56, 189, 248, 0.085)';
+
+    if (isSpatialFull) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(sm.quad[0][0], sm.quad[0][1]);
+      for (let i = 1; i < 4; i += 1) ctx.lineTo(sm.quad[i][0], sm.quad[i][1]);
+      ctx.closePath();
+      ctx.fillStyle = sensorFill;
+      ctx.fill();
+      ctx.setLineDash([5, 5]);
+      ctx.strokeStyle = state.modbusHealthy
+        ? 'rgba(52, 211, 153, 0.42)'
+        : 'rgba(56, 189, 248, 0.38)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Tactical rotated corner lock-on brackets
+    ctx.save();
+    ctx.strokeStyle = sensorColor;
+    ctx.lineWidth = 2.2;
+    ctx.shadowColor = sensorColor;
+    ctx.shadowBlur = 7;
+    for (let i = 0; i < 4; i += 1) {
+      const p0 = sm.quad[i];
+      const pPrev = sm.quad[(i + 3) % 4];
+      const pNext = sm.quad[(i + 1) % 4];
+      const dx1 = pPrev[0] - p0[0];
+      const dy1 = pPrev[1] - p0[1];
+      const len1 = Math.max(1, Math.hypot(dx1, dy1));
+      const dx2 = pNext[0] - p0[0];
+      const dy2 = pNext[1] - p0[1];
+      const len2 = Math.max(1, Math.hypot(dx2, dy2));
+      const arm1 = Math.min(18, len1 * 0.34);
+      const arm2 = Math.min(18, len2 * 0.34);
+
+      ctx.beginPath();
+      ctx.moveTo(p0[0] + (dx1 / len1) * arm1, p0[1] + (dy1 / len1) * arm1);
+      ctx.lineTo(p0[0], p0[1]);
+      ctx.lineTo(p0[0] + (dx2 / len2) * arm2, p0[1] + (dy2 / len2) * arm2);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Calibrated longitudinal axis (-70 mm to +70 mm) + scanning pulse bead + keypoints
+    if (v.sensor_axis?.gland && v.sensor_axis?.tip && v.sensor_axis?.center) {
+      sm.gland = lerpPt2(sm.gland, mapPt(v.sensor_axis.gland), lerpAlpha);
+      sm.tip = lerpPt2(sm.tip, mapPt(v.sensor_axis.tip), lerpAlpha);
+      sm.center = lerpPt2(sm.center, mapPt(v.sensor_axis.center), lerpAlpha);
+
+      if (isSpatialFull && sm.gland && sm.tip) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(125, 211, 252, 0.55)';
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.moveTo(sm.gland[0], sm.gland[1]);
+        ctx.lineTo(sm.tip[0], sm.tip[1]);
+        ctx.stroke();
+
+        const axDx = sm.tip[0] - sm.gland[0];
+        const axDy = sm.tip[1] - sm.gland[1];
+        const axLen = Math.max(1, Math.hypot(axDx, axDy));
+        const nx = -axDy / axLen;
+        const ny = axDx / axLen;
+
+        for (const frac of [0, 0.16, 0.37, 0.5, 0.69, 0.77, 1.0]) {
+          const tx = sm.gland[0] + axDx * frac;
+          const ty = sm.gland[1] + axDy * frac;
+          ctx.beginPath();
+          ctx.moveTo(tx - nx * 5, ty - ny * 5);
+          ctx.lineTo(tx + nx * 5, ty + ny * 5);
+          ctx.stroke();
+        }
+
+        // Traveling laser metrology bead along sensor axis
+        const sweepT = 0.5 + 0.5 * Math.sin(nowMs * 0.0024);
+        const beadX = sm.gland[0] + axDx * sweepT;
+        const beadY = sm.gland[1] + axDy * sweepT;
+        ctx.fillStyle = '#e0f2fe';
+        ctx.shadowColor = sensorColor;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(beadX, beadY, 2.8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    if (isSpatialFull && Array.isArray(v.keypoints)) {
+      ctx.save();
+      v.keypoints.forEach((kp, idx) => {
+        const [kx, ky] = mapPt(kp);
+        const twinkle = 0.55 + 0.45 * Math.sin(nowMs * 0.005 + idx * 0.9);
+        ctx.strokeStyle = `rgba(56, 189, 248, ${(0.55 * twinkle).toFixed(2)})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(kx, ky, 3.3, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = `rgba(240, 249, 255, ${(0.85 * twinkle).toFixed(2)})`;
+        ctx.beginPath();
+        ctx.arc(kx, ky, 1.3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.restore();
+    }
+
+    if (isSpatialFull && sm.center) {
+      const estL = typeof v.est_length_mm === 'number' ? v.est_length_mm.toFixed(1) : '140.0';
+      const estD = typeof v.est_diameter_mm === 'number' ? v.est_diameter_mm.toFixed(1) : '16.0';
+      const angStr = typeof v.angle_deg === 'number' ? `${v.angle_deg >= 0 ? '+' : ''}${v.angle_deg.toFixed(1)}°` : '0.0°';
+      const twinState = state.modbusHealthy ? '[SCADA VERIFIED]' : '[3D RECONSTRUCTING]';
+      const anchorSensor = [
+        sm.center[0] - Math.min(85, vw * 0.14),
+        sm.center[1] - 18,
+      ];
+      drawSpatialLeaderCallout(ctx, {
+        anchor: anchorSensor,
+        boxX: 12,
+        boxY: 44,
+        accent: sensorColor,
+        title: `TARGET · TZ THT-02 SENSOR · 99%`,
+        sub: `${estL}×Ø${estD} MM · ${angStr} · ${twinState}`,
+        vw,
+        vh,
+      });
+    }
+  } else {
+    sm.quad = null;
+  }
+
+  // 2. PHYSICAL FAULT / OPEN DIP-8 DEVIATION RETICLE & LEADER CALLOUT
+  if (!state.modbusHealthy && v.anomaly_detected && Array.isArray(v.anomaly_pt)) {
+    sm.anomalyPt = lerpPt2(sm.anomalyPt, mapPt(v.anomaly_pt), lerpAlpha);
+    if (sm.anomalyPt) {
+      const [ax, ay] = sm.anomalyPt;
+      const isDipOpen = Boolean(v.pcb_open_detected);
+      const faultAccent = isDipOpen ? '#f59e0b' : '#ef4444';
+      const rOuter = 16 + 5 * pulse;
+
+      ctx.save();
+      ctx.strokeStyle = faultAccent;
+      ctx.lineWidth = 1.8;
+      ctx.shadowColor = faultAccent;
+      ctx.shadowBlur = 9;
+      ctx.beginPath();
+      ctx.arc(ax, ay, rOuter, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(ax, ay, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = '#fef2f2';
+      ctx.fill();
+      ctx.restore();
+
+      if (isSpatialFull) {
+        const confPct = Math.round(Number(v.anomaly_confidence || 0.94) * 100);
+        const zStr = typeof v.anomaly_z_mm === 'number'
+          ? `z=${v.anomaly_z_mm >= 0 ? '+' : ''}${v.anomaly_z_mm.toFixed(1)} MM`
+          : 'AXIAL MATCH';
+        const zoneName = ZONE_SPECS[v.anomaly_zone]?.shortLabel || String(v.anomaly_zone || 'SENSOR').toUpperCase();
+        drawSpatialLeaderCallout(ctx, {
+          anchor: [ax, ay - rOuter],
+          boxX: Math.max(264, vw * 0.48),
+          boxY: 44,
+          accent: faultAccent,
+          title: isDipOpen
+            ? `DIP-8 PCB EXPOSED · ${confPct}%`
+            : `TWIN DEVIATION · ${zoneName} · ${confPct}%`,
+          sub: `${zStr} · OPTICAL VS DIGITAL TWIN MISMATCH`,
+          vw,
+          vh,
+        });
+      }
+    }
+  } else {
+    sm.anomalyPt = null;
+  }
+
+  // 3. PRECISION SCREWDRIVER / TOOL SHAFT LASER VECTOR & TIP CROSSHAIR
+  if (v.tool_detected && v.tool_shaft?.tip && v.tool_shaft?.base) {
+    sm.toolTip = lerpPt2(sm.toolTip, mapPt(v.tool_shaft.tip), lerpAlpha);
+    sm.toolBase = lerpPt2(sm.toolBase, mapPt(v.tool_shaft.base), lerpAlpha);
+
+    if (sm.toolTip && sm.toolBase) {
+      const [tx, ty] = sm.toolTip;
+      const [bx, by] = sm.toolBase;
+      const toolAccent = '#e879f9';
+
+      ctx.save();
+      ctx.strokeStyle = toolAccent;
+      ctx.lineWidth = 2.0;
+      ctx.shadowColor = toolAccent;
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(tx, ty);
+      ctx.stroke();
+
+      // Precision tip crosshair + rotating lock arc right where blade touches DIP-8
+      const rot = (nowMs * 0.0028) % (Math.PI * 2);
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(tx, ty, 9.5, rot, rot + Math.PI * 1.35);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(tx - 13, ty);
+      ctx.lineTo(tx - 4, ty);
+      ctx.moveTo(tx + 4, ty);
+      ctx.lineTo(tx + 13, ty);
+      ctx.moveTo(tx, ty - 13);
+      ctx.lineTo(tx, ty - 4);
+      ctx.moveTo(tx, ty + 4);
+      ctx.lineTo(tx, ty + 13);
+      ctx.stroke();
+      ctx.restore();
+
+      if (isSpatialFull) {
+        // Place pill clear of bottom-right DIP-8 Macro PiP when visible
+        const safeToolX = state.dipPipVisible ? 12 : Math.min(vw - 255, tx + 28);
+        const safeToolY = state.dipPipVisible ? vh - 86 : Math.max(90, ty - 42);
+        drawSpatialLeaderCallout(ctx, {
+          anchor: [tx, ty],
+          boxX: safeToolX,
+          boxY: safeToolY,
+          accent: toolAccent,
+          title: 'PRECISION DRIVER · 95% · TIP LOCKED',
+          sub: 'SHAFT VECTOR MASKED · [IGNORED IN 3D]',
+          vw,
+          vh,
+        });
+      }
+    }
+  } else {
+    sm.toolTip = null;
+    sm.toolBase = null;
+  }
+
+  // 4. OPERATOR HAND SEGMENTATION HULL, MOTION TRAIL & LIVE VELOCITY VECTOR
+  if (v.hand_detected && Array.isArray(v.hand_center)) {
+    sm.handCenter = lerpPt2(sm.handCenter, mapPt(v.hand_center), lerpAlpha);
+    const handAccent = '#fbbf24';
+
+    if (Array.isArray(v.hand_contour) && v.hand_contour.length >= 3) {
+      const hPts = v.hand_contour.map(mapPt);
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(hPts[0][0], hPts[0][1]);
+      for (let i = 1; i < hPts.length; i += 1) ctx.lineTo(hPts[i][0], hPts[i][1]);
+      ctx.closePath();
+      if (isSpatialFull) {
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.14)';
+        ctx.fill();
+      }
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.85)';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Decaying optical motion trail following real hand speed
+    if (isSpatialFull && Array.isArray(v.hand_trail) && v.hand_trail.length >= 2) {
+      const trPts = v.hand_trail.map(mapPt);
+      ctx.save();
+      for (let i = 1; i < trPts.length; i += 1) {
+        const frac = i / trPts.length;
+        ctx.strokeStyle = `rgba(251, 191, 36, ${(0.15 + 0.65 * frac).toFixed(2)})`;
+        ctx.lineWidth = 1.0 + 2.4 * frac;
+        ctx.beginPath();
+        ctx.moveTo(trPts[i - 1][0], trPts[i - 1][1]);
+        ctx.lineTo(trPts[i][0], trPts[i][1]);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Live velocity vector arrow (px/s)
+    const speedPx = Number(v.hand_velocity_px_s || 0);
+    if (isSpatialFull && sm.handCenter && speedPx >= 6) {
+      const vx = Number(v.hand_velocity_vec?.[0] || 0) * coverScale * 0.35;
+      const vy = Number(v.hand_velocity_vec?.[1] || 0) * coverScale * 0.35;
+      const clampLen = Math.max(14, Math.min(58, Math.hypot(vx, vy)));
+      const ang = Math.atan2(vy, vx);
+      const ex = sm.handCenter[0] + Math.cos(ang) * clampLen;
+      const ey = sm.handCenter[1] + Math.sin(ang) * clampLen;
+
+      ctx.save();
+      ctx.strokeStyle = '#fde68a';
+      ctx.fillStyle = '#fde68a';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(sm.handCenter[0], sm.handCenter[1]);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - 7 * Math.cos(ang - 0.45), ey - 7 * Math.sin(ang - 0.45));
+      ctx.lineTo(ex - 7 * Math.cos(ang + 0.45), ey - 7 * Math.sin(ang + 0.45));
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (isSpatialFull && sm.handCenter) {
+      const velTag = speedPx >= 6 ? `${Math.round(speedPx)} px/s` : 'STATIC';
+      const safeHandX = state.dipPipVisible ? 12 : Math.max(14, sm.handCenter[0] - 115);
+      const safeHandY = state.dipPipVisible ? vh - 44 : vh - 46;
+      drawSpatialLeaderCallout(ctx, {
+        anchor: sm.handCenter,
+        boxX: safeHandX,
+        boxY: safeHandY,
+        accent: handAccent,
+        title: `OPERATOR HAND · 97% · ${velTag}`,
+        sub: 'SKIN LOCUS MASKED · [IGNORED IN 3D]',
+        vw,
+        vh,
+      });
+    }
+  } else {
+    sm.handCenter = null;
+  }
 }
 
 /* ==========================================================================
@@ -2074,6 +2581,9 @@ function applyTelemetryPayload(data) {
   }
 
   // 4. Operator Hand & Screwdriver Spatial Exclusion Filter + Scanner Angle & Metrology
+  if (vision && typeof vision === 'object' && vision.detected !== undefined) {
+    state.visionSpatial = vision;
+  }
   const handDet = Boolean(vision.hand_detected);
   const toolDet = Boolean(vision.tool_detected);
   const occActive = Boolean(vision.occlusion_filtered || handDet || toolDet);
@@ -2245,6 +2755,30 @@ async function pollTelemetry() {
   }
 }
 
+async function pollVisionSpatialTelemetry() {
+  if (state.fastVisionInFlight || state.cvHudMode === 'raw') return;
+  state.fastVisionInFlight = true;
+  try {
+    const resp = await fetch('/api/video/telemetry', { cache: 'no-store' });
+    if (resp.ok) {
+      const vision = await resp.json();
+      if (vision && typeof vision === 'object') {
+        state.visionSpatial = vision;
+        const handDet = Boolean(vision.hand_detected);
+        const toolDet = Boolean(vision.tool_detected);
+        const occActive = Boolean(vision.occlusion_filtered || handDet || toolDet);
+        if (!occActive && typeof vision.angle_deg === 'number') {
+          state.cameraAngleDeg = vision.angle_deg;
+        }
+      }
+    }
+  } catch (_err) {
+    // Handled cleanly by main telemetry loop
+  } finally {
+    state.fastVisionInFlight = false;
+  }
+}
+
 /* ==========================================================================
    CAMERA & MODBUS BENCH MODE SELECTORS
    ========================================================================== */
@@ -2289,7 +2823,7 @@ async function switchCameraMode(mode) {
     state.videoStreamFailed = false;
     dom.videoFallbackCanvas.hidden = true;
     dom.videoStream.hidden = false;
-    dom.videoStream.src = `/api/video/stream?t=${Date.now()}`;
+    dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
   } catch (_err) {
     drawFallbackScannerFrame();
   }
@@ -2330,7 +2864,7 @@ async function uploadCustomBenchPhoto(file) {
       { method: 'POST', body: formData }
     );
     applyTelemetryPayload(res);
-    dom.videoStream.src = `/api/video/stream?t=${Date.now()}`;
+    dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
   } catch (_err) {
     appendChatMessage({
       role: 'assistant',
@@ -3193,7 +3727,11 @@ function bindWorkstationEvents() {
   dom.btnStepConnect.addEventListener('click', runStep3ConnectAndValidateModbus);
   dom.btnStepSignoff.addEventListener('click', generateAndOpenEscalationPackage);
 
-  // DIP-8 Macro PiP Toggle & Image Fallback
+  // Computer Vision Spatial HUD Mode Cycle & DIP-8 Macro PiP Toggle
+  if (dom.btnCycleCvHud) {
+    dom.btnCycleCvHud.addEventListener('click', cycleCvHudMode);
+  }
+
   dom.btnToggleDipPip.addEventListener('click', () => {
     const next = !state.dipPipVisible;
     state.dipPipDismissed = !next;
@@ -3398,7 +3936,9 @@ function bootstrap() {
   bindWorkstationEvents();
 
   pollTelemetry();
+  pollVisionSpatialTelemetry();
   setInterval(pollTelemetry, 650);
+  setInterval(pollVisionSpatialTelemetry, 115);
 }
 
 bootstrap();

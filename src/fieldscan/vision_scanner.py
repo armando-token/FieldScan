@@ -13,6 +13,7 @@ Supports:
 
 from __future__ import annotations
 
+from collections import deque
 import math
 import os
 from pathlib import Path
@@ -417,10 +418,10 @@ class _WorkbenchSynthesizer:
         dip_x = tx + 72.0 * math.cos(rad)
         dip_y = ty - 72.0 * math.sin(rad)
 
-        # Natural micro-motion as the technician's hand & screwdriver approach Pin 8
-        jx = 5.0 * math.sin(t_sec * 1.9)
-        jy = 4.0 * math.cos(t_sec * 2.4)
-        tip_x = int(round(dip_x + 14.0 + jx))
+        # Smooth realistic technician hand & screwdriver motion sweeping across SW1 DIP-8 pins
+        jx = 16.0 * math.sin(t_sec * 2.15) + 4.5 * math.cos(t_sec * 3.8)
+        jy = 10.5 * math.cos(t_sec * 1.75) + 3.0 * math.sin(t_sec * 3.1)
+        tip_x = int(round(dip_x + 12.0 + jx))
         tip_y = int(round(dip_y + 8.0 + jy))
 
         overlay = frame.copy()
@@ -451,12 +452,13 @@ class _WorkbenchSynthesizer:
 
         # 3. Realistic warm human skin hand + thumb/index fingers entering from bottom-right border
         #    BGR = (126, 158, 208) -> YCrCb Cr ~ 153, Cb ~ 106 (canonical human skin locus!)
+        palm_rx = min(w - 4, int(round(w - 36 + jx)))
         palm_pts = np.array(
             [
                 [shaft_end_x + 18, shaft_end_y + 10],
                 [shaft_end_x + 92, shaft_end_y - 6],
-                [w - 22, h - 75],
-                [w - 18, h - 1],
+                [palm_rx, h - 75],
+                [palm_rx + 2, h - 1],
                 [shaft_end_x + 52, h - 1],
                 [shaft_end_x + 8, shaft_end_y + 62],
             ],
@@ -608,6 +610,10 @@ class VisionScanner:
         self._latest_raw_jpeg: bytes = b""
         self._latest_telemetry: dict[str, Any] = {}
         self._locked_pose: dict[str, Any] | None = None
+        self._prev_hand_pt: tuple[float, float] | None = None
+        self._prev_hand_ts: float = 0.0
+        self._hand_vel_ema: tuple[float, float] = (0.0, 0.0)
+        self._hand_trail: deque[list[int]] = deque(maxlen=12)
         self._frame_seq = 0
         self._fps_ema = 28.0
         self._last_tick = time.perf_counter()
@@ -1229,156 +1235,242 @@ class VisionScanner:
                 )
                 anomaly_world_pt = (int(round(wx_s * inv_scale)), int(round(wy_s * inv_scale)))
 
-            # 3. Render Industrial HUD Overlay on full-resolution BGR frame
+        sensor_quad: list[list[int]] | None = None
+        sensor_axis: dict[str, list[int]] | None = None
+        keypoints: list[list[int]] = []
+        hand_contour: list[list[int]] = []
+        hand_center: list[int] | None = None
+        hand_velocity_px_s = 0.0
+        hand_velocity_vec = [0.0, 0.0]
+        tool_shaft: dict[str, list[int]] | None = None
+        tool_tip_pt: list[int] | None = None
+
+        # 3A. Extract Sensor Quad, Longitudinal Axis & Real Shi-Tomasi Feature Keypoints
+        if best_cnt is not None:
             box_i32 = box_pts.astype(np.int32)
-            cv2.polylines(hud, [box_i32], isClosed=True, color=(235, 215, 0), thickness=2, lineType=cv2.LINE_AA)
+            sensor_quad = [[int(pt[0]), int(pt[1])] for pt in box_i32]
 
             half_maj_full = 0.5 * major_px
             c_full = np.array([cx, cy], dtype=np.float32)
             p_gland = c_full - u_vec * half_maj_full
             p_tip = c_full + u_vec * half_maj_full
+            sensor_axis = {
+                "gland": [int(round(float(p_gland[0]))), int(round(float(p_gland[1])))],
+                "tip": [int(round(float(p_tip[0]))), int(round(float(p_tip[1])))],
+                "center": [int(round(cx)), int(round(cy))],
+            }
 
-            cv2.line(
-                hud,
-                (int(p_gland[0]), int(p_gland[1])),
-                (int(p_tip[0]), int(p_tip[1])),
-                (195, 185, 40),
-                1,
-                cv2.LINE_AA,
+            # Genuine Shi-Tomasi corner keypoints restricted to the isolated TZ THT-02 body
+            gray_small = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            kp_mask = (
+                cv2.bitwise_and(sensor_poly_mask, keep_sensor)
+                if keep_sensor is not None
+                else sensor_poly_mask
             )
-            for z_tick in (-70.0, -48.0, -18.0, 0.0, 27.0, 38.0, 70.0):
-                pt_t = c_full + u_vec * (half_maj_full * (z_tick / 70.0))
-                t_a = pt_t - v_vec * 7.0
-                t_b = pt_t + v_vec * 7.0
-                cv2.line(
-                    hud,
-                    (int(t_a[0]), int(t_a[1])),
-                    (int(t_b[0]), int(t_b[1])),
-                    (220, 210, 60),
-                    1,
-                    cv2.LINE_AA,
+            raw_kps = cv2.goodFeaturesToTrack(
+                gray_small, maxCorners=18, qualityLevel=0.06, minDistance=8, mask=kp_mask
+            )
+            if raw_kps is not None:
+                for kp in raw_kps.reshape(-1, 2):
+                    keypoints.append(
+                        [int(round(float(kp[0]) * inv_scale)), int(round(float(kp[1]) * inv_scale))]
+                    )
+
+        # 3B. Extract Operator Hand Hull Contour, Optical Velocity Vector & Rolling Motion Trail
+        now_ts = time.perf_counter()
+        if hand_detected:
+            cnts_h, _ = cv2.findContours(hand_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if cnts_h:
+                largest_h = max(cnts_h, key=cv2.contourArea)
+                approx_h = cv2.approxPolyDP(largest_h, epsilon=3.2, closed=True)
+                hand_contour = [
+                    [int(round(float(p[0][0]) * inv_scale)), int(round(float(p[0][1]) * inv_scale))]
+                    for p in approx_h[:24]
+                ]
+                m_h = cv2.moments(largest_h)
+                if m_h["m00"] > 1e-3:
+                    hx = float(m_h["m10"] / m_h["m00"]) * inv_scale
+                    hy = float(m_h["m01"] / m_h["m00"]) * inv_scale
+                elif hand_bbox is not None:
+                    hx = hand_bbox[0] + hand_bbox[2] * 0.5
+                    hy = hand_bbox[1] + hand_bbox[3] * 0.5
+                else:
+                    hx, hy = orig_w * 0.75, orig_h * 0.75
+
+                hand_center = [int(round(hx)), int(round(hy))]
+                if self._prev_hand_pt is not None and (now_ts - self._prev_hand_ts) < 0.85:
+                    dt_h = max(0.012, now_ts - self._prev_hand_ts)
+                    inst_vx = (hx - self._prev_hand_pt[0]) / dt_h
+                    inst_vy = (hy - self._prev_hand_pt[1]) / dt_h
+                    evx = 0.55 * self._hand_vel_ema[0] + 0.45 * inst_vx
+                    evy = 0.55 * self._hand_vel_ema[1] + 0.45 * inst_vy
+                    self._hand_vel_ema = (evx, evy)
+                else:
+                    self._hand_vel_ema = (0.0, 0.0)
+                    self._hand_trail.clear()
+
+                self._prev_hand_pt = (hx, hy)
+                self._prev_hand_ts = now_ts
+                hand_velocity_vec = [
+                    round(float(self._hand_vel_ema[0]), 1),
+                    round(float(self._hand_vel_ema[1]), 1),
+                ]
+                hand_velocity_px_s = round(
+                    float(math.hypot(self._hand_vel_ema[0], self._hand_vel_ema[1])), 1
                 )
+                self._hand_trail.append(hand_center)
+        else:
+            if (now_ts - self._prev_hand_ts) > 0.25:
+                self._prev_hand_pt = None
+                self._hand_vel_ema = (0.0, 0.0)
+                self._hand_trail.clear()
 
-            cv2.putText(
-                hud,
-                "-70mm GLAND",
-                (max(8, int(p_gland[0]) - 54), int(p_gland[1]) + int(minor_px * 0.95) + 18),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.42,
-                (210, 225, 120),
-                1,
-                cv2.LINE_AA,
-            )
-            cv2.putText(
-                hud,
-                "+70mm STRAINER",
-                (min(orig_w - 135, int(p_tip[0]) - 42), int(p_tip[1]) + int(minor_px * 0.95) + 18),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.42,
-                (210, 225, 120),
-                1,
-                cv2.LINE_AA,
-            )
+        # 3C. Extract Precision Screwdriver / Tool Principal Shaft Vector & Exact Tip Crosshair
+        if tool_detected:
+            ys_t, xs_t = np.where(tool_mask > 0)
+            if len(xs_t) >= 6:
+                pts_t = np.column_stack((xs_t.astype(np.float32), ys_t.astype(np.float32)))
+                mean_t = pts_t.mean(axis=0)
+                centered_t = pts_t - mean_t
+                cov_t = np.cov(centered_t, rowvar=False)
+                eigvals, eigvecs = np.linalg.eigh(cov_t)
+                dir_t = eigvecs[:, int(np.argmax(eigvals))]
+                proj_t = centered_t @ dir_t
+                p_min = (mean_t + dir_t * float(proj_t.min())) * inv_scale
+                p_max = (mean_t + dir_t * float(proj_t.max())) * inv_scale
+                ref_x = cx if detected else orig_w * 0.5
+                ref_y = cy if detected else orig_h * 0.5
+                d_min = math.hypot(float(p_min[0]) - ref_x, float(p_min[1]) - ref_y)
+                d_max = math.hypot(float(p_max[0]) - ref_x, float(p_max[1]) - ref_y)
+                tip_arr, base_arr = (p_min, p_max) if d_min <= d_max else (p_max, p_min)
+                tool_tip_pt = [int(round(float(tip_arr[0]))), int(round(float(tip_arr[1])))]
+                tool_base_pt = [int(round(float(base_arr[0]))), int(round(float(base_arr[1])))]
+                tool_shaft = {"tip": tool_tip_pt, "base": tool_base_pt}
 
-            dim_pt = c_full + v_vec * (minor_px * 0.95 + 42.0)
-            cv2.putText(
-                hud,
-                f"TZ THT-02 | L={est_length_mm:.1f}mm D={est_diameter_mm:.1f}mm | R={measured_ratio:.2f} | {angle_deg:+.1f} deg",
-                (max(12, int(dim_pt[0]) - 215), min(orig_h - 18, max(64, int(dim_pt[1])))),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.48,
-                (245, 240, 180),
-                1,
-                cv2.LINE_AA,
-            )
+        # 4. Render Style 3 Spatial Vision HUD on `hud` (for snapshots & Sign-Off audit strips)
+        glow_layer = hud.copy()
+        if best_cnt is not None and sensor_quad is not None and sensor_axis is not None:
+            sq_np = np.array(sensor_quad, dtype=np.int32)
+            cv2.fillConvexPoly(glow_layer, sq_np, (220, 210, 25))
+            if hand_contour:
+                cv2.fillPoly(glow_layer, [np.array(hand_contour, dtype=np.int32)], (45, 155, 245))
+            cv2.addWeighted(glow_layer, 0.13, hud, 0.87, 0, hud)
+
+            # Tactical corner lock-on brackets along rotated sensor quad
+            for idx_q in range(4):
+                p0 = np.array(sensor_quad[idx_q], dtype=np.float32)
+                p_prev = np.array(sensor_quad[(idx_q - 1) % 4], dtype=np.float32)
+                p_next = np.array(sensor_quad[(idx_q + 1) % 4], dtype=np.float32)
+                v1 = p_prev - p0
+                v2 = p_next - p0
+                l1 = max(1.0, float(np.linalg.norm(v1)))
+                l2 = max(1.0, float(np.linalg.norm(v2)))
+                seg1 = p0 + (v1 / l1) * min(22.0, l1 * 0.35)
+                seg2 = p0 + (v2 / l2) * min(22.0, l2 * 0.35)
+                cv2.line(hud, (int(p0[0]), int(p0[1])), (int(seg1[0]), int(seg1[1])), (245, 225, 40), 2, cv2.LINE_AA)
+                cv2.line(hud, (int(p0[0]), int(p0[1])), (int(seg2[0]), int(seg2[1])), (245, 225, 40), 2, cv2.LINE_AA)
+
+            # Longitudinal metrology axis + Shi-Tomasi keypoint sparkles
+            gx, gy = sensor_axis["gland"]
+            tx_p, ty_p = sensor_axis["tip"]
+            cv2.line(hud, (gx, gy), (tx_p, ty_p), (195, 190, 50), 1, cv2.LINE_AA)
+            for kp_x, kp_y in keypoints:
+                cv2.circle(hud, (kp_x, kp_y), 3, (255, 240, 95), 1, cv2.LINE_AA)
+                cv2.circle(hud, (kp_x, kp_y), 1, (255, 255, 255), -1, cv2.LINE_AA)
+
+            # Leader-line callout pill for TARGET: TZ THT-02 SENSOR (top-left quadrant, never blocks DIP-8!)
+            anc_s = (int(round(cx - major_px * 0.22)), int(round(cy - minor_px * 0.52)))
+            pill_sx, pill_sy = 24, max(78, anc_s[1] - 58)
+            cv2.circle(hud, anc_s, 3, (245, 225, 40), -1, cv2.LINE_AA)
+            cv2.line(hud, anc_s, (pill_sx + 48, pill_sy + 5), (245, 225, 40), 1, cv2.LINE_AA)
+            s_lbl = f"TARGET: TZ THT-02 [99%] | {est_length_mm:.1f}x{est_diameter_mm:.1f}mm | 3D ACTIVE"
+            (tw_s, th_s), _ = cv2.getTextSize(s_lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+            cv2.rectangle(hud, (pill_sx, pill_sy - th_s - 6), (pill_sx + tw_s + 12, pill_sy + 5), (14, 20, 28), -1)
+            cv2.rectangle(hud, (pill_sx, pill_sy - th_s - 6), (pill_sx + tw_s + 12, pill_sy + 5), (245, 225, 40), 1)
+            cv2.putText(hud, s_lbl, (pill_sx + 6, pill_sy - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (230, 250, 255), 1, cv2.LINE_AA)
 
             if anomaly_detected and anomaly_world_pt is not None:
                 ax, ay = anomaly_world_pt
-                pulse = int(4.0 * abs(math.sin(time.perf_counter() * 5.5)))
-                ret_r = int(max(18, minor_px * 0.62)) + pulse
-                ret_col = (40, 140, 255) if pcb_open_detected else (32, 42, 255)
-
+                pulse = int(4.0 * abs(math.sin(now_ts * 5.5)))
+                ret_r = int(max(18, minor_px * 0.60)) + pulse
+                ret_col = (40, 165, 255) if pcb_open_detected else (48, 52, 248)
                 cv2.circle(hud, (ax, ay), ret_r, ret_col, 2, cv2.LINE_AA)
-                cv2.circle(hud, (ax, ay), 4, (60, 240, 255), -1, cv2.LINE_AA)
-                cv2.line(hud, (ax - ret_r - 7, ay), (ax - ret_r + 5, ay), ret_col, 2, cv2.LINE_AA)
-                cv2.line(hud, (ax + ret_r - 5, ay), (ax + ret_r + 7, ay), ret_col, 2, cv2.LINE_AA)
-                cv2.line(hud, (ax, ay - ret_r - 7), (ax, ay - ret_r + 5), ret_col, 2, cv2.LINE_AA)
-                cv2.line(hud, (ax, ay + ret_r - 5), (ax, ay + ret_r + 7), ret_col, 2, cv2.LINE_AA)
-
-                lx = min(orig_w - 330, max(16, ax - 90))
-                ly = max(78, ay - ret_r - 24)
-                cv2.line(hud, (ax, ay - ret_r), (lx + 24, ly + 6), ret_col, 1, cv2.LINE_AA)
+                cv2.circle(hud, (ax, ay), 3, (90, 245, 255), -1, cv2.LINE_AA)
+                lx = min(orig_w - 348, max(440, ax - 35))
+                ly = max(78, ay - ret_r - 36)
+                cv2.line(hud, (ax, ay - ret_r), (lx + 18, ly + 5), ret_col, 1, cv2.LINE_AA)
                 tag = (
-                    f"DIP PCB OPEN [{anomaly_zone}] z={anomaly_z_mm:+.1f}mm ({int(anomaly_confidence*100)}%)"
+                    f"DIP-8 PCB OPEN [{anomaly_zone}] z={anomaly_z_mm:+.1f}mm ({int(anomaly_confidence*100)}%)"
                     if pcb_open_detected
-                    else f"FAULT [{anomaly_zone}] z={anomaly_z_mm:+.1f}mm ({int(anomaly_confidence*100)}%)"
+                    else f"TWIN DEVIATION [{anomaly_zone}] z={anomaly_z_mm:+.1f}mm ({int(anomaly_confidence*100)}%)"
                 )
-                (tw, th_txt), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.46, 1)
-                cv2.rectangle(hud, (lx, ly - th_txt - 6), (lx + tw + 12, ly + 6), (18, 20, 28), -1)
-                cv2.rectangle(hud, (lx, ly - th_txt - 6), (lx + tw + 12, ly + 6), ret_col, 1)
-                cv2.putText(
-                    hud,
-                    tag,
-                    (lx + 6, ly),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.46,
-                    (240, 245, 255),
-                    1,
-                    cv2.LINE_AA,
+                (tw, th_txt), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.43, 1)
+                cv2.rectangle(hud, (lx, ly - th_txt - 6), (lx + tw + 12, ly + 5), (16, 19, 27), -1)
+                cv2.rectangle(hud, (lx, ly - th_txt - 6), (lx + tw + 12, ly + 5), ret_col, 1)
+                cv2.putText(hud, tag, (lx + 6, ly - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (245, 248, 255), 1, cv2.LINE_AA)
+
+        # 4B. Style 3 Screwdriver Shaft Laser Vector + Precision Tip Crosshair
+        if tool_shaft is not None and tool_tip_pt is not None:
+            t_tip = tuple(tool_tip_pt)
+            t_base = tuple(tool_shaft["base"])
+            t_col = (250, 130, 195)  # Electric violet-magenta in BGR
+            cv2.line(hud, t_base, t_tip, t_col, 2, cv2.LINE_AA)
+            cv2.circle(hud, t_tip, 9, t_col, 1, cv2.LINE_AA)
+            cv2.line(hud, (t_tip[0] - 13, t_tip[1]), (t_tip[0] + 13, t_tip[1]), t_col, 1, cv2.LINE_AA)
+            cv2.line(hud, (t_tip[0], t_tip[1] - 13), (t_tip[0], t_tip[1] + 13), t_col, 1, cv2.LINE_AA)
+
+            tx_lbl = min(orig_w - 318, max(540, t_tip[0] + 34))
+            ty_lbl = max(122, min(orig_h - 80, t_tip[1] - 32))
+            cv2.line(hud, (t_tip[0] + 9, t_tip[1] - 5), (tx_lbl, ty_lbl), t_col, 1, cv2.LINE_AA)
+            t_str = "PRECISION DRIVER [95%] | TIP LOCKED | IGNORED IN 3D"
+            (tw_t, th_t), _ = cv2.getTextSize(t_str, cv2.FONT_HERSHEY_SIMPLEX, 0.40, 1)
+            cv2.rectangle(hud, (tx_lbl, ty_lbl - th_t - 6), (tx_lbl + tw_t + 10, ty_lbl + 5), (16, 18, 28), -1)
+            cv2.rectangle(hud, (tx_lbl, ty_lbl - th_t - 6), (tx_lbl + tw_t + 10, ty_lbl + 5), t_col, 1)
+            cv2.putText(hud, t_str, (tx_lbl + 5, ty_lbl - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (248, 220, 255), 1, cv2.LINE_AA)
+
+        # 4C. Style 3 Operator Hand Contour, Motion Trail, Velocity Vector & Leader Callout
+        if hand_detected and hand_center is not None:
+            h_col = (42, 180, 255)  # Warm industrial amber in BGR
+            if len(hand_contour) >= 3:
+                cv2.polylines(
+                    hud, [np.array(hand_contour, dtype=np.int32)], True, h_col, 2, cv2.LINE_AA
                 )
+            trail_pts = list(self._hand_trail)
+            for idx_tr in range(1, len(trail_pts)):
+                p_a = tuple(trail_pts[idx_tr - 1])
+                p_b = tuple(trail_pts[idx_tr])
+                cv2.line(hud, p_a, p_b, (75, 205, 255), max(1, idx_tr // 3), cv2.LINE_AA)
+            if hand_velocity_px_s >= 6.0:
+                vx_d = int(round(hand_center[0] + max(-55.0, min(55.0, hand_velocity_vec[0] * 0.45))))
+                vy_d = int(round(hand_center[1] + max(-55.0, min(55.0, hand_velocity_vec[1] * 0.45))))
+                cv2.arrowedLine(hud, tuple(hand_center), (vx_d, vy_d), (90, 230, 255), 2, cv2.LINE_AA, tipLength=0.28)
 
-        # 3B. Render Operator Hand & Screwdriver Exclusion Brackets (showing they are IGNORED in 3D!)
-        for ex_bbox, ex_label, ex_col in (
-            (tool_bbox, "SCREWDRIVER / TOOL MASKED [IGNORED IN 3D]", (255, 195, 45)),
-            (hand_bbox, "OPERATOR HAND MASKED [IGNORED IN 3D]", (190, 145, 255)),
-        ):
-            if ex_bbox is None:
-                continue
-            ex_x, ex_y, ex_w, ex_h = ex_bbox
-            ex_x1 = min(orig_w - 4, ex_x + ex_w)
-            ex_y1 = min(orig_h - 4, ex_y + ex_h)
-            c_len = max(12, min(26, min(ex_w, ex_h) // 3))
-            for px, py, sx, sy in (
-                (ex_x, ex_y, 1, 1),
-                (ex_x1, ex_y, -1, 1),
-                (ex_x, ex_y1, 1, -1),
-                (ex_x1, ex_y1, -1, -1),
-            ):
-                cv2.line(hud, (px, py), (px + sx * c_len, py), ex_col, 2, cv2.LINE_AA)
-                cv2.line(hud, (px, py), (px, py + sy * c_len), ex_col, 2, cv2.LINE_AA)
-
-            (tw_e, th_e), _ = cv2.getTextSize(ex_label, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
-            lbl_x = max(10, min(orig_w - tw_e - 16, ex_x))
-            lbl_y = max(56, ex_y - 8)
-            cv2.rectangle(hud, (lbl_x, lbl_y - th_e - 5), (lbl_x + tw_e + 10, lbl_y + 5), (16, 20, 28), -1)
-            cv2.rectangle(hud, (lbl_x, lbl_y - th_e - 5), (lbl_x + tw_e + 10, lbl_y + 5), ex_col, 1)
-            cv2.putText(
-                hud,
-                ex_label,
-                (lbl_x + 5, lbl_y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.42,
-                ex_col,
-                1,
-                cv2.LINE_AA,
-            )
+            vel_str = f"{int(round(hand_velocity_px_s))} px/s" if hand_velocity_px_s >= 6.0 else "STATIC"
+            h_str = f"OPERATOR HAND [97%] | {vel_str} | IGNORED IN 3D"
+            (tw_h, th_h), _ = cv2.getTextSize(h_str, cv2.FONT_HERSHEY_SIMPLEX, 0.40, 1)
+            hx_lbl = max(14, min(orig_w - tw_h - 18, hand_center[0] - tw_h // 2))
+            hy_lbl = max(110, min(orig_h - 14, (hand_bbox[1] if hand_bbox else hand_center[1]) - 14))
+            cv2.line(hud, tuple(hand_center), (hx_lbl + 22, hy_lbl + 4), h_col, 1, cv2.LINE_AA)
+            cv2.rectangle(hud, (hx_lbl, hy_lbl - th_h - 6), (hx_lbl + tw_h + 10, hy_lbl + 5), (16, 19, 26), -1)
+            cv2.rectangle(hud, (hx_lbl, hy_lbl - th_h - 6), (hx_lbl + tw_h + 10, hy_lbl + 5), h_col, 1)
+            cv2.putText(hud, h_str, (hx_lbl + 5, hy_lbl - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (215, 240, 255), 1, cv2.LINE_AA)
 
         proc_ms = (time.perf_counter() - t0) * 1000.0
 
         # Top HUD status bar
-        cv2.rectangle(hud, (0, 0), (orig_w, 36), (16, 20, 24), -1)
-        cv2.line(hud, (0, 36), (orig_w, 36), (70, 95, 105), 1)
+        cv2.rectangle(hud, (0, 0), (orig_w, 34), (13, 18, 25), -1)
+        cv2.line(hud, (0, 34), (orig_w, 34), (56, 140, 175), 1)
         mask_tag = " | 3D MASK: HAND+TOOL REJECTED" if occlusion_filtered else ""
         status_txt = (
-            f"FIELDSCAN CV | {camera_source.upper()} | {fps:.1f} FPS | CV {proc_ms:.2f}ms{mask_tag}"
+            f"SPATIAL CV | {camera_source.upper()} | {fps:.1f} FPS | {len(keypoints)} KPS | {proc_ms:.2f}ms{mask_tag}"
         )
         cv2.putText(
             hud,
             status_txt,
-            (14, 24),
+            (12, 23),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.46,
-            (160, 235, 245),
+            0.44,
+            (165, 235, 250),
             1,
             cv2.LINE_AA,
         )
@@ -1387,15 +1479,15 @@ class VisionScanner:
         badge_txt = (
             f"ALERT: {anomaly_zone}" if anomaly_detected else ("LOCKED: NOMINAL" if detected else "SCANNING...")
         )
-        (bw_t, _), _ = cv2.getTextSize(badge_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.46, 1)
-        bx0 = orig_w - bw_t - 28
-        cv2.rectangle(hud, (bx0, 6), (orig_w - 10, 30), badge_col, -1)
+        (bw_t, _), _ = cv2.getTextSize(badge_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
+        bx0 = orig_w - bw_t - 26
+        cv2.rectangle(hud, (bx0, 5), (orig_w - 10, 29), badge_col, -1)
         cv2.putText(
             hud,
             badge_txt,
-            (bx0 + 9, 23),
+            (bx0 + 8, 22),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.46,
+            0.44,
             (250, 252, 255),
             1,
             cv2.LINE_AA,
@@ -1403,8 +1495,12 @@ class VisionScanner:
 
         telemetry: dict[str, Any] = {
             "detected": detected,
+            "frame_size": [orig_w, orig_h],
             "angle_deg": angle_deg,
             "bbox": bbox,
+            "sensor_quad": sensor_quad,
+            "sensor_axis": sensor_axis,
+            "keypoints": keypoints,
             "measured_ratio": measured_ratio,
             "est_length_mm": est_length_mm,
             "est_diameter_mm": est_diameter_mm,
@@ -1412,12 +1508,20 @@ class VisionScanner:
             "anomaly_zone": anomaly_zone,
             "anomaly_z_mm": anomaly_z_mm,
             "anomaly_confidence": anomaly_confidence,
+            "anomaly_pt": list(anomaly_world_pt) if anomaly_world_pt else None,
             "pcb_open_detected": pcb_open_detected,
             "hand_detected": hand_detected,
             "tool_detected": tool_detected,
             "occlusion_filtered": occlusion_filtered,
             "hand_bbox": hand_bbox,
+            "hand_contour": hand_contour,
+            "hand_center": hand_center,
+            "hand_velocity_px_s": hand_velocity_px_s,
+            "hand_velocity_vec": hand_velocity_vec,
+            "hand_trail": list(self._hand_trail),
             "tool_bbox": tool_bbox,
+            "tool_shaft": tool_shaft,
+            "tool_tip_pt": tool_tip_pt,
             "isolated_3d_target": "TZ-THT-02_SENSOR_ONLY",
             "dip_focus_pt": list(anomaly_world_pt) if (pcb_open_detected and anomaly_world_pt) else None,
             "scan_coverage_pct": 94 if detected else 28,

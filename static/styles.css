@@ -642,6 +642,19 @@ svg.lucide {
   color: #e0f2fe;
 }
 
+.chip-btn-cv.active {
+  background: linear-gradient(180deg, rgba(14, 165, 233, 0.28), rgba(16, 185, 129, 0.2));
+  border-color: #38bdf8;
+  color: #ecfeff;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.22);
+}
+
+.chip-btn-cv.is-minimal {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: var(--amber-bright);
+  color: #fef3c7;
+}
+
 /* ==========================================================================
    1. UPPER-LEFT VIEWPORT: LIVE OPTICAL CAMERA SCANNER & DIP-8 MACRO PIP
    ========================================================================== */
@@ -659,6 +672,15 @@ svg.lucide {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.cv-spatial-hud-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 4;
 }
 
 .video-reticle {

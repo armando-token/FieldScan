@@ -78,3 +78,14 @@ When an operator reaches into the optical field of view to unscrew the `TZ THT-0
 3. **3D Reconstruction Lock (`TZ-THT-02_SENSOR_ONLY`)**:
    - Both masks are dilated and subtracted prior to silhouette `minAreaRect` fitting and warm fault-patch localization, and `self._locked_pose` stabilizes longitudinal dimensions and tilt during partial hand occlusion so **`Three.js` strictly reconstructs only the `TZ THT-02` sensor and never draws hands or tools**.
 
+---
+
+## 6. Style 3 Spatial Computer Vision HUD (`60 FPS` Retina Canvas + `SPATIAL / MINIMAL / RAW`)
+
+To demonstrate live on-device spatial perception clearly during hardware judging without obstructing tiny `SW1 DIP-8` switches, the camera viewport streams raw MJPEG (`/api/video/stream?raw=1`) beneath a **High-DPI Retina HTML5 `<canvas>` (`#cvSpatialHudCanvas`)** driven at **`60 FPS`**:
+- **`TZ THT-02` Target Lock (Cyan / Emerald)**: Rotated corner lock-on brackets, translucent segmentation hull, live **`cv2.goodFeaturesToTrack` Shi-Tomasi optical keypoints**, and `-70 mm .. +70 mm` laser metrology axis.
+- **Operator Hand Tracking (Amber)**: Polygonal skin-locus hull, decaying `0.25 s` optical motion trail, and real-time velocity vector (`px/s`).
+- **Precision Screwdriver Tracking (Electric Violet)**: Principal eigenvector shaft laser line + rotating micro-crosshair locked onto the exact screwdriver tip (`tool_tip_pt`).
+- **Floating Leader-Line Callout Pills & 1-Click Mode Toggle (`#btnCycleCvHud`)**: Diagonal elbow leader lines route labels to non-overlapping outer quadrants, and clicking **`CV HUD: SPATIAL` -> `MINIMAL` -> `RAW`** lets judges compare the raw USB camera feed against live Computer Vision segmentation instantaneously.
+
+

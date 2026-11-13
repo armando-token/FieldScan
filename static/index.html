@@ -170,6 +170,15 @@
           <span class="meta-badge meta-badge-sky" id="pillCamText">30 FPS</span>
           <button
             type="button"
+            class="chip-btn chip-btn-cv active"
+            id="btnCycleCvHud"
+            title="Cycle Real-Time Computer Vision Spatial HUD (Spatial / Minimal / Raw)"
+          >
+            <i data-lucide="scan"></i>
+            <span id="cvHudModeLabel">CV HUD: SPATIAL</span>
+          </button>
+          <button
+            type="button"
             class="chip-btn"
             id="btnToggleDipPip"
             title="Show or hide zoomed DIP-8 pin-focus macro inset"
@@ -181,10 +190,11 @@
       </div>
 
       <div class="camera-stage" id="videoFrame">
-        <img id="videoStream" src="/api/video/stream" alt="Live OpenCV 30 FPS optical sensor stream" />
+        <img id="videoStream" src="/api/video/stream?raw=1" alt="Live OpenCV 30 FPS optical sensor stream" />
         <canvas id="videoFallbackCanvas" class="video-fallback-canvas" width="640" height="360" hidden></canvas>
+        <canvas id="cvSpatialHudCanvas" class="cv-spatial-hud-canvas" aria-hidden="true"></canvas>
 
-        <div class="video-reticle" aria-hidden="true">
+        <div class="video-reticle" id="videoStaticReticle" aria-hidden="true">
           <span class="corner tl"></span>
           <span class="corner tr"></span>
           <span class="corner bl"></span>

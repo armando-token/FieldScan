@@ -10,7 +10,7 @@
   <title>FIELDSCAN CAD · DIGITAL TWIN — TZ THT-02 Industrial SCADA &amp; Repair HMI</title>
   <link rel="stylesheet" href="/static/vendor/open-props.min.css" />
   <link rel="stylesheet" href="/static/vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="/static/styles.css?v=20261113b" />
+  <link rel="stylesheet" href="/static/styles.css?v=20261113c" />
 </head>
 <body>
   <!-- =====================================================================
@@ -400,21 +400,24 @@
       </div>
 
       <div class="scada-grid">
-        <!-- 3-Tier Industrial Andon Stack Light -->
-        <div class="andon-column">
-          <div class="andon-stack" id="andonStack" data-andon="RED" title="3-Tier Industrial Andon Stack Light">
+        <!-- 3-Tier Industrial Signal Tower Lamp (Red / Yellow / Green) -->
+        <div class="andon-column" id="andonColumn" data-andon="RED">
+          <div class="andon-stack" id="andonStack" data-andon="RED" title="3-Tier Industrial Signal Tower Lamp (Red / Yellow / Green)">
             <div class="andon-cap"></div>
             <div class="andon-lens lens-red is-active" id="andonRed" title="RED: Fault / Bus Offline">
               <span>RED</span>
             </div>
-            <div class="andon-lens lens-amber" id="andonAmber" title="AMBER: Awaiting Bus Power / DIP-8 Setup">
-              <span>AMB</span>
+            <div class="andon-collar"></div>
+            <div class="andon-lens lens-amber" id="andonAmber" title="YELLOW: DIP-8 Setup / Awaiting Bus Power">
+              <span>YLW</span>
             </div>
+            <div class="andon-collar"></div>
             <div class="andon-lens lens-green" id="andonGreen" title="GREEN: Modbus RTU Online &amp; Healthy">
               <span>GRN</span>
             </div>
+            <div class="andon-collar"></div>
             <div class="andon-mast"></div>
-            <div class="andon-foot">ANDON</div>
+            <div class="andon-foot">SIGNAL</div>
           </div>
         </div>
 
@@ -472,15 +475,26 @@
           <i data-lucide="radio"></i>
           <span>LIVE AI VOICE ENGINEER</span>
         </div>
-        <button
-          type="button"
-          class="chip-btn active"
-          id="btnAutoSpeak"
-          title="Enable or mute automatic English neural speech synthesis"
-        >
-          <i data-lucide="volume-2"></i>
-          <span id="autoSpeakText">Voice: ON</span>
-        </button>
+        <div class="card-header-right">
+          <button
+            type="button"
+            class="chip-btn chip-btn-handsfree"
+            id="btnHandsFreeMic"
+            title="Toggle continuous hands-free English voice listening (auto-mutes during AI speech)"
+          >
+            <i data-lucide="ear"></i>
+            <span id="handsFreeText">Hands-Free: OFF</span>
+          </button>
+          <button
+            type="button"
+            class="chip-btn active"
+            id="btnAutoSpeak"
+            title="Enable or mute automatic English neural speech synthesis"
+          >
+            <i data-lucide="volume-2"></i>
+            <span id="autoSpeakText">Voice: ON</span>
+          </button>
+        </div>
       </div>
 
       <!-- Tactile Push-To-Talk Mic Button + Live NEXT STEP Callout Box -->
@@ -706,6 +720,6 @@
 
   <script src="/static/vendor/lucide.min.js"></script>
   <script src="/static/vendor/uPlot.iife.min.js"></script>
-  <script type="module" src="/static/app.js?v=20261113b"></script>
+  <script type="module" src="/static/app.js?v=20261113c"></script>
 </body>
 </html>

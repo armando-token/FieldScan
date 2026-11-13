@@ -294,6 +294,7 @@ class LiveRepairCoordinator:
         self._last_modbus_healthy: bool = False
         self._last_modbus_7fff: bool = False
         self._last_pcb_open: bool = False
+        self._last_open_alert_ts: float = 0.0
         self._focus_dip: bool = False
         self._event_seq: int = 0
         self._latest_proactive_event: dict[str, Any] | None = None
@@ -315,6 +316,7 @@ class LiveRepairCoordinator:
             self._last_modbus_healthy = False
             self._last_modbus_7fff = False
             self._last_pcb_open = False
+            self._last_open_alert_ts = 0.0
             self._focus_dip = False
             self._latest_proactive_event = None
         return self.get_state()
@@ -481,6 +483,7 @@ class LiveRepairCoordinator:
         healthy = bool(modbus_tel.get("healthy"))
         abnormal_7fff = bool(modbus_tel.get("online") and modbus_tel.get("sensor_abnormal_7fff"))
         pcb_open = bool(vision_tel.get("pcb_open_detected"))
+        now_ts = time.perf_counter()
 
         trigger_type: str | None = None
         with self._lock:
@@ -497,10 +500,20 @@ class LiveRepairCoordinator:
             elif abnormal_7fff and not self._last_modbus_7fff:
                 trigger_type = "MODBUS_7FFF_ALARM"
                 self._focus_dip = False
-            elif pcb_open and not self._last_pcb_open and not healthy and self.stage == "IDLE_MONITORING":
+            elif not healthy and not abnormal_7fff and self._last_modbus_healthy:
+                trigger_type = "MODBUS_SIGNAL_LOST"
+                self.stage = "STEP1_OPEN_FAULT_DETECTED"
+                self._focus_dip = True
+            elif (
+                pcb_open
+                and not self._last_pcb_open
+                and not healthy
+                and (now_ts - self._last_open_alert_ts >= 12.0)
+            ):
                 trigger_type = "CAMERA_OPEN_PCB_DETECTED"
                 self.stage = "STEP1_OPEN_FAULT_DETECTED"
                 self._focus_dip = True
+                self._last_open_alert_ts = now_ts
 
             self._last_modbus_healthy = healthy
             self._last_modbus_7fff = abnormal_7fff
@@ -585,6 +598,50 @@ class LiveRepairCoordinator:
                     "andon_state": "RED",
                     "highlighted_zone": "strainer_head",
                     "manual_page": 6,
+                    "citations": citations,
+                    "manual_citations": citations,
+                    "audio_wav_b64": audio_b64,
+                }
+                self._latest_proactive_event = ev
+                return dict(ev)
+
+        if trigger_type == "MODBUS_SIGNAL_LOST":
+            sid = modbus_tel.get("target_slave_id", self.target_slave_id)
+            self.record_snapshot(
+                key="before_fault",
+                title="1. BEFORE: MODBUS BUS SIGNAL LOST",
+                caption=f"No RS-485 response on Slave #{sid} — verify DIP-8 switches & wiring",
+                jpeg_bytes=frame_jpeg,
+            )
+            msg = (
+                f"Live bus alert: RS-485 Modbus communication with TZ THT-02 Slave {sid} was lost. "
+                "Verify power and Yellow A plus Green B minus leads, or inspect the internal SW1 DIP-8 switches—"
+                "for Slave ID 1, set Pin 8 ON and Pins 1 through 7 OFF, then cycle power."
+            )
+            audio_b64 = tts_fn(msg) if callable(tts_fn) else None
+            citations = [
+                {"page": 5, "label": "Page 5 · SW1 DIP-8 Switch Addressing"},
+                {"page": 4, "label": "Page 4 · 4-Wire RS-485 Leads"},
+            ]
+            with self._lock:
+                self._event_seq += 1
+                self._append_log("RS-485 Modbus Signal Lost", msg)
+                ev = {
+                    "event_id": self._event_seq,
+                    "type": trigger_type,
+                    "stage": self.stage,
+                    "title": "MODBUS SIGNAL LOST · CHECK DIP-8 & WIRING",
+                    "diagnosis": msg,
+                    "assistant_message": msg,
+                    "explode_pcb": True,
+                    "focus_dip": True,
+                    "andon_state": "RED",
+                    "highlighted_zone": "upper_barrel_dip",
+                    "manual_page": 5,
+                    "probable_causes": [
+                        "SW1 DIP-8 switches changed away from Slave #1 (Pin 8 ON, Pins 1..7 OFF) — flip Pin 8 ON and cycle DC power (Page 5).",
+                        "RS-485 Yellow (A+) / Green (B-) or Red (V+) / Black (GND) harness disconnected (Page 4).",
+                    ],
                     "citations": citations,
                     "manual_citations": citations,
                     "audio_wav_b64": audio_b64,

@@ -58,30 +58,38 @@ def _jpeg_to_png_bytes(jpeg_bytes: bytes) -> bytes | None:
 
 
 def _detect_conversational_repair_intent(text: str) -> str | None:
-    """Detect natural English spoken/typed intents for interactive live repair & sign-off reporting."""
+    """Detect explicit workflow action commands while letting natural questions go to interactive LFM3-VL-2B."""
     q = (text or "").lower().strip()
     if not q:
         return None
 
-    # 1. Step 4: Post-repair OEM sign-off & 4-angle dossier
+    # Never hijack conversational greetings or natural questions — route them to interactive LFM3-VL-2B
+    if q.endswith("?") or re.match(
+        r"^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening)|what|which|how|why|where|who|when|can\s+you\s+explain|explain|tell\s+me|is\s+the|are\s+the|do\s+i|does\s+it)\b",
+        q,
+    ):
+        return None
+
+    # 1. Step 4: Explicit post-repair OEM sign-off & 4-angle dossier command
     if any(
         phrase in q
         for phrase in (
             "sign off",
             "sign-off",
             "signoff",
-            "manufacturer",
             "all angles",
             "four angles",
             "4 angles",
             "post-repair",
             "dossier",
-            "report",
+            "generate report",
+            "compile report",
+            "manufacturer report",
         )
     ):
         return "signoff_report"
 
-    # 2. Step 1: Unpowered / open / unconfigured initial fault discovery
+    # 2. Step 1: Explicit unpowered / open housing initial repair trigger
     if any(
         phrase in q
         for phrase in (
@@ -91,19 +99,18 @@ def _detect_conversational_repair_intent(text: str) -> str | None:
             "will not power on",
             "won't turn on",
             "not turning on",
-            "unconfigured",
-            "what should i do",
-            "found this sensor",
-            "not sure if it works",
+            "housing is open",
+            "sensor is open",
+            "open and unconfigured",
         )
     ):
         return "inspect_open"
 
-    if re.search(r"\bopen\b", q) and not re.search(r"\b(?:modbus|slave)\b", q):
-        return "inspect_open"
-
-    # 3. Step 2: Modbus-RTU / Slave ID / DIP-8 pin guidance
-    if re.search(r"\b(?:modbus|slave|pins|dip)\b", q):
+    # 3. Step 2: Explicit imperative command to configure/set DIP-8 switches or Modbus Slave ID
+    if re.search(
+        r"\b(?:configure|set|setup|set\s+up|guide|assign)\b.*\b(?:dip|slave|pins|address)\b",
+        q,
+    ):
         return "guide_dip"
 
     return None
@@ -580,19 +587,29 @@ async def api_voice(
     file: UploadFile | None = File(default=None),
     include_camera: str = Form(default="true"),
     dip_address: str | None = Form(default=None),
+    hands_free: str = Form(default="false"),
 ) -> dict[str, Any]:
     upload = audio or file
     if upload is None:
         raise HTTPException(status_code=400, detail="Missing audio upload")
 
+    is_hands_free = hands_free.lower() in ("true", "1", "yes", "on")
     audio_bytes = await upload.read()
     engine = get_lfm_engine()
     asr_res = await asyncio.to_thread(
         engine.transcribe_audio,
         audio_bytes,
         upload.filename or "speech.wav",
+        is_hands_free,
     )
     transcript = asr_res["transcript"]
+    if is_hands_free and asr_res.get("empty_speech"):
+        return {
+            "ignored_silence": True,
+            "transcript": "",
+            "asr_ms": asr_res["asr_ms"],
+        }
+
     sensor_match = match_and_load_sensor(transcript)
 
     use_cam = include_camera.lower() not in ("false", "0", "no")

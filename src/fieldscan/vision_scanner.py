@@ -1788,7 +1788,9 @@ class VisionScanner:
         val_ch = hsv[:, :, 2]
         sat_ch = hsv[:, :, 1]
 
-        pcb_blue_full = cv2.inRange(hsv, (92, 58, 42), (138, 255, 255))
+        pcb_min_sat = 58 if sim_mode in SIM_MODES else 96
+        pcb_min_val = 42 if sim_mode in SIM_MODES else 55
+        pcb_blue_full = cv2.inRange(hsv, (92, pcb_min_sat, pcb_min_val), (138, 255, 255))
         warm_min_sat = 105 if sim_mode in SIM_MODES else 142
         warm_patch_full = cv2.bitwise_or(
             cv2.inRange(hsv, (0, warm_min_sat, 95), (26, 255, 255)),

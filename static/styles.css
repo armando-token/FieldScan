@@ -1498,109 +1498,202 @@ svg.lucide {
   background: rgba(2, 132, 199, 0.42);
 }
 
-/* SCADA 3-Part Body: Andon Tower | Giant Readouts | uPlot Graph */
+/* SCADA 3-Part Body: Tall Signal Tower | Giant Readouts | uPlot Graph */
 .scada-grid {
   flex: 1 1 0;
   min-height: 0;
   padding: 8px 10px;
   display: grid;
-  grid-template-columns: 62px minmax(340px, 1.12fr) minmax(300px, 1fr);
+  grid-template-columns: 86px minmax(332px, 1.12fr) minmax(292px, 1fr);
   gap: 10px;
   align-items: stretch;
 }
 
-/* 3-Tier Industrial Andon Stack Light */
+/* Tall, High-Luminance 3-Tier Industrial Signal Tower Lamp (Red / Yellow / Green) */
 .andon-column {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
-  background: #0a0f15;
-  border: 1px solid var(--border-subtle);
+  background: radial-gradient(circle at 50% 45%, rgba(255, 42, 60, 0.14) 0%, #070b10 78%);
+  border: 1px solid #243244;
   border-radius: var(--r-md);
-  padding: 6px 4px;
+  padding: 6px 6px 5px;
+  position: relative;
+  overflow: visible;
+  transition: background 240ms ease, border-color 240ms ease;
+}
+
+.andon-column[data-andon='GREEN'] {
+  background: radial-gradient(circle at 50% 68%, rgba(0, 245, 122, 0.22) 0%, #070b10 80%);
+  border-color: rgba(16, 185, 129, 0.55);
+}
+
+.andon-column[data-andon='AMBER'] {
+  background: radial-gradient(circle at 50% 48%, rgba(255, 224, 20, 0.22) 0%, #070b10 80%);
+  border-color: rgba(250, 204, 21, 0.55);
+}
+
+.andon-column[data-andon='RED'] {
+  background: radial-gradient(circle at 50% 26%, rgba(255, 36, 56, 0.24) 0%, #070b10 80%);
+  border-color: rgba(239, 68, 68, 0.58);
 }
 
 .andon-stack {
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 44px;
+  width: 66px;
+  height: 100%;
+  min-height: 146px;
 }
 
 .andon-cap {
-  width: 38px;
-  height: 7px;
-  border-radius: 5px 5px 1px 1px;
-  background: linear-gradient(90deg, #1e293b, #475569, #1e293b);
-  border: 1px solid #475569;
+  width: 56px;
+  height: 10px;
+  flex-shrink: 0;
+  border-radius: 10px 10px 2px 2px;
+  background: linear-gradient(90deg, #1e293b 0%, #94a3b8 38%, #cbd5e1 50%, #475569 78%, #0f172a 100%);
+  border: 1px solid #64748b;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+}
+
+.andon-collar {
+  width: 56px;
+  height: 3px;
+  flex-shrink: 0;
+  background: linear-gradient(90deg, #0f172a 0%, #64748b 35%, #cbd5e1 50%, #475569 75%, #0f172a 100%);
+  border-left: 1px solid #475569;
+  border-right: 1px solid #475569;
 }
 
 .andon-lens {
-  width: 36px;
-  height: 30px;
-  border-left: 1px solid #334155;
-  border-right: 1px solid #334155;
-  border-bottom: 1px solid #0f172a;
+  position: relative;
+  width: 52px;
+  flex: 1 1 0;
+  min-height: 35px;
+  border-left: 1.5px solid rgba(148, 163, 184, 0.42);
+  border-right: 1.5px solid rgba(71, 85, 105, 0.55);
   display: grid;
   place-items: center;
   font-family: var(--font-mono);
-  font-size: 8.5px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  color: rgba(255, 255, 255, 0.25);
-  transition: all 200ms ease;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.34);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+  transition: all 180ms ease;
+  overflow: hidden;
+}
+
+/* Cylindrical 3D Acrylic Specular Lens Highlight */
+.andon-lens::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.34) 0%,
+    rgba(255, 255, 255, 0.24) 22%,
+    rgba(255, 255, 255, 0.05) 42%,
+    rgba(0, 0, 0, 0.08) 76%,
+    rgba(0, 0, 0, 0.42) 100%
+  );
+  pointer-events: none;
+}
+
+.andon-lens > span {
+  position: relative;
+  z-index: 1;
 }
 
 .lens-red {
-  background: repeating-linear-gradient(180deg, #350d11 0px, #350d11 3px, #25080b 3px, #25080b 5px);
+  background: repeating-linear-gradient(180deg, #4c1118 0px, #4c1118 3px, #31090e 3px, #31090e 5px);
 }
 
 .lens-amber {
-  background: repeating-linear-gradient(180deg, #362007 0px, #362007 3px, #241504 3px, #241504 5px);
+  background: repeating-linear-gradient(180deg, #4f3807 0px, #4f3807 3px, #332303 3px, #332303 5px);
 }
 
 .lens-green {
-  background: repeating-linear-gradient(180deg, #062f22 0px, #062f22 3px, #041f16 3px, #041f16 5px);
+  background: repeating-linear-gradient(180deg, #08472f 0px, #08472f 3px, #042c1d 3px, #042c1d 5px);
+}
+
+@keyframes andonRedPulse {
+  0%, 100% {
+    box-shadow:
+      0 0 18px rgba(255, 32, 56, 0.92),
+      0 0 36px rgba(239, 68, 68, 0.55),
+      inset 0 0 12px rgba(255, 235, 238, 0.72);
+  }
+  50% {
+    box-shadow:
+      0 0 28px rgba(255, 46, 68, 1),
+      0 0 52px rgba(255, 32, 56, 0.78),
+      inset 0 0 16px rgba(255, 255, 255, 0.9);
+  }
 }
 
 .lens-red.is-active {
-  background: radial-gradient(circle at 50% 45%, #fca5a5 0%, #ef4444 55%, #991b1b 100%);
+  background:
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0px, rgba(255, 255, 255, 0.12) 2px, transparent 2px, transparent 5px),
+    radial-gradient(ellipse at 50% 48%, #fff1f2 0%, #ff4d5e 28%, #ff142b 66%, #b9091b 100%);
   color: #ffffff;
-  border-color: #f87171;
-  box-shadow: 0 0 18px rgba(239, 68, 68, 0.78);
+  border-color: #fda4af;
+  text-shadow: 0 1px 4px rgba(127, 29, 29, 0.95);
+  z-index: 2;
+  animation: andonRedPulse 1.5s infinite ease-in-out;
 }
 
 .lens-amber.is-active {
-  background: radial-gradient(circle at 50% 45%, #fef08a 0%, #f59e0b 55%, #b45309 100%);
-  color: #0b0f14;
-  border-color: #fbbf24;
-  box-shadow: 0 0 18px rgba(245, 158, 11, 0.78);
+  background:
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0px, rgba(255, 255, 255, 0.14) 2px, transparent 2px, transparent 5px),
+    radial-gradient(ellipse at 50% 48%, #ffffe0 0%, #ffee32 32%, #facc15 68%, #ca8a04 100%);
+  color: #171202;
+  border-color: #fef08a;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
+  z-index: 2;
+  box-shadow:
+    0 0 24px rgba(255, 230, 0, 0.96),
+    0 0 46px rgba(250, 204, 21, 0.62),
+    inset 0 0 14px rgba(255, 255, 255, 0.82);
 }
 
 .lens-green.is-active {
-  background: radial-gradient(circle at 50% 45%, #a7f3d0 0%, #10b981 55%, #047857 100%);
-  color: #042f2e;
-  border-color: #34d399;
-  box-shadow: 0 0 18px rgba(16, 185, 129, 0.82);
+  background:
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.13) 0px, rgba(255, 255, 255, 0.13) 2px, transparent 2px, transparent 5px),
+    radial-gradient(ellipse at 50% 48%, #ecfdf5 0%, #34ffa0 28%, #00e676 66%, #059669 100%);
+  color: #022c1e;
+  border-color: #86efac;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
+  z-index: 2;
+  box-shadow:
+    0 0 26px rgba(0, 245, 122, 0.96),
+    0 0 48px rgba(16, 185, 129, 0.62),
+    inset 0 0 14px rgba(255, 255, 255, 0.8);
 }
 
 .andon-mast {
-  width: 10px;
-  height: 14px;
-  background: linear-gradient(90deg, #334155, #94a3b8, #334155);
+  width: 14px;
+  height: 11px;
+  flex-shrink: 0;
+  background: linear-gradient(90deg, #1e293b 0%, #94a3b8 38%, #e2e8f0 50%, #475569 80%, #0f172a 100%);
+  border-left: 1px solid #475569;
+  border-right: 1px solid #475569;
 }
 
 .andon-foot {
-  width: 42px;
+  width: 60px;
+  flex-shrink: 0;
   padding: 2px 0;
-  border-radius: 2px;
-  background: #1e293b;
-  border: 1px solid #475569;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #273549 0%, #151f2e 100%);
+  border: 1px solid #64748b;
   font-family: var(--font-mono);
-  font-size: 7.5px;
+  font-size: 8px;
   font-weight: 800;
+  letter-spacing: 0.08em;
   text-align: center;
-  color: var(--text-muted);
+  color: #cbd5e1;
 }
 
 /* Giant High-Contrast Readout Cards */
@@ -1809,6 +1902,19 @@ svg.lucide {
 .btn-mic-primary:hover {
   background: linear-gradient(180deg, #0ea5e9 0%, #0284c7 100%);
   transform: translateY(-1px);
+}
+
+.chip-btn-handsfree.active {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: #34d399;
+  color: #6ee7b7;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.35);
+}
+
+.btn-mic-primary.handsfree-listening {
+  background: linear-gradient(180deg, #059669 0%, #047857 100%);
+  border-color: #6ee7b7;
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.24);
 }
 
 .btn-mic-primary.recording {

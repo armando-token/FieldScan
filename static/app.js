@@ -132,6 +132,10 @@ const state = {
 
   autoSpeak: true,
   isRecording: false,
+  handsFreeEnabled: false,
+  isAiSpeaking: false,
+  aiSpeakCooldownUntil: 0,
+  voiceRequestInFlight: false,
   lastEscalation: null,
   lastDiagnosisText: '',
   lastAudioB64: null,
@@ -253,6 +257,7 @@ const dom = {
   btnSimConnectModbus: document.getElementById('btnSimConnectModbus'),
   btnBreathTest: document.getElementById('btnBreathTest'),
 
+  andonColumn: document.getElementById('andonColumn'),
   andonStack: document.getElementById('andonStack'),
   andonRed: document.getElementById('andonRed'),
   andonAmber: document.getElementById('andonAmber'),
@@ -267,6 +272,8 @@ const dom = {
   scadaChart: document.getElementById('scadaChart'),
   scadaFallbackCanvas: document.getElementById('scadaFallbackCanvas'),
 
+  btnHandsFreeMic: document.getElementById('btnHandsFreeMic'),
+  handsFreeText: document.getElementById('handsFreeText'),
   btnAutoSpeak: document.getElementById('btnAutoSpeak'),
   autoSpeakText: document.getElementById('autoSpeakText'),
   btnVoiceRecord: document.getElementById('btnVoiceRecord'),
@@ -2652,8 +2659,9 @@ function updateAndonAndBanners({ healthy, abn7fff, mb, repair }) {
   if (healthy) andon = 'GREEN';
   if (abn7fff) andon = 'RED';
 
-  // 1. Update 3-Tier Industrial Andon Stack Light
+  // 1. Update 3-Tier Industrial Signal Tower Lamp (Red / Yellow / Green)
   dom.andonStack.dataset.andon = andon;
+  if (dom.andonColumn) dom.andonColumn.dataset.andon = andon;
   dom.andonRed.classList.toggle('is-active', andon === 'RED');
   dom.andonAmber.classList.toggle('is-active', andon === 'AMBER');
   dom.andonGreen.classList.toggle('is-active', andon === 'GREEN');
@@ -3107,17 +3115,50 @@ async function uploadCustomBenchPhoto(file) {
 /* ==========================================================================
    AI VOICE ENGINEER TRANSCRIPT, CITATIONS & ENGLISH TTS PLAYBACK
    ========================================================================== */
+let activeTtsAudio = null;
+
+function stopActiveTtsPlayback() {
+  if (activeTtsAudio) {
+    try {
+      activeTtsAudio.pause();
+      activeTtsAudio.currentTime = 0;
+    } catch (_e) {}
+    activeTtsAudio = null;
+  }
+  if ('speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch (_e) {}
+  }
+  state.isAiSpeaking = false;
+  state.aiSpeakCooldownUntil = Date.now() + 250;
+}
+
 function playDiagnosisAudio(audioB64, fallbackText) {
+  stopActiveTtsPlayback();
   if (audioB64) {
     try {
       const src = audioB64.startsWith('data:')
         ? audioB64
         : `data:audio/wav;base64,${audioB64}`;
       const audio = new Audio(src);
-      audio.play().catch(() => speakBrowserFallback(fallbackText));
+      activeTtsAudio = audio;
+      state.isAiSpeaking = true;
+      const onDone = () => {
+        if (activeTtsAudio === audio) activeTtsAudio = null;
+        state.isAiSpeaking = false;
+        state.aiSpeakCooldownUntil = Date.now() + 550;
+      };
+      audio.addEventListener('ended', onDone, { once: true });
+      audio.addEventListener('pause', onDone, { once: true });
+      audio.addEventListener('error', onDone, { once: true });
+      audio.play().catch(() => {
+        onDone();
+        speakBrowserFallback(fallbackText);
+      });
       return;
     } catch (_e) {
-      // Fall through to Web Speech en-US synthesis
+      state.isAiSpeaking = false;
     }
   }
   speakBrowserFallback(fallbackText);
@@ -3131,9 +3172,18 @@ function speakBrowserFallback(text) {
     const utter = new SpeechSynthesisUtterance(clean);
     utter.lang = 'en-US';
     utter.rate = 1.03;
+    utter.onstart = () => {
+      state.isAiSpeaking = true;
+    };
+    const onSpeechEnd = () => {
+      state.isAiSpeaking = false;
+      state.aiSpeakCooldownUntil = Date.now() + 550;
+    };
+    utter.onend = onSpeechEnd;
+    utter.onerror = onSpeechEnd;
     window.speechSynthesis.speak(utter);
   } catch (_e) {
-    // Ignore in headless environments without speech voices
+    state.isAiSpeaking = false;
   }
 }
 
@@ -3446,7 +3496,18 @@ async function submitDiagnosisQuery(queryText, { includeCamera = true, zoneHint 
     });
     handleCopilotResponse(res);
   } catch (_err) {
-    const lower = queryText.toLowerCase();
+    const lower = queryText.toLowerCase().trim();
+    const isGreeting = /^(hello|hi|hey|good morning|good afternoon|good evening)\b/.test(lower);
+    if (isGreeting) {
+      handleCopilotResponse({
+        model: 'LFM3-VL-2B (OFFLINE)',
+        diagnosis:
+          'Hello! I am your offline FieldScan AI Engineer. What is your question? I can help with TZ THT-02 operation, SW1 DIP-8 switches, RS-485 wiring, or live diagnostics.',
+        probable_causes: [],
+        citations: [],
+      });
+      return;
+    }
     const isDip = lower.includes('dip') || zoneHint === 'upper_barrel_dip';
     const addr = computeDipAddress();
     handleCopilotResponse(
@@ -3487,7 +3548,7 @@ async function submitDiagnosisQuery(queryText, { includeCamera = true, zoneHint 
 }
 
 /* ==========================================================================
-   PUSH-TO-SPEAK MICROPHONE RECORDING (LFM3-Audio-2B -> POST /api/voice)
+   PUSH-TO-SPEAK + CONTINUOUS HANDS-FREE VAD (LFM3-Audio-2B -> POST /api/voice)
    ========================================================================== */
 let mediaRecorder = null;
 let audioChunks = [];
@@ -3495,11 +3556,217 @@ let audioStream = null;
 let audioCtx = null;
 let meterRaf = 0;
 
+let hfStream = null;
+let hfAudioCtx = null;
+let hfAnalyser = null;
+let hfRaf = 0;
+let hfRecorder = null;
+let hfChunks = [];
+let hfSpeechActive = false;
+let hfSpeechStartTs = 0;
+let hfAboveSinceTs = 0;
+let hfLastVoiceTs = 0;
+let hfNoiseFloor = 0.008;
+
+function syncMicDeckIdleUi() {
+  if (state.handsFreeEnabled) {
+    dom.btnVoiceRecord.classList.remove('recording');
+    dom.btnVoiceRecord.classList.add('handsfree-listening');
+    dom.pttLabel.textContent = 'Hands-Free Live Mic Active';
+    dom.pttSubLabel.textContent = 'Speak anytime in English · Auto-pauses during AI voice';
+    dom.voiceMeter.hidden = false;
+  } else {
+    dom.btnVoiceRecord.classList.remove('recording', 'handsfree-listening');
+    dom.pttLabel.textContent = 'Push to Speak to AI Engineer';
+    dom.pttSubLabel.textContent = 'Offline LFM3-Audio-2B · Click to Record (or enable Hands-Free)';
+    dom.voiceMeter.hidden = true;
+  }
+}
+
+async function toggleHandsFreeMode() {
+  if (state.handsFreeEnabled) {
+    disableHandsFreeMode();
+    return;
+  }
+  if (state.isRecording) {
+    stopVoiceRecording();
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    appendChatMessage({
+      role: 'assistant',
+      author: 'AUDIO INTERFACE',
+      text: 'Browser microphone capture is unavailable in this context; use the English prompt bar below.',
+    });
+    return;
+  }
+
+  try {
+    hfStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    hfAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = hfAudioCtx.createMediaStreamSource(hfStream);
+    hfAnalyser = hfAudioCtx.createAnalyser();
+    hfAnalyser.fftSize = 512;
+    src.connect(hfAnalyser);
+    const pcmBuf = new Float32Array(hfAnalyser.fftSize);
+
+    state.handsFreeEnabled = true;
+    hfSpeechActive = false;
+    hfAboveSinceTs = 0;
+    hfNoiseFloor = 0.008;
+    if (dom.btnHandsFreeMic) dom.btnHandsFreeMic.classList.add('active');
+    if (dom.handsFreeText) dom.handsFreeText.textContent = 'Hands-Free: LIVE';
+    syncMicDeckIdleUi();
+
+    const startHfUtterance = (now) => {
+      if (!hfStream || hfSpeechActive) return;
+      hfChunks = [];
+      hfRecorder = new MediaRecorder(hfStream);
+      hfRecorder.addEventListener('dataavailable', (ev) => {
+        if (ev.data && ev.data.size > 0) hfChunks.push(ev.data);
+      });
+      hfRecorder.addEventListener('stop', async () => {
+        const durMs = Date.now() - hfSpeechStartTs;
+        const mimeType = hfRecorder?.mimeType || 'audio/webm';
+        const blob = new Blob(hfChunks, { type: mimeType });
+        hfChunks = [];
+        if (!state.handsFreeEnabled || durMs < 400 || blob.size < 900) {
+          if (state.handsFreeEnabled) syncMicDeckIdleUi();
+          return;
+        }
+        await sendVoiceBlob(blob, { handsFree: true });
+        if (state.handsFreeEnabled) syncMicDeckIdleUi();
+      });
+      hfSpeechActive = true;
+      hfSpeechStartTs = now;
+      hfLastVoiceTs = now;
+      dom.btnVoiceRecord.classList.remove('handsfree-listening');
+      dom.btnVoiceRecord.classList.add('recording');
+      dom.pttLabel.textContent = 'Listening to You... (Auto-Send on Pause)';
+      dom.pttSubLabel.textContent = 'Hands-Free VAD · Offline LFM3-Audio-2B';
+      hfRecorder.start();
+    };
+
+    const stopHfUtterance = () => {
+      if (!hfSpeechActive) return;
+      hfSpeechActive = false;
+      hfAboveSinceTs = 0;
+      dom.btnVoiceRecord.classList.remove('recording');
+      if (hfRecorder && hfRecorder.state !== 'inactive') {
+        hfRecorder.stop();
+      }
+    };
+
+    const tickHandsFreeVad = () => {
+      if (!state.handsFreeEnabled || !hfAnalyser) return;
+      const now = Date.now();
+      const gated =
+        state.isAiSpeaking || now < state.aiSpeakCooldownUntil || state.voiceRequestInFlight;
+
+      if (gated) {
+        if (hfSpeechActive) {
+          hfSpeechStartTs = now; // Discard echo fragment
+          stopHfUtterance();
+        }
+        dom.voiceMeterFill.style.width = '6%';
+        dom.pttLabel.textContent = state.voiceRequestInFlight
+          ? 'Processing Speech Offline...'
+          : 'AI Speaking · Mic Paused (Echo Guard)';
+        hfRaf = requestAnimationFrame(tickHandsFreeVad);
+        return;
+      }
+
+      if (!hfSpeechActive && dom.pttLabel.textContent.startsWith('AI Speaking')) {
+        syncMicDeckIdleUi();
+      }
+
+      hfAnalyser.getFloatTimeDomainData(pcmBuf);
+      let sq = 0;
+      for (let i = 0; i < pcmBuf.length; i++) {
+        sq += pcmBuf[i] * pcmBuf[i];
+      }
+      const rms = Math.sqrt(sq / pcmBuf.length);
+      const pct = Math.min(100, Math.max(6, Math.round(rms * 420)));
+      dom.voiceMeterFill.style.width = `${pct}%`;
+
+      const threshold = Math.max(0.021, Math.min(0.065, hfNoiseFloor * 2.65));
+      if (!hfSpeechActive) {
+        if (rms < threshold * 0.85) {
+          hfNoiseFloor = hfNoiseFloor * 0.96 + rms * 0.04;
+        }
+        if (rms >= threshold) {
+          if (!hfAboveSinceTs) hfAboveSinceTs = now;
+          if (now - hfAboveSinceTs >= 115) {
+            startHfUtterance(now);
+          }
+        } else {
+          hfAboveSinceTs = 0;
+        }
+      } else {
+        if (rms >= threshold * 0.78) {
+          hfLastVoiceTs = now;
+        }
+        if (now - hfLastVoiceTs >= 880 || now - hfSpeechStartTs >= 11000) {
+          stopHfUtterance();
+        }
+      }
+
+      hfRaf = requestAnimationFrame(tickHandsFreeVad);
+    };
+
+    tickHandsFreeVad();
+  } catch (err) {
+    disableHandsFreeMode();
+    appendChatMessage({
+      role: 'assistant',
+      author: 'AUDIO PERMISSIONS',
+      text: `Could not activate Hands-Free microphone (${err.message}). Check browser microphone permissions.`,
+    });
+  }
+}
+
+function disableHandsFreeMode() {
+  state.handsFreeEnabled = false;
+  hfSpeechActive = false;
+  hfAboveSinceTs = 0;
+  if (hfRaf) cancelAnimationFrame(hfRaf);
+  hfRaf = 0;
+  if (hfRecorder && hfRecorder.state !== 'inactive') {
+    try {
+      hfSpeechStartTs = Date.now(); // Skip sending partial audio when turning off
+      hfRecorder.stop();
+    } catch (_e) {}
+  }
+  hfRecorder = null;
+  if (hfStream) {
+    hfStream.getTracks().forEach((t) => t.stop());
+    hfStream = null;
+  }
+  if (hfAudioCtx) {
+    hfAudioCtx.close().catch(() => {});
+    hfAudioCtx = null;
+  }
+  hfAnalyser = null;
+  if (dom.btnHandsFreeMic) dom.btnHandsFreeMic.classList.remove('active');
+  if (dom.handsFreeText) dom.handsFreeText.textContent = 'Hands-Free: OFF';
+  syncMicDeckIdleUi();
+}
+
 async function toggleVoiceRecording() {
+  if (state.handsFreeEnabled) {
+    disableHandsFreeMode();
+  }
   if (state.isRecording) {
     stopVoiceRecording();
     return;
   }
+
+  stopActiveTtsPlayback();
 
   if (!navigator.mediaDevices?.getUserMedia) {
     appendChatMessage({
@@ -3523,7 +3790,7 @@ async function toggleVoiceRecording() {
       const mimeType = mediaRecorder.mimeType || 'audio/webm';
       const blob = new Blob(audioChunks, { type: mimeType });
       cleanupAudioStream();
-      await sendVoiceBlob(blob);
+      await sendVoiceBlob(blob, { handsFree: false });
     });
 
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -3563,10 +3830,7 @@ async function toggleVoiceRecording() {
 function stopVoiceRecording() {
   if (!state.isRecording) return;
   state.isRecording = false;
-  dom.btnVoiceRecord.classList.remove('recording');
-  dom.pttLabel.textContent = 'Push to Speak to AI Engineer';
-  dom.pttSubLabel.textContent = 'Offline LFM3-Audio-2B · Click to Record';
-  dom.voiceMeter.hidden = true;
+  syncMicDeckIdleUi();
   if (meterRaf) cancelAnimationFrame(meterRaf);
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
@@ -3584,34 +3848,51 @@ function cleanupAudioStream() {
   }
 }
 
-async function sendVoiceBlob(blob) {
+async function sendVoiceBlob(blob, { handsFree = false } = {}) {
+  state.voiceRequestInFlight = true;
   const formData = new FormData();
   formData.append('audio', blob, 'field_query.webm');
   formData.append('file', blob, 'field_query.webm');
   formData.append('include_camera', 'true');
   formData.append('dip_address', String(computeDipAddress()));
+  formData.append('hands_free', handsFree ? 'true' : 'false');
 
-  appendChatMessage({
-    role: 'user',
-    author: 'OPERATOR VOICE (OFFLINE ASR)',
-    text: 'Processing spoken field command with LiquidAI LFM3-Audio-2B...',
-  });
+  if (!handsFree) {
+    appendChatMessage({
+      role: 'user',
+      author: 'OPERATOR VOICE (OFFLINE ASR)',
+      text: 'Processing spoken field command with LiquidAI LFM3-Audio-2B...',
+    });
+  }
 
   try {
     const res = await fetchJsonWithFallback(['/api/voice'], {
       method: 'POST',
       body: formData,
     });
-    if (res.transcript) {
+    if (res.ignored_silence) {
+      return;
+    }
+    if (handsFree) {
+      appendChatMessage({
+        role: 'user',
+        author: 'OPERATOR VOICE (HANDS-FREE)',
+        text: `"${res.transcript || 'Voice query'}"`,
+      });
+    } else if (res.transcript) {
       const userBubbles = dom.chatFeed.querySelectorAll('.msg-user .msg-text');
       const lastBubble = userBubbles[userBubbles.length - 1];
       if (lastBubble) lastBubble.textContent = `"${res.transcript}"`;
     }
     handleCopilotResponse(res);
   } catch (_err) {
-    await submitDiagnosisQuery('Diagnose current TZ THT-02 sensor state on optical camera and RS-485 bus.', {
-      includeCamera: true,
-    });
+    if (!handsFree) {
+      await submitDiagnosisQuery('Diagnose current TZ THT-02 sensor state on optical camera and RS-485 bus.', {
+        includeCamera: true,
+      });
+    }
+  } finally {
+    state.voiceRequestInFlight = false;
   }
 }
 
@@ -4121,8 +4402,13 @@ function bindWorkstationEvents() {
   });
 
   // Voice Engineer Controls
+  if (dom.btnHandsFreeMic) {
+    dom.btnHandsFreeMic.addEventListener('click', toggleHandsFreeMode);
+  }
+
   dom.btnAutoSpeak.addEventListener('click', () => {
     state.autoSpeak = !state.autoSpeak;
+    if (!state.autoSpeak) stopActiveTtsPlayback();
     dom.btnAutoSpeak.classList.toggle('active', state.autoSpeak);
     dom.autoSpeakText.textContent = state.autoSpeak ? 'Voice: ON' : 'Voice: Muted';
   });

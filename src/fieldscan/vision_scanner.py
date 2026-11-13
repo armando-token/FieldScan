@@ -1981,16 +1981,17 @@ class VisionScanner:
                     nw_i = warm_sensor_only[ys_i, xs_i] == 0
                     p20_in = float(np.percentile(vi[nw_i] if np.any(nw_i) else vi.ravel(), 20))
 
-                    # Also compare narrow cable core vs its own lateral flanks just past contour end (0.48..0.66)
-                    s_ex = np.linspace(0.48 * maj_s_cur, 0.66 * maj_s_cur, 7, dtype=np.float32) * sign
-                    n_fl = np.array([-1.25 * min_s_cur, -1.0 * min_s_cur, 1.0 * min_s_cur, 1.25 * min_s_cur], dtype=np.float32)
+                    # Also compare cable exit zone (including curved cable exits) vs lateral flanks (0.46..0.64)
+                    s_ex = np.linspace(0.46 * maj_s_cur, 0.64 * maj_s_cur, 7, dtype=np.float32) * sign
+                    n_cab = np.linspace(-0.55 * min_s_cur, 0.55 * min_s_cur, 9, dtype=np.float32)
+                    n_fl = np.array([-1.35 * min_s_cur, -1.1 * min_s_cur, 1.1 * min_s_cur, 1.35 * min_s_cur], dtype=np.float32)
                     xs_c = np.clip(
-                        np.round(cx_s + s_ex[:, None] * u_vec[0] + n_in_e[None, :] * v_tmp[0]).astype(np.int32),
+                        np.round(cx_s + s_ex[:, None] * u_vec[0] + n_cab[None, :] * v_tmp[0]).astype(np.int32),
                         0,
                         pw - 1,
                     )
                     ys_c = np.clip(
-                        np.round(cy_s + s_ex[:, None] * u_vec[1] + n_in_e[None, :] * v_tmp[1]).astype(np.int32),
+                        np.round(cy_s + s_ex[:, None] * u_vec[1] + n_cab[None, :] * v_tmp[1]).astype(np.int32),
                         0,
                         ph - 1,
                     )

@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Industrial Datasheet + FieldScan · Onboard diagnosis</title>
+<link rel="stylesheet" href="styles.css">
+<script src="dist/app.js" defer></script>
+</head>
+<body>
+<div id="app" data-ws="live">
+  <div id="viewport-tht" class="viewport" aria-label="3D digital twin of the THT-02 sensor on the engine-room bulkhead"></div>
+  <div id="viewport-loop" class="viewport" hidden aria-label="3D digital twin of the freshwater tank level loop"></div>
+
+  <div id="hud" class="hud" aria-hidden="true">
+    <div class="hud-top">
+      <span class="rec"><i></i>REC</span>
+      <span class="hud-src">FIELDSCAN CAM-01 · SIMULATED SOURCE</span>
+      <span class="hud-time mono" id="hud-time">--:--:--</span>
+    </div>
+    <div class="reticle"><i></i><i></i><i></i><i></i></div>
+    <div class="recog" id="recog-box" hidden><span id="recog-tag">THT-02 · 0.94</span></div>
+    <div class="hud-bottom mono" id="hud-bottom">ISO 400 · f/2.0 · 1/60 · AF-C</div>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <strong>Industrial Datasheet <em>+ FieldScan</em></strong>
+        <small id="subtitle">Engine room · bulkhead FR 42 · asset BOAT-ER-TH-02</small>
+      </div>
+    </div>
+    <nav class="workspaces" role="tablist" aria-label="Workspace">
+      <button role="tab" data-ws="live" aria-selected="true"><b>1</b> Live view</button>
+      <button role="tab" data-ws="diag" aria-selected="false"><b>2</b> THT-02 diagnosis</button>
+      <button role="tab" data-ws="compat" aria-selected="false"><b>3</b> 4–20 mA spare</button>
+    </nav>
+    <div class="pills">
+      <span class="pill" id="pill-engine" title="Pinned catalog and rules versions">Catalog —</span>
+      <span class="pill" id="pill-link" title="Where results are computed">Link —</span>
+      <span class="pill" id="pill-net" title="Internet connectivity">Network —</span>
+      <span class="pill" id="pill-ai" title="Assistant reasoning mode">Assistant —</span>
+      <span class="pill mono" id="clock">--:--:--</span>
+    </div>
+  </header>
+
+  <aside class="panel left" aria-label="Workspace panel">
+    <!-- 1 · Live view -->
+    <div class="ws" id="ws-live">
+      <section>
+        <h2>Asset recognition <span class="tag synthetic">Simulated camera</span></h2>
+        <div class="row">
+          <button id="btn-capture" type="button" class="primary">Capture frame</button>
+          <button id="btn-plate" type="button">Show plate</button>
+          <button id="btn-torch" type="button" aria-pressed="false">Torch</button>
+        </div>
+        <div id="recog-card" class="card muted small">Point the camera at the sensor and capture a frame. Identification is never final until a technician confirms it.</div>
+        <div class="row">
+          <button id="btn-confirm" type="button" class="primary" disabled>Confirm asset</button>
+          <button id="btn-go-diag" type="button" disabled>Open diagnosis →</button>
+        </div>
+      </section>
+      <section>
+        <h2>Session pins</h2>
+        <dl class="metrics pins" id="pins"></dl>
+        <p class="muted small">Every answer cites these pins and an event id. Values are tagged <span class="tag synthetic">simulated</span>, <span class="tag oem">documented</span> or <span class="tag pending">no evidence</span>.</p>
+      </section>
+    </div>
+
+    <!-- 2 · THT-02 diagnosis -->
+    <div class="ws" id="ws-diag" hidden>
+      <section>
+        <h2>Bus <span class="tag synthetic">Simulated RTU</span></h2>
+        <dl class="metrics">
+          <dt>Master polls</dt><dd id="d-master">Address 1 · FC03 · R0 × 2</dd>
+          <dt>Line</dt><dd>9600 baud · 8N1 · 1000 ms timeout</dd>
+          <dt>Sensor DIP</dt><dd id="d-addr">—</dd>
+          <dt>Last poll</dt><dd id="d-status">—</dd>
+          <dt>Reading</dt><dd id="d-reading">—</dd>
+        </dl>
+      </section>
+      <section>
+        <h2>DIP-8 switch <span class="muted small" id="dip-sum">= 0</span></h2>
+        <div class="dip" id="dip" role="group" aria-label="DIP switch mirror"></div>
+        <p class="muted small">Manual § 5: switches 1–8 weigh 128, 64, 32, 16, 8, 4, 2, 1. Click to change the simulated switch.</p>
+      </section>
+      <section>
+        <div id="diag-verdict" class="verdict">Not polled yet</div>
+        <div class="grid-buttons">
+          <button id="btn-why" type="button" class="primary">Why does it fail?</button>
+          <button id="btn-manual" type="button">View manual</button>
+          <button id="btn-fix" type="button" class="primary">Simulate DIP fix</button>
+          <button id="btn-works" type="button">Does it work now?</button>
+          <button id="btn-reset" type="button">Reset case</button>
+          <button id="btn-report" type="button">Export report</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- 3 · 4–20 mA compatibility -->
+    <div class="ws" id="ws-compat" hidden>
+      <section>
+        <h2>Configuration <span class="tag synthetic">Synthetic installation</span></h2>
+        <form id="controls">
+          <fieldset>
+            <legend>Loop supply</legend>
+            <div class="seg">
+              <label><input type="radio" name="voltage" value="24" checked><span>24 V DC</span></label>
+              <label><input type="radio" name="voltage" value="12"><span>12 V DC</span></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Installation revision</legend>
+            <div class="seg">
+              <label><input type="radio" name="revision" value="v1" checked><span>Config v1 · 30 Ω</span></label>
+              <label><input type="radio" name="revision" value="v2"><span>Config v2 · 475 Ω</span></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Scenario</legend>
+            <div class="seg three">
+              <label><input type="radio" name="scenario" value="nominal" checked><span>Level 50 %</span></label>
+              <label><input type="radio" name="scenario" value="empty"><span>Empty tank</span></label>
+              <label><input type="radio" name="scenario" value="open"><span>Open wire</span></label>
+            </div>
+          </fieldset>
+        </form>
+      </section>
+      <section aria-live="polite">
+        <h2>Loop load verdict</h2>
+        <div id="verdict" class="verdict">Computing…</div>
+        <div class="gauge" aria-hidden="true"><div id="gauge-fill"></div><div class="gauge-limit"></div></div>
+        <dl class="metrics">
+          <dt>Available load</dt><dd id="m-limit">—</dd>
+          <dt>Evaluated load</dt><dd id="m-load">—</dd>
+          <dt>Margin</dt><dd id="m-margin">—</dd>
+          <dt>Loop state</dt><dd id="m-state">—</dd>
+          <dt>Simulated signal</dt><dd id="m-signal">—</dd>
+          <dt>Ideal PLC count</dt><dd id="m-count">—</dd>
+        </dl>
+        <ul id="criteria" class="criteria"></ul>
+        <p id="replacement" class="replacement"></p>
+        <ul id="pending" class="pending"></ul>
+        <div class="row">
+          <button id="export" type="button" disabled>Export result JSON</button>
+          <code class="formula">(V − 8 V) / 0.022 A</code>
+        </div>
+      </section>
+    </div>
+  </aside>
+
+  <aside class="panel right" aria-label="Assistant, frames, evidence and parts">
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="assistant" aria-selected="true">Assistant</button>
+      <button role="tab" data-tab="frames" aria-selected="false" data-only="live diag">RTU frames</button>
+      <button role="tab" data-tab="evidence" aria-selected="false">Evidence</button>
+      <button role="tab" data-tab="inspector" aria-selected="false">Parts</button>
+      <button role="tab" data-tab="telemetry" aria-selected="false" data-only="compat">Telemetry</button>
+    </nav>
+
+    <div class="tab" id="tab-assistant">
+      <div id="messages" class="messages" aria-live="polite"></div>
+      <div class="chips" id="chips"></div>
+      <form id="chat" class="chat" autocomplete="off">
+        <button type="button" id="mic" class="icon" title="Talk (speech recognition)" aria-label="Talk">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V22h2v-3.08A7 7 0 0 0 19 12h-2Z"/></svg>
+        </button>
+        <input id="chat-input" type="text" placeholder="Ask the platform… e.g. “Why does it fail?”" maxlength="500">
+        <button type="button" id="speak" class="icon" title="Read replies aloud" aria-label="Read replies aloud" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3Zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4Zm-2.5-9v2.06A7 7 0 0 1 14 19v2.06A9 9 0 0 0 14 3Z"/></svg>
+        </button>
+        <button type="submit" class="send">Send</button>
+      </form>
+    </div>
+
+    <div class="tab" id="tab-frames" data-only="live diag" hidden>
+      <p class="muted small">Modbus RTU transactions recorded by tool calls · <span class="b addr">ADDR</span> <span class="b fn">FN</span> <span class="b count">COUNT</span> <span class="b data">DATA</span> <span class="b crc">CRC</span></p>
+      <div class="row wrap">
+        <span class="muted small">Inject on next reply:</span>
+        <button type="button" data-inject="bad_crc">Bad CRC</button>
+        <button type="button" data-inject="foreign_address">Foreign address</button>
+        <button type="button" data-inject="sensor_fault">Sensor 7FFF H</button>
+        <button type="button" id="btn-bench" title="Bench RS-485 reader (not integrated)">Bench reader</button>
+      </div>
+      <ol id="frames" class="frames" reversed></ol>
+    </div>
+
+    <div class="tab" id="tab-evidence" hidden>
+      <h3>Session events</h3>
+      <ol id="events" class="events"></ol>
+      <h3>Documents in the package</h3>
+      <ul id="documents" class="sources"></ul>
+      <h3>Rules</h3>
+      <pre class="rules">Modbus address  = Σ DIP weights (128 … 1)        § 5
+Reply accepted  = CRC ok ∧ addr = polled ∧ FC 03
+                  ∧ byte count ok ∧ no 7FFF H     § 6.4 · 6.10
+Loop available  = (V_supply − 8 V) / 0.022 A
+Loop evaluated  = 290 Ω + synthetic additional load</pre>
+      <p class="muted small" id="versions"></p>
+      <p class="muted small">Documents are preloaded. Opening the original links requires Internet.</p>
+    </div>
+
+    <div class="tab" id="tab-inspector" hidden>
+      <div id="inspector" class="inspector"><p class="muted">Click any part in the 3D twin to inspect it.</p></div>
+      <h3>Assembly</h3>
+      <ul id="assembly" class="assembly"></ul>
+    </div>
+
+    <div class="tab" id="tab-telemetry" data-only="compat" hidden>
+      <p class="muted small">Simulated live telemetry · 4 Hz · derived from the evaluated report</p>
+      <canvas id="chart" width="720" height="360"></canvas>
+      <dl class="metrics live">
+        <dt>Loop current</dt><dd id="t-ma">—</dd>
+        <dt>Supply voltage</dt><dd id="t-v">—</dd>
+        <dt>Transmitter terminal V @ 22 mA</dt><dd id="t-term">—</dd>
+        <dt>PLC raw count (AI0)</dt><dd id="t-count">—</dd>
+        <dt>Tank level (physical)</dt><dd id="t-level">—</dd>
+        <dt>Channel diagnostic</dt><dd id="t-diag">—</dd>
+      </dl>
+      <ul id="sources" class="sources"></ul>
+    </div>
+  </aside>
+
+  <div class="dock" role="toolbar" aria-label="Digital twin view">
+    <div class="seg view" id="view-modes">
+      <button type="button" data-view="normal" aria-pressed="true">Realistic</button>
+      <button type="button" data-view="xray" aria-pressed="false">X-ray</button>
+      <button type="button" data-view="exploded" aria-pressed="false">Disassemble</button>
+    </div>
+    <label class="slider">Disassembly <input id="explode" type="range" min="0" max="1" step="0.01" value="0"></label>
+    <div class="seg" id="cams"></div>
+    <button type="button" id="labels-toggle" aria-pressed="true">Labels</button>
+    <button type="button" id="rotate-toggle" aria-pressed="false">Orbit</button>
+  </div>
+
+  <dialog id="manual" class="manual" aria-labelledby="manual-title">
+    <header>
+      <div>
+        <h2 id="manual-title">—</h2>
+        <p class="muted small" id="manual-meta"></p>
+      </div>
+      <button type="button" class="icon" id="manual-close" aria-label="Close">✕</button>
+    </header>
+    <p id="manual-validity" class="validity"></p>
+    <div id="manual-sections"></div>
+    <footer class="muted small">
+      <span id="manual-event"></span> ·
+      <a id="manual-link" target="_blank" rel="noopener noreferrer">Original document (needs Internet)</a>
+    </footer>
+  </dialog>
+
+  <div id="tooltip" class="tooltip" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+</div>
+<script id="embedded-bundle" type="application/json">null</script>
+</body>
+</html>

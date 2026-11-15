@@ -9,6 +9,14 @@ Two ways to enable it, both server-side so no key ever reaches the browser:
 
    It is detected automatically at AI_LOCAL_URL (default http://127.0.0.1:8080/v1).
 
+   For on-demand vision and offline voice input, also run Liquid AI LFM3-Omni:
+
+       llama-server -m LFM3-Omni-2B-Q4_K_M.gguf --mmproj mmproj-LFM3-Omni-2B-Q8_0.gguf \
+           --port 8081 --reasoning off --temp 0
+
+   It is detected at AI_OMNI_URL (default http://127.0.0.1:8081/v1). When it is the
+   only local model running, it also answers the text chat.
+
 2. Remote model, used when set (takes precedence):
 
        AI_BASE_URL   e.g. https://api.openai.com/v1
@@ -27,7 +35,17 @@ import urllib.request
 
 TIMEOUT_S = 20
 LOCAL_URL = os.environ.get("AI_LOCAL_URL", "http://127.0.0.1:8080/v1").rstrip("/")
-_PROBE = {"at": 0.0, "cfg": None}
+OMNI_URL = os.environ.get("AI_OMNI_URL", "http://127.0.0.1:8081/v1").rstrip("/")
+_PROBES = {}
+
+VISION_PROMPT = (
+    "You are the vision module of a ship engine-room inspection platform. The image is a frame "
+    "from the inspection camera; in this demo it is a simulated 3D render of the installation. "
+    "Describe in English, in at most 4 short sentences, only what is clearly visible: equipment, "
+    "labels you can actually read, cable routing, open or disassembled parts, warning colours. "
+    "If a value or text is not legible, say so instead of guessing. Do not diagnose; the "
+    "platform's rule engine does that."
+)
 
 SYSTEM_PROMPT = (
     "You are the onboard assistant of Industrial Datasheet + FieldScan, a ship engine-room "
@@ -62,34 +80,56 @@ class AIError(Exception):
     pass
 
 
-def _probe_local():
+def _probe(url):
     now = time.monotonic()
-    if now - _PROBE["at"] < 15:
-        return _PROBE["cfg"]
+    cached = _PROBES.get(url)
+    if cached and now - cached[0] < 15:
+        return cached[1]
     cfg = None
     try:
-        with urllib.request.urlopen(LOCAL_URL + "/models", timeout=0.6) as resp:
+        with urllib.request.urlopen(url + "/models", timeout=0.6) as resp:
             models = json.loads(resp.read()).get("data") or []
         if models:
-            cfg = {"base_url": LOCAL_URL, "model": models[0]["id"], "key": None, "local": True}
+            cfg = {"base_url": url, "model": models[0]["id"], "key": None, "local": True}
     except (urllib.error.URLError, OSError, ValueError, KeyError, TimeoutError):
         cfg = None
-    _PROBE.update(at=now, cfg=cfg)
+    _PROBES[url] = (now, cfg)
     return cfg
 
 
-def config():
+def omni_config():
+    return _probe(OMNI_URL)
+
+
+def cloud_config():
     base = os.environ.get("AI_BASE_URL", "").rstrip("/")
     model = os.environ.get("AI_MODEL", "")
     key = os.environ.get("AI_API_KEY", "")
     if base and model and key:
         return {"base_url": base, "model": model, "key": key, "local": False}
-    return _probe_local()
+    return None
+
+
+def local_config():
+    return _probe(LOCAL_URL) or omni_config()
+
+
+def config(link="online"):
+    """Who answers free-form chat. Offline (no Internet on board) never leaves the machine."""
+    if link == "offline":
+        return local_config()
+    return cloud_config() or local_config()
+
+
+def _describe(cfg):
+    return {"configured": bool(cfg), "model": cfg["model"] if cfg else None}
 
 
 def status():
     cfg = config()
-    return {"configured": bool(cfg), "model": cfg["model"] if cfg else None, "local": bool(cfg and cfg["local"])}
+    omni = omni_config()
+    return {"configured": bool(cfg), "model": cfg["model"] if cfg else None, "local": bool(cfg and cfg["local"]),
+            "cloud": _describe(cloud_config()), "on_device": _describe(local_config()), "omni": _describe(omni)}
 
 
 def _messages(question, context, history):
@@ -127,9 +167,9 @@ def _request(cfg, messages, stream):
         raise AIError(str(error)) from error
 
 
-def stream_chat(question, context, history=()):
-    """Yield text deltas from the configured model."""
-    cfg = config()
+def stream_chat(question, context, history=(), link="online"):
+    """Yield text deltas from the model chosen for the current link state."""
+    cfg = config(link)
     if not cfg:
         raise AIError("AI adapter not configured.")
     response = _request(cfg, _messages(question, context, list(history)), stream=True)
@@ -156,3 +196,42 @@ def explain(report):
     """Contract from the manual: explain(report) -> text."""
     return "".join(stream_chat(
         "Summarise this report in three sentences for a marine engineer.", {"report": report}))
+
+
+def _complete(cfg, messages, max_tokens=300):
+    payload = {"model": cfg["model"], "messages": messages, "temperature": 0, "max_tokens": max_tokens,
+               "stream": False, "chat_template_kwargs": {"enable_thinking": False}}
+    req = urllib.request.Request(cfg["base_url"] + "/chat/completions", data=json.dumps(payload).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read())
+        return (data["choices"][0]["message"].get("content") or "").strip()
+    except (urllib.error.URLError, OSError, ValueError, KeyError, IndexError, TimeoutError) as error:
+        raise AIError(str(error)) from error
+
+
+def describe_image(image_data_url, question="What do you see?"):
+    """On-device vision with LFM3-Omni. Returns plain text; never evidence."""
+    cfg = omni_config()
+    if not cfg:
+        raise AIError("Vision model not running.")
+    return _complete(cfg, [
+        {"role": "system", "content": VISION_PROMPT},
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": image_data_url}},
+            {"type": "text", "text": question[:500]},
+        ]},
+    ])
+
+
+def transcribe(wav_base64, language="English"):
+    """On-device speech recognition with LFM3-Omni (16 kHz mono WAV, base64)."""
+    cfg = omni_config()
+    if not cfg:
+        raise AIError("Voice model not running.")
+    return _complete(cfg, [
+        {"role": "system", "content": f"Perform ASR in {language}."},
+        {"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": wav_base64, "format": "wav"}}]},
+    ], max_tokens=200)
+

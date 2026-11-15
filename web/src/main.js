@@ -115,11 +115,13 @@ class App {
   async refreshAi() {
     this.ai = await aiStatus();
     const pill = $('pill-ai');
-    pill.textContent = this.ai.configured ? `Assistant · ${this.ai.model}${this.ai.local ? ' · on-device' : ''}` : 'Assistant · local engine';
-    pill.title = this.ai.configured
-      ? (this.ai.local ? 'Liquid AI model served on this machine; works without Internet.' : 'Remote model via the server-side adapter.')
-      : 'Deterministic local engine; start llama-server on port 8080 for free-form chat.';
+    pill.title = [
+      `Cloud: ${this.ai.cloud?.configured ? this.ai.cloud.model : 'not configured'}`,
+      `On-device chat: ${this.ai.on_device?.configured ? this.ai.on_device.model : 'not running'}`,
+      `On-device voice + vision: ${this.ai.omni?.configured ? this.ai.omni.model : 'not running'}`,
+    ].join('\n');
     pill.className = 'pill ok';
+    this.assistant.updateLinkUi();
   }
 
   get stage() { return this.ws === 'compat' ? this.loop : this.tht; }

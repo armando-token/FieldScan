@@ -375,4 +375,16 @@ export class Stage {
     this.renderer.render(this.scene, this.camera);
     this.labelRenderer.render(this.scene, this.camera);
   }
+
+  // Current camera frame as a JPEG data URL (rendered and read in the same task, so no preserveDrawingBuffer needed).
+  snapshot(maxWidth = 768) {
+    this.renderer.render(this.scene, this.camera);
+    const src = this.renderer.domElement;
+    const scale = Math.min(1, maxWidth / src.width);
+    const out = document.createElement('canvas');
+    out.width = Math.round(src.width * scale);
+    out.height = Math.round(src.height * scale);
+    out.getContext('2d').drawImage(src, 0, 0, out.width, out.height);
+    return out.toDataURL('image/jpeg', 0.85);
+  }
 }

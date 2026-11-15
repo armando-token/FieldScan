@@ -4,6 +4,8 @@
 
 const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
 const fmtInt = new Intl.NumberFormat('en-US');
+import { VoiceLoop } from './voice.js';
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const escapeHtml = s => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const signed = n => (n >= 0 ? '+' : '') + fmt.format(n);
@@ -22,8 +24,8 @@ const THT_PARTS = [
 ];
 
 const CHIPS = {
-  live: ['Identify this sensor', 'Confirm the asset', 'Show the plate', 'Why does it fail?', 'Is everything OK?'],
-  diag: ['Why does it fail?', 'Show the manual', 'Simulate the DIP fix', 'Does it work now?', 'Inject a bad CRC', 'Disassemble the probe'],
+  live: ['Identify this sensor', 'Confirm the asset', 'What do you see?', 'Show the plate', 'Why does it fail?', 'Is everything OK?'],
+  diag: ['Why does it fail?', 'What do you see?', 'Show the manual', 'Simulate the DIP fix', 'Does it work now?', 'Inject a bad CRC', 'Disassemble the probe'],
   compat: ['Is everything OK?', 'Switch to 12 V', 'Simulate an open wire', 'Explain the margin', 'Is the spare a valid replacement?', 'X-ray view'],
 };
 
@@ -92,6 +94,9 @@ export class Assistant {
     this.history = [];
     this.speakOn = false;
     this.busy = false;
+    this.link = localStorage.getItem('boat-link') === 'online' ? 'online' : 'offline';
+    this.liveOn = false;
+    this.voice = null;
     this.list = document.getElementById('messages');
     this.input = document.getElementById('chat-input');
     this.queue = Promise.resolve();
@@ -146,10 +151,194 @@ export class Assistant {
     });
     if (!('speechSynthesis' in window)) speak.disabled = true;
     this.bindMic();
+    document.getElementById('link-toggle').addEventListener('click', () => this.setLink(this.link === 'online' ? 'offline' : 'online'));
+    document.getElementById('live-toggle').addEventListener('click', () => (this.liveOn ? this.stopLive() : this.startLive()));
+    document.getElementById('live-end').addEventListener('click', () => this.stopLive());
+    this.updateLinkUi();
+  }
+
+  // ------------------------------------------------------------ boat link: who answers
+
+  responder() {
+    const ai = this.app.ai || {};
+    if (this.link === 'online' && ai.cloud?.configured) return { where: 'cloud', model: ai.cloud.model };
+    if (ai.on_device?.configured) return { where: 'on-device', model: ai.on_device.model, fallback: this.link === 'online' };
+    return { where: 'rules', model: null, fallback: this.link === 'online' };
+  }
+
+  updateLinkUi() {
+    const btn = document.getElementById('link-toggle');
+    const online = this.link === 'online';
+    const r = this.responder();
+    btn.classList.toggle('online', online);
+    btn.classList.toggle('offline', !online);
+    btn.setAttribute('aria-checked', String(online));
+    document.getElementById('link-title').textContent = online ? 'Boat ONLINE · Internet link up' : 'Boat OFFLINE · no Internet';
+    document.getElementById('link-who').textContent = 'Answering: ' + (
+      r.where === 'cloud' ? `cloud AI · ${r.model}`
+        : r.where === 'on-device' ? `on-device Liquid AI · ${r.model}${r.fallback ? ' (no cloud model set)' : ''}`
+          : 'local rule engine only');
+    const pill = document.getElementById('pill-ai');
+    pill.textContent = 'Assistant · ' + (r.where === 'cloud' ? `${r.model} · cloud` : r.where === 'on-device' ? `${r.model} · on-device` : 'local engine');
+  }
+
+  setLink(link) {
+    if (link === this.link) return;
+    this.link = link;
+    localStorage.setItem('boat-link', link);
+    this.updateLinkUi();
+    const r = this.responder();
+    this.post(link === 'online'
+      ? `Internet link is up. ${r.where === 'cloud' ? `Free-form questions now go to the cloud model ${r.model}.` : 'No cloud model is configured on the server (AI_BASE_URL, AI_MODEL, AI_API_KEY), so the on-device model keeps answering.'} Platform commands and diagnoses always run locally.`
+      : `Internet link is down. ${r.where === 'on-device' ? `Everything stays on this machine: ${r.model} answers free-form questions${this.app.ai.omni?.configured ? ', and LFM3-Omni handles voice and vision' : ''}.` : 'Only the local rule engine is available.'} Nothing leaves the boat.`,
+      { speak: false, who: 'rules' });
+  }
+
+  // ------------------------------------------------------------ hands-free live voice
+
+  liveUi(state, sub) {
+    const bar = document.getElementById('live');
+    bar.dataset.state = state;
+    document.getElementById('live-state').textContent = { listening: 'Listening…', hearing: 'Hearing you…', thinking: 'Thinking…', speaking: 'Speaking — talk to interrupt' }[state];
+    if (sub !== undefined) document.getElementById('live-sub').textContent = sub;
+  }
+
+  async startLive() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      await this.post('[warn] This browser cannot open the microphone here. Use Chrome on http://127.0.0.1:8765.', { kind: 'alert', who: 'rules' });
+      return;
+    }
+    const omni = this.app.ai.omni?.configured;
+    if (!omni) {
+      await this.post('[warn] Live voice needs LFM3-Omni running on this machine (port 8081) for offline speech recognition. Start it with scripts/start_local_ai.sh omni.', { kind: 'alert', who: 'rules' });
+      return;
+    }
+    this.voice = new VoiceLoop({
+      isAssistantSpeaking: () => window.speechSynthesis?.speaking,
+      onBargeIn: () => { window.speechSynthesis?.cancel(); this.stopStream = true; },
+      onLevel: (lvl, capturing) => {
+        document.getElementById('live-orb').style.setProperty('--lvl', lvl.toFixed(2));
+        const bar = document.getElementById('live');
+        if (capturing && bar.dataset.state === 'listening') this.liveUi('hearing');
+        if (!capturing && bar.dataset.state === 'speaking' && !window.speechSynthesis?.speaking) this.liveUi('listening', 'Talk naturally. Interrupt any time.');
+      },
+      onSpeechStart: () => this.liveUi('hearing'),
+      onDiscard: () => this.liveUi('listening'),
+      onUtterance: wav => this.liveTurn(wav),
+    });
+    try {
+      await this.voice.start();
+    } catch (error) {
+      this.voice = null;
+      await this.post('[warn] Microphone unavailable: ' + error.message, { kind: 'alert', who: 'rules' });
+      return;
+    }
+    this.liveOn = true;
+    this.speakOn = true;
+    document.getElementById('speak').setAttribute('aria-pressed', 'true');
+    document.getElementById('live').hidden = false;
+    const btn = document.getElementById('live-toggle');
+    btn.setAttribute('aria-pressed', 'true');
+    btn.lastChild.textContent = 'Live';
+    this.liveUi('listening', `Speech: ${this.app.ai.omni.model} on-device · Answers: ${this.responder().model || 'rule engine'}`);
+  }
+
+  stopLive() {
+    this.voice?.stop();
+    this.voice = null;
+    this.liveOn = false;
+    window.speechSynthesis?.cancel();
+    document.getElementById('live').hidden = true;
+    const btn = document.getElementById('live-toggle');
+    btn.setAttribute('aria-pressed', 'false');
+    btn.lastChild.textContent = 'Go Live';
+  }
+
+  async transcribe(wav) {
+    const response = await fetch('/api/asr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio: wav }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Speech recognition failed.');
+    return (data.text || '').trim();
+  }
+
+  async liveTurn(wav) {
+    if (!this.voice) return;
+    this.voice.paused = true;
+    this.liveUi('thinking', 'Transcribing on-device…');
+    try {
+      const text = (await this.transcribe(wav)).replace(/^["'\s]+|["'\s]+$/g, '');
+      if (text && /[a-z0-9]/i.test(text)) {
+        this.liveUi('thinking', '“' + text + '”');
+        this.voice.paused = false; // allow barge-in while the answer streams and speaks
+        await this.ask(text);
+      }
+    } catch (error) {
+      await this.post('[warn] ' + error.message, { kind: 'alert', who: 'rules', speak: false });
+    } finally {
+      if (this.voice) {
+        this.voice.paused = false;
+        this.liveUi(window.speechSynthesis?.speaking ? 'speaking' : 'listening');
+      }
+    }
+  }
+
+  // ------------------------------------------------------------ on-device vision
+
+  async vision(question) {
+    const app = this.app;
+    if (!app.ai.omni?.configured) {
+      await this.post('Vision needs LFM3-Omni running on this machine (port 8081). Here is what the platform knows instead:\n' + this.stateBrief(), { who: 'rules' });
+      return;
+    }
+    const image = app.stage.snapshot();
+    const body = this.bubble('bot', '', { where: 'on-device', model: app.ai.omni.model });
+    body.parentElement.classList.add('typing');
+    const img = Object.assign(document.createElement('img'), { className: 'snap', src: image, alt: 'Frame sent to the vision model' });
+    body.before(img);
+    body.textContent = 'Looking at the current frame…';
+    try {
+      const response = await fetch('/api/vision', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image, question }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      const text = data.text + '\n(AI description of the simulated camera frame — not evidence. Diagnoses come from the rule engine.)';
+      body.innerHTML = this.render(text);
+      this.history.push({ role: 'assistant', content: data.text });
+      this.say(data.text);
+    } catch (error) {
+      body.innerHTML = this.render('[warn] Vision failed: ' + error.message);
+    } finally {
+      body.parentElement.classList.remove('typing');
+      this.list.scrollTop = this.list.scrollHeight;
+    }
   }
 
   bindMic() {
     const mic = document.getElementById('mic');
+    // Push-to-talk with on-device ASR when LFM3-Omni runs; otherwise the browser speech service.
+    let ptt = null;
+    mic.addEventListener('click', async e => {
+      if (!this.app.ai.omni?.configured || this.liveOn) return;
+      e.stopImmediatePropagation();
+      if (ptt) { ptt.stop(); ptt = null; mic.classList.remove('listening'); return; }
+      ptt = new VoiceLoop({
+        isAssistantSpeaking: () => false,
+        onUtterance: async wav => {
+          ptt?.stop(); ptt = null; mic.classList.remove('listening');
+          try {
+            const text = await this.transcribe(wav);
+            if (text) this.ask(text);
+          } catch (error) { this.post('[warn] ' + error.message, { kind: 'alert', who: 'rules' }); }
+        },
+      });
+      try {
+        window.speechSynthesis?.cancel();
+        await ptt.start();
+        mic.classList.add('listening');
+      } catch (error) {
+        ptt = null;
+        this.post('[warn] Microphone unavailable: ' + error.message, { kind: 'alert', who: 'rules' });
+      }
+    }, { capture: true });
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
       mic.disabled = true;
@@ -185,12 +374,19 @@ export class Assistant {
     });
   }
 
-  bubble(role, kind = '') {
+  bubble(role, kind = '', who = null) {
     const el = document.createElement('div');
     el.className = `msg ${role} ${kind}`.trim();
     const meta = document.createElement('span');
     meta.className = 'meta';
     meta.textContent = (role === 'user' ? 'You' : 'Platform') + ' · ' + new Date().toLocaleTimeString('en-US', { hour12: false });
+    if (role === 'bot') {
+      const w = who === 'rules' || !who ? { where: 'rules' } : who;
+      meta.append(Object.assign(document.createElement('span'), {
+        className: 'who ' + ({ cloud: 'cloud', 'on-device': 'device' }[w.where] || 'rules'),
+        textContent: w.where === 'rules' ? 'rule engine' : `${w.model} · ${w.where}`,
+      }));
+    }
     const body = document.createElement('span');
     el.append(meta, body);
     this.list.append(el);
@@ -207,8 +403,8 @@ export class Assistant {
   }
 
   // Typewriter effect so replies feel live.
-  async post(text, { kind = '', speak = true } = {}) {
-    const body = this.bubble('bot', kind);
+  async post(text, { kind = '', speak = true, who = 'rules' } = {}) {
+    const body = this.bubble('bot', kind, who);
     body.parentElement.classList.add('typing');
     for (let i = 0; i <= text.length; i += 4) {
       body.innerHTML = this.render(text.slice(0, i));
@@ -225,10 +421,16 @@ export class Assistant {
 
   say(text) {
     if (!this.speakOn || !('speechSynthesis' in window)) return;
-    const clean = text.replace(/\[(ok|fail|warn)\]/g, '').replace(/\*\*/g, '').replace(/Ω/g, ' ohms').replace(/→/g, ', ').replace(/−/g, 'minus ');
+    const clean = text.replace(/\[(ok|fail|warn)\]/g, '').replace(/\*\*/g, '').replace(/`/g, '').replace(/Ω/g, ' ohms')
+      .replace(/→/g, ', ').replace(/−/g, 'minus ').replace(/§\s*/g, 'section ').replace(/[\u{1F300}-\u{1FAFF}]/gu, '');
+    if (!clean.trim()) return;
+    const voices = window.speechSynthesis.getVoices().filter(v => v.lang?.startsWith('en'));
+    const voice = voices.find(v => v.localService && /Samantha|Daniel|Karen|Moira|Alex/.test(v.name)) || voices.find(v => v.localService) || voices[0];
     const u = new SpeechSynthesisUtterance(clean);
+    if (voice) u.voice = voice;
     u.lang = 'en-US';
-    u.rate = 1.05;
+    u.rate = 1.07;
+    u.onstart = () => { if (this.liveOn) this.liveUi('speaking'); };
     window.speechSynthesis.speak(u);
   }
 
@@ -373,6 +575,10 @@ export class Assistant {
     const out = [];
     let handled = false;
 
+    if (/what (do|can) you see|describe (the |this )?(view|frame|scene|image|picture|camera)|look at (this|the camera|the screen)|what('?s| is) (in|on) (the |this )?(camera|screen|frame|view|picture)/.test(q)) {
+      await this.vision(text);
+      return;
+    }
     const chat = this.smalltalk(q);
     if (chat && !(app.ai.configured && await this.streamLLM(text))) { await this.post(chat); return; }
     if (chat) return;
@@ -512,6 +718,7 @@ export class Assistant {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text,
+          link: this.link,
           context: {
             workspace: app.ws, view: app.viewState(), pins: app.sessionPins(), bus: app.bus,
             situation: this.stateBrief(), live_now: app.ws === 'compat' ? undefined : app.liveSnapshot()?.decode,
@@ -523,12 +730,14 @@ export class Assistant {
         }),
       });
       if (!response.ok || !response.body) return false;
-      body = this.bubble('bot');
+      body = this.bubble('bot', '', this.responder());
       body.parentElement.classList.add('typing');
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
       let full = '';
+      let spoken = 0;
+      this.stopStream = false;
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -540,17 +749,25 @@ export class Assistant {
           if (!chunk.startsWith('data:')) continue;
           const evt = JSON.parse(chunk.slice(5));
           if (evt.error) throw new Error(evt.error);
+          if (evt.responder) {
+            const tag = body.parentElement.querySelector('.who');
+            tag.className = 'who ' + (evt.responder.where === 'cloud' ? 'cloud' : 'device');
+            tag.textContent = `${evt.responder.model} · ${evt.responder.where}`;
+          }
           if (evt.delta) {
             full += evt.delta;
             body.innerHTML = this.render(full);
             this.list.scrollTop = this.list.scrollHeight;
+            // Speak finished sentences while the rest is still streaming.
+            const done = full.slice(spoken).match(/^[\s\S]*?[.!?](?=\s)|^[\s\S]*?\n/);
+            if (done && !this.stopStream) { this.say(done[0]); spoken += done[0].length; }
           }
         }
       }
       body.parentElement.classList.remove('typing');
       if (!full) throw new Error('Empty response.');
       this.history.push({ role: 'assistant', content: full });
-      this.say(full);
+      if (!this.stopStream) this.say(full.slice(spoken));
       return true;
     } catch {
       if (body) body.parentElement.remove();

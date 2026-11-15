@@ -151,6 +151,20 @@
   </aside>
 
   <aside class="panel right" aria-label="Assistant, frames, evidence and parts">
+    <div class="link-card">
+      <button type="button" id="link-toggle" class="link-toggle offline" role="switch" aria-checked="false"
+              title="Simulate the boat's Internet link. It decides which AI answers free-form questions.">
+        <span class="link-icon" aria-hidden="true"></span>
+        <span class="link-text">
+          <strong id="link-title">Boat OFFLINE · no Internet</strong>
+          <small id="link-who">Answering: on-device Liquid AI</small>
+        </span>
+        <span class="link-knob" aria-hidden="true"><i></i></span>
+      </button>
+      <button type="button" id="live-toggle" class="live-toggle" aria-pressed="false" title="Hands-free real-time voice conversation">
+        <span class="live-ring" aria-hidden="true"></span>Go Live
+      </button>
+    </div>
     <nav class="tabs" role="tablist">
       <button role="tab" data-tab="assistant" aria-selected="true">Assistant</button>
       <button role="tab" data-tab="frames" aria-selected="false" data-only="live diag">RTU frames</button>
@@ -160,6 +174,14 @@
     </nav>
 
     <div class="tab" id="tab-assistant">
+      <div id="live" class="live" hidden>
+        <div class="orb" id="live-orb" aria-hidden="true"><span></span></div>
+        <div class="live-info">
+          <strong id="live-state">Listening…</strong>
+          <small id="live-sub">Talk naturally. Interrupt any time.</small>
+        </div>
+        <button type="button" id="live-end" class="live-end">End</button>
+      </div>
       <div id="messages" class="messages" aria-live="polite"></div>
       <div class="chips" id="chips"></div>
       <form id="chat" class="chat" autocomplete="off">

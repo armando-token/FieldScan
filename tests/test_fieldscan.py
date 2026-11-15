@@ -122,6 +122,24 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request("/api/tools/capture_frame", {"source": "bogus"})[0], 400)
         self.assertEqual(self.request("/api/tools/nope", {})[0], 400)
 
+    def test_media_and_link_validation(self):
+        self.assertEqual(self.request("/api/vision", {"image": "http://x/y.png"})[0], 400)
+        self.assertEqual(self.request("/api/vision", {"image": "data:image/jpeg;base64,AAAA", "question": 3})[0], 400)
+        self.assertEqual(self.request("/api/asr", {"audio": "not base64!"})[0], 400)
+        self.assertEqual(self.request("/api/asr", {})[0], 400)
+        self.assertEqual(self.request("/api/chat", {"message": "hi", "link": "satellite"})[0], 400)
+
+    def test_offline_link_never_uses_cloud(self):
+        from adapters import ai
+        saved = ai.cloud_config, ai.local_config
+        try:
+            ai.cloud_config = lambda: {"model": "cloud-x", "local": False}
+            ai.local_config = lambda: None
+            self.assertIsNone(ai.config("offline"))
+            self.assertEqual(ai.config("online")["model"], "cloud-x")
+        finally:
+            ai.cloud_config, ai.local_config = saved
+
     def test_portable_html_is_self_contained(self):
         html = server.portable_html()
         self.assertNotIn('src="dist/app.js"', html)

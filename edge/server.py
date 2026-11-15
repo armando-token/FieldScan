@@ -1,6 +1,7 @@
 """Loopback HTTP server: UI, FieldScan tools, compatibility API and optional streaming AI proxy."""
 
 import json
+import re
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +19,9 @@ STATIC = {
     "/dist/app.js": ("dist/app.js", "text/javascript; charset=utf-8"),
 }
 MAX_BODY = 64 * 1024
+MAX_MEDIA_BODY = 6 * 1024 * 1024
+IMAGE_PREFIXES = ("data:image/jpeg;base64,", "data:image/png;base64,")
+BASE64 = re.compile(r"^[A-Za-z0-9+/=]+$")
 SESSION = fieldscan.Session()
 SESSION_LOCK = threading.Lock()
 CSP = (
@@ -122,9 +126,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.respond_json(200, report)
 
-    def _body(self):
+    def _body(self, limit=MAX_BODY):
         length = int(self.headers.get("Content-Length", "0"))
-        if not 0 < length <= MAX_BODY:
+        if not 0 < length <= limit:
             raise ValueError("Invalid body size.")
         body = json.loads(self.rfile.read(length))
         if not isinstance(body, dict):
@@ -135,6 +139,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path.startswith("/api/tools/"):
             self._tool(path.removeprefix("/api/tools/"))
+            return
+        if path in ("/api/vision", "/api/asr"):
+            self._media(path)
             return
         if path != "/api/chat":
             self.respond_json(404, {"error": "Unknown route."})
@@ -151,19 +158,55 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, KeyError, TypeError) as error:
             self.respond_json(400, {"error": str(error)})
             return
-        if not ai.config():
-            self.respond_json(503, {"error": "AI adapter not configured."})
+        link = body.get("link", "online")
+        if link not in ("online", "offline"):
+            self.respond_json(400, {"error": "link must be 'online' or 'offline'."})
+            return
+        cfg = ai.config(link)
+        if not cfg:
+            self.respond_json(503, {"error": "No model available for this link state."})
             return
 
         self._headers(200, "text/event-stream; charset=utf-8")
         try:
-            for delta in ai.stream_chat(question, context, history):
+            self._event({"responder": {"model": cfg["model"], "where": "on-device" if cfg["local"] else "cloud"}})
+            for delta in ai.stream_chat(question, context, history, link):
                 self._event({"delta": delta})
             self._event({"done": True})
         except ai.AIError as error:
             self._event({"error": str(error)})
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def _media(self, path):
+        """On-device LFM3-Omni: describe a camera frame or transcribe push-to-talk audio."""
+        try:
+            body = self._body(MAX_MEDIA_BODY)
+            if path == "/api/vision":
+                image = body.get("image")
+                question = body.get("question") or "What do you see?"
+                if not isinstance(image, str) or not image.startswith(IMAGE_PREFIXES):
+                    raise ValueError("image must be a base64 JPEG or PNG data URL.")
+                if not isinstance(question, str):
+                    raise ValueError("question must be a string.")
+            else:
+                audio = body.get("audio")
+                if not isinstance(audio, str) or not audio or not BASE64.match(audio):
+                    raise ValueError("audio must be base64-encoded WAV.")
+        except (ValueError, TypeError) as error:
+            self.respond_json(400, {"error": str(error)})
+            return
+        if not ai.omni_config():
+            self.respond_json(503, {"error": "LFM3-Omni is not running on this machine."})
+            return
+        try:
+            if path == "/api/vision":
+                text = ai.describe_image(image, question)
+                self.respond_json(200, {"text": text, "model": ai.omni_config()["model"], "source": "ai_description"})
+            else:
+                self.respond_json(200, {"text": ai.transcribe(audio), "model": ai.omni_config()["model"]})
+        except ai.AIError as error:
+            self.respond_json(502, {"error": str(error)})
 
     def _tool(self, name):
         try:

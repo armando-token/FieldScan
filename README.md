@@ -115,10 +115,38 @@ The server detects the model automatically at `AI_LOCAL_URL` (default
 reasoning pass for fast, literal answers and grounds every reply in a fixed
 fact sheet plus the live session context.
 
-To use a remote OpenAI-compatible model instead, set `AI_BASE_URL`, `AI_MODEL`
-and `AI_API_KEY` on the server; they take precedence over the local model. No
-key ever reaches the browser. The portable `FIELD_SCAN_DEMO.html` uses the
-deterministic engine only.
+### Boat ONLINE / OFFLINE switch: who answers
+
+The big switch above the assistant tabs shows whether the boat has Internet and
+who is answering. Every reply is tagged `rule engine`, `<model> · on-device` or
+`<model> · cloud`.
+
+- **OFFLINE** (default): free-form chat never leaves the machine. The on-device
+  Liquid AI model answers.
+- **ONLINE**: free-form chat goes to the cloud model configured on the server
+  (`AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY`). If none is configured, the switch
+  says so and the on-device model keeps answering.
+
+Commands and diagnoses always run on the local rule engine. No key ever reaches
+the browser. The portable `FIELD_SCAN_DEMO.html` uses the rule engine only.
+
+### Hands-free Live voice and vision (LFM3-Omni, on-device)
+
+```bash
+./scripts/start_local_ai.sh omni  # LFM3-Omni-2B Q4_K_M + projector (~1.9 GB) once, serves on :8081
+```
+
+- **Go Live** works like a real-time voice call, with no send button. You speak,
+  voice activity detection ends your turn, and LFM3-Omni transcribes it
+  on-device (`/api/asr`). The answer streams and is spoken sentence by sentence
+  with the macOS offline voices. Talk over it to interrupt (barge-in).
+- **Mic button**: push-to-talk with the same on-device transcription.
+- **"What do you see?"** sends the current 3D frame to LFM3-Omni
+  (`/api/vision`, on demand only, never a continuous video feed). The
+  description is labelled as an AI description, not evidence.
+
+Without the Omni server, Live voice explains how to start it, and the mic falls
+back to the browser speech service.
 
 ## FieldScan reuse vs. new work
 

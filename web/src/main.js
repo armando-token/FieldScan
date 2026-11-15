@@ -99,16 +99,27 @@ class App {
     this.renderDocuments();
     if (this.identity) this.renderIdentity();
 
-    this.ai = await aiStatus();
-    $('pill-ai').textContent = this.ai.configured ? `Assistant · ${this.ai.model}` : 'Assistant · local engine';
-    $('pill-ai').className = 'pill ok';
+    await this.refreshAi();
     await this.setConfig({}, 'init');
     this.telemetry.start();
     this.setWorkspace('live', { quiet: true });
     this.assistant.greet();
     setInterval(() => this.livePoll(), 2500);
     requestAnimationFrame(() => this.hudLoop());
-    if (mode === 'server') setInterval(() => this.checkLink(), 5000);
+    if (mode === 'server') {
+      setInterval(() => this.checkLink(), 5000);
+      setInterval(() => this.refreshAi(), 20000);
+    }
+  }
+
+  async refreshAi() {
+    this.ai = await aiStatus();
+    const pill = $('pill-ai');
+    pill.textContent = this.ai.configured ? `Assistant · ${this.ai.model}${this.ai.local ? ' · on-device' : ''}` : 'Assistant · local engine';
+    pill.title = this.ai.configured
+      ? (this.ai.local ? 'Liquid AI model served on this machine; works without Internet.' : 'Remote model via the server-side adapter.')
+      : 'Deterministic local engine; start llama-server on port 8080 for free-form chat.';
+    pill.className = 'pill ok';
   }
 
   get stage() { return this.ws === 'compat' ? this.loop : this.tht; }
@@ -253,6 +264,12 @@ class App {
         h('div', { className: 'dir' }, h('span', { textContent: 'RSP' }), bytes(tx.response_hex, 'response', bad)),
         h('div', { className: 'checks' }, ...tx.decode.checks.map(c => h('span', { className: c.ok ? 'ok' : 'no', textContent: `${c.ok ? '✓' : '✗'} ${c.check}`, title: c.detail }))));
     }));
+  }
+
+  // Display-only read of the simulated bus right now (no event, never evidence).
+  liveSnapshot() {
+    if (!this.bus) return null;
+    return poll(this.bus.master_address, new Tht02Model(this.bus.dip_bits, this.bundle.incident.temperature_c, this.bundle.incident.humidity_rh));
   }
 
   // Display-only poll so the gateway LCD and bus packets feel alive; never recorded as evidence.

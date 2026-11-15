@@ -87,7 +87,8 @@ core/fieldscan.py      Session, versioned catalog/documents, six tools, self-tes
 core/compatibility.py  4–20 mA loop-load engine
 edge/server.py         Loopback HTTP server, tools API, portable HTML builder
 edge/mcp_stdio.py      MCP stdio server (JSON-RPC 2.0, stdlib)
-adapters/ai.py         Optional OpenAI-compatible LLM proxy (server-side key)
+adapters/ai.py         LLM adapter: on-device Liquid AI (auto-detected) or remote OpenAI-compatible
+scripts/               start_local_ai.sh (llama.cpp + LFM3-1.7B)
 web/src/               Three.js twins, JS session mirror, assistant, UI
 tests/                 unittest suite
 ```
@@ -95,11 +96,29 @@ tests/                 unittest suite
 The browser keeps a JS mirror of the Modbus core so the portable file works
 offline. The self-test checks it against the Python golden vectors.
 
-### Optional LLM
+### On-device LLM (works offline)
 
-The assistant uses a local reasoning engine by default. To stream answers from
-an OpenAI-compatible model instead, set these variables on the server:
-`AI_BASE_URL`, `AI_MODEL` and `AI_API_KEY`. The key never reaches the browser.
+Commands, diagnoses and numbers always come from the deterministic local engine,
+with citations. For open conversation, the assistant uses a small **Liquid AI**
+model running on the same machine, so the crew can still talk to the platform
+when the boat has no Internet:
+
+```bash
+brew install llama.cpp
+./scripts/start_local_ai.sh      # downloads LFM3-1.7B Q4_K_M (~1.1 GB) once, serves on :8080
+python3 mvp.py --port 8765 --open
+```
+
+The server detects the model automatically at `AI_LOCAL_URL` (default
+`http://127.0.0.1:8080/v1`). The header pill then shows
+`Assistant · lfm3-1.7b · on-device`. The adapter disables the model's
+reasoning pass for fast, literal answers and grounds every reply in a fixed
+fact sheet plus the live session context.
+
+To use a remote OpenAI-compatible model instead, set `AI_BASE_URL`, `AI_MODEL`
+and `AI_API_KEY` on the server; they take precedence over the local model. No
+key ever reaches the browser. The portable `FIELD_SCAN_DEMO.html` uses the
+deterministic engine only.
 
 ## FieldScan reuse vs. new work
 

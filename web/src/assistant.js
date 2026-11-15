@@ -27,6 +27,27 @@ const CHIPS = {
   compat: ['Is everything OK?', 'Switch to 12 V', 'Simulate an open wire', 'Explain the margin', 'Is the spare a valid replacement?', 'X-ray view'],
 };
 
+const pick = list => list[Math.floor(Math.random() * list.length)];
+const bitsOf = bits => bits.slice(0, 4).join('') + ' ' + bits.slice(4).join('');
+
+// Short, sourced explanations of the concepts behind the demo (§ = TZ-THT02-UM-V1.0).
+const CONCEPTS = [
+  [/modbus/, 'Modbus RTU is a master/slave protocol: the master (here the ventilation controller) sends a request to one slave address, and only the slave with that address answers. Each frame is address · function · data · CRC-16. The THT-02 answers function 03 (read holding registers) at 9600 baud, 8N1 by default (§ 6.1, § 6.4).'],
+  [/rs-?485|two[- ]wire|a\+|b-/, 'RS-485 is the differential two-wire bus that carries the Modbus frames. On the THT-02 the leads are Red V+, Black GND, Yellow A+ and Green B− (§ 4.6). Swapping A/B or a missing ground usually gives garbled frames (CRC errors), not a clean timeout.'],
+  [/\bcrc\b|checksum/, 'The CRC-16/MODBUS is a 2-byte checksum at the end of every frame. If it does not match, the receiver silently discards the frame (§ 6.10), so a bad CRC looks like noise, while a wrong address looks like total silence (timeout).'],
+  [/\bdip\b|address switch|dip switch/, 'The THT-02 slave address is set by an 8-way DIP switch. Switches 1–8 weigh 128, 64, 32, 16, 8, 4, 2, 1 (§ 5). Right now the sensor reads {dip} → address {addr}; the master polls {master}.'],
+  [/timeout|no reply|silent|no response/, 'A timeout means no frame came back within 1000 ms. With Modbus that usually means nobody owns the polled address: wrong DIP address, wrong baud rate, or the sensor is unpowered. A corrupted reply would show as a CRC error instead.'],
+  [/7fff|abnormal/, '7FFF H in register 0 or 1 is the manual\'s “sensor abnormal” marker (§ 6.4/§ 6.7): the frame is valid, but the reading must not be trusted.'],
+  [/register/, 'THT-02 registers (§ 6.4): 0 = temperature ×0.1 °C (signed), 1 = relative humidity ×0.1 %, 4 = address code from the DIP, 5 = baud rate, 6/7 = hardware/software version. 7FFF H means sensor abnormal.'],
+  [/tht-?02|\bsensor\b.*(is|model)|what (is|are) (the )?(sensor|probe)/, 'The TZ THT-02 is a stainless temperature/humidity probe with an SHT30-class element, an RS-485 Modbus RTU interface and an internal DIP-8 address switch. It is asset BOAT-ER-TH-02 on the engine-room bulkhead. Its manual (TZ-THT02-UM-V1.0) is marked “to confirm”: the edition is not verified against the manufacturer.'],
+  [/4.?20|current loop|\bloop\b/, 'A 4–20 mA loop carries the level as a current: 4 mA = 0 %, 20 mA = 100 %. The transmitter needs a minimum voltage at its terminals, so the supply minus the drop across every load in the loop must stay above it. Workspace 3 checks that for the FMX11 replacing the WIKA LS-10.'],
+  [/digital twin|\btwin\b|3d/, 'The digital twin is a Three.js model of the installation driven by the same session state as the tools: the DIP, bus packets, LCD and loop current you see come from the simulation core. Try “x-ray view” or “disassemble the probe”.'],
+  [/fieldscan/, 'FieldScan is the live inspection layer: the camera recognizes the asset, the technician confirms it, and every later answer is pinned to that identity, catalog version and rules version, with an event id for each tool call.'],
+  [/evidence|event id|\bpins?\b|provenance/, 'Every tool call writes an event (EV-xxxx) and the session pins asset, product, catalog version and rules version. Each fact is labelled observed, simulated or documented, so a simulated reading is never presented as a field measurement.'],
+  [/baud|8n1|serial setting/, 'The THT-02 supports 4800, 9600 and 19200 baud; the default is 9600, 8 data bits, no parity, 1 stop bit (8N1) (§ 6.1, register 5 in § 6.4).'],
+];
+const CONCEPT_ASK = /\bwhat('?s| is| are| does)\b|\bexplain\b|\btell me about\b|\bhow does\b|\bmeaning\b|\bqu[eé] es\b|\bdefine\b/;
+
 const PARTS = [
   [/probe|fmx|waterpilot|sensor|transmitter|candidate/, 'probe'],
   [/sm ?1231|analog input|input module|\bai0?\b|\bplc\b/, 'sm1231'],
@@ -264,11 +285,99 @@ export class Assistant {
     return steps.length > 0;
   }
 
+  // ------------------------------------------------------------ conversation layer
+
+  liveNow() {
+    const app = this.app;
+    if (app.ws === 'compat') return this.live();
+    const tx = app.liveSnapshot();
+    if (!tx) return this.rtuLive();
+    const v = tx.decode.values;
+    const head = v
+      ? `Right now (simulated bus, display-only): ${v.temperature_c.toFixed(1)} °C and ${v.humidity_rh.toFixed(1)} %RH from address ${app.bus.device_address}, CRC OK.`
+      : `Right now (simulated bus, display-only): the master polls address ${app.bus.master_address} and gets ${tx.decode.status === 'timeout' ? 'no reply (timeout)' : tx.decode.status} — so there is no valid temperature to show.`;
+    return head + '\n' + this.rtuLive().split('\n')[1] + '\nLive polls are not evidence; say “does it work now?” to record a pinned reading.';
+  }
+
+  nextStep() {
+    const app = this.app;
+    const id = app.identity;
+    const b = app.bus;
+    if (app.ws === 'compat') {
+      return app.report.load_check.status === 'pass'
+        ? 'The loop load passes. Ask “is the spare a valid replacement?” to see what is still pending, or try “switch to 12 V” to see it fail.'
+        : 'The loop load fails here. Say “switch to 24 V” or “use config v1”, or ask “explain the margin”.';
+    }
+    if (!app.frame && !id) return 'Next: say “Identify this sensor” so the camera captures the asset.';
+    if (!id?.confirmed) return 'Next: say “Confirm the asset” to pin THT-02 / BOAT-ER-TH-02 to this session.';
+    if (b && b.master_address !== b.device_address) return `Next: ask “Why does it fail?” — the DIP is at address ${b.device_address} but the master polls ${b.master_address}. Then “simulate the DIP fix”.`;
+    return 'The sensor answers. Next: “does it work now?” to record proof, “inject a bad CRC” to test the diagnosis, or switch to workspace 3 for the 4–20 mA spare.';
+  }
+
+  stateBrief() {
+    const app = this.app;
+    const id = app.identity;
+    const ws = { live: 'Live view', diag: 'THT-02 diagnosis', compat: '4–20 mA spare' }[app.ws];
+    const lines = [`You are in **${ws}**.`];
+    if (app.ws === 'compat') {
+      lines.push(summary(app.report));
+    } else {
+      lines.push(id ? `Asset: ${id.model} at ${id.asset_id} (${id.confirmed ? 'confirmed' : 'needs confirmation'}).` : 'No asset identified yet in this session.');
+      const tx = app.liveSnapshot();
+      if (tx) lines.push(tx.decode.values
+        ? `Bus: sensor answering at address ${app.bus.device_address} · ${tx.decode.values.temperature_c.toFixed(1)} °C, ${tx.decode.values.humidity_rh.toFixed(1)} %RH (simulated).`
+        : `Bus: master polls ${app.bus.master_address}, DIP is ${bitsOf(app.bus.dip_bits)} → address ${app.bus.device_address} → timeout, no temperature reaching the controller.`);
+    }
+    lines.push(this.nextStep());
+    return lines.join('\n');
+  }
+
+  concept(q) {
+    const hit = CONCEPTS.find(([re]) => re.test(q));
+    if (!hit) return null;
+    const b = this.app.bus || { dip_bits: [0, 0, 0, 0, 0, 0, 1, 0], device_address: 2, master_address: 1 };
+    return hit[1].replace('{dip}', bitsOf(b.dip_bits)).replace('{addr}', b.device_address).replace('{master}', b.master_address);
+  }
+
+  smalltalk(q) {
+    const s = q.trim().replace(/[!.?¡¿,]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (/^(hi|hello|hey|hiya|yo|hola|buenas( tardes| noches)?|buenos d[ií]as|good (morning|afternoon|evening)|greetings|what'?s up|sup|qu[eé] tal)( there| platform| team| everyone| assistant)?$/.test(s)) {
+      return pick(['Hello!', 'Hi there!', 'Hey!']) + ' I\'m the platform assistant, connected to the live session.\n' + this.stateBrief();
+    }
+    if (/^(thanks|thank you|thx|ty|gracias|cheers|great|perfect|nice|cool|awesome|ok|okay|got it|perfecto|genial|vale)( a lot| so much| very much)?$/.test(s)) {
+      return pick(['You\'re welcome.', 'Glad to help.', 'Any time.']) + ' ' + this.nextStep();
+    }
+    if (/^(bye|goodbye|see you|adi[oó]s|chao)/.test(s)) return 'See you. The session and its evidence stay here; export the report if you need to hand it over.';
+    if (/how are you|how'?s it going|c[oó]mo est[aá]s/.test(s)) {
+      const tx = this.app.ws !== 'compat' && this.app.liveSnapshot();
+      return 'All platform services are up' + (navigator.onLine ? '' : ' (offline mode)') + '. '
+        + (tx && !tx.decode.values ? 'The THT-02, on the other hand, is not answering its master — that\'s the open ticket.' : 'The simulated bus is healthy.')
+        + '\n' + this.nextStep();
+    }
+    if (/who are you|what are you|your name|qui[eé]n eres|are you (an? )?(ai|bot|human)/.test(s)) {
+      return 'I\'m the onboard assistant of Industrial Datasheet + FieldScan. I drive the same tools as the UI (capture, confirm, documents, bus status, fault simulation, replacement check) and answer only from the session evidence and the manuals in this package.'
+        + (this.app.ai.configured ? ` Free-form questions are answered by ${this.app.ai.model}.` : ' I run fully locally — no LLM is connected, so open-ended chat is limited.');
+    }
+    if (/what('?s| is) (going on|happening)|where are we|what do (you|i) see|summary|status of (the )?(case|session|ticket)|qu[eé] (pasa|ves)|recap/.test(s)) return this.stateBrief();
+    if (/what (should|do) i do|next step|what now|now what|what'?s next|siguiente|qu[eé] hago/.test(s)) return this.nextStep();
+    if (/what time|current time|qu[eé] hora/.test(s)) return `It is ${new Date().toLocaleTimeString('en-US', { hour12: false })} local time.`;
+    if (/ticket|problem|issue|complaint/.test(s) && !/inject|simulate/.test(s)) {
+      return 'Open ticket: the ventilation controller shows no temperature from BOAT-ER-TH-02 since the last maintenance.\n' + this.stateBrief();
+    }
+    return null;
+  }
+
   async handle(text) {
     const q = text.toLowerCase();
     const app = this.app;
     const out = [];
     let handled = false;
+
+    const chat = this.smalltalk(q);
+    if (chat && !(app.ai.configured && await this.streamLLM(text))) { await this.post(chat); return; }
+    if (chat) return;
+    const concept = CONCEPT_ASK.test(q) ? this.concept(q) : null;
+    if (concept && !/\b(fail|wrong|fix|now|inject|simulate|show|open)\b/.test(q)) { await this.post(concept); return; }
 
     // 0. FieldScan flow (identify → confirm → diagnose → fix → verify). Spare-part and
     // 4–20 mA topics move to workspace 3 and fall through to the loop engine below.
@@ -359,8 +468,8 @@ export class Assistant {
       await this.post(summary(app.report) + crit + '\n' + replacementLine(app.report));
       handled = true;
     }
-    if (/telemetry|live|reading|current|\bma\b|count|signal|level|temperature|humidity/.test(q) && !handled) {
-      await this.post(app.ws === 'compat' ? this.live() : this.rtuLive());
+    if (/telemetry|live|reading|current|\bma\b|count|signal|level|temperature|humidity|right now|\bnow\b/.test(q) && !handled) {
+      await this.post(this.liveNow());
       handled = true;
     }
     if (/export|download|\bjson\b/.test(q) && app.ws !== 'compat') {
@@ -382,11 +491,15 @@ export class Assistant {
       const ok = await this.streamLLM(text);
       if (ok) return;
     }
+    const loose = this.concept(q);
+    if (loose) { await this.post(loose); return; }
+    if (!app.ai.configured) await app.refreshAi?.();
+    if (app.ai.configured && await this.streamLLM(text)) return;
     await this.post(
-      "I'm answering from the local engine only (no LLM configured or reachable), so I stick to what I can verify.\n"
-      + (app.ws === 'compat'
-        ? summary(app.report) + '\n' + stateLine(app.report) + '\nTry: “Is everything OK?”, “explain the margin”, “switch to config v2”, “show the SM 1231”, “sources”.'
-        : this.rtuLive() + '\nTry: “Why does it fail?”, “show the manual § 6.4”, “simulate the DIP fix”, “inject a bad CRC”, “x-ray view”.'),
+      pick(['I\'m not sure I follow that one.', 'I can\'t answer that from the evidence I have.', 'That\'s outside what I can verify here.'])
+      + ' I run locally without an LLM, so I answer about this platform: the THT-02 case, the 4–20 mA spare, the manuals and the 3D twin.\n'
+      + this.stateBrief()
+      + '\nYou can also ask “what is Modbus?”, “what is going on?”, “temperature now?” or “help”.',
     );
   }
 
@@ -401,6 +514,7 @@ export class Assistant {
           message: text,
           context: {
             workspace: app.ws, view: app.viewState(), pins: app.sessionPins(), bus: app.bus,
+            situation: this.stateBrief(), live_now: app.ws === 'compat' ? undefined : app.liveSnapshot()?.decode,
             last_transaction: app.transactions[0] || null,
             report: app.ws === 'compat' ? app.report : undefined,
             telemetry: app.ws === 'compat' ? app.telemetry.last : undefined,
@@ -505,7 +619,7 @@ export class Assistant {
       '• Spare (workspace 3): “switch to 12 V”, “use config v2”, “simulate an open wire”, “empty the tank”, “reset”',
       '• Twin: “x-ray view”, “disassemble the probe”, “show the SM 1231”, “reassemble”',
       '• Engineering: “explain the margin”, “is the spare a valid replacement?”, “sources”, “export JSON”',
-      this.app.ai.configured ? `Free-form questions go to ${this.app.ai.model} via the local server.` : 'Free-form questions need an LLM (set AI_BASE_URL, AI_MODEL, AI_API_KEY on the server).',
+      this.app.ai.configured ? `Free-form questions go to ${this.app.ai.model}${this.app.ai.local ? ', running on this machine (works offline)' : ''}.` : 'Free-form questions need an LLM: start a local Liquid AI model (llama-server on port 8080) or set AI_BASE_URL, AI_MODEL, AI_API_KEY.',
     ].join('\n');
   }
 

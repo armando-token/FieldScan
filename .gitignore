@@ -18,7 +18,23 @@ exports/*
 outbox/*
 !outbox/.gitkeep
 
-# macOS / Editor
+# macOS / Editor / Xcode build & user state
 .DS_Store
 .idea/
 .vscode/
+ios/build/
+ios/FieldScanM4/BundleResources/
+ios/FieldScanM4/Frameworks/*.dylib
+**/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Runtime SQLite session databases, private TLS keys & test artifacts
+data/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.key
+*.crt
+*.pem

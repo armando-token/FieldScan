@@ -73,7 +73,9 @@ body {
   font-size: 13px;
   line-height: 1.4;
   overflow: hidden;
+  overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
 }
 
 button,
@@ -83,8 +85,23 @@ select {
   color: inherit;
 }
 
-button {
+button,
+.step-btn,
+.chip-btn,
+.seg-btn,
+.btn-mic-primary,
+.dip-bit-btn,
+.part-chip,
+.scada-action-btn,
+.export-chip-btn,
+.zoom-btn,
+.raw-cam-btn,
+.select-shell {
   cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
 }
 
 [hidden] {
@@ -107,6 +124,9 @@ svg.lucide {
   flex-direction: column;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
   z-index: 30;
 }
 
@@ -664,7 +684,9 @@ svg.lucide {
   min-height: 0;
   background: #05080c;
   overflow: hidden;
+  -webkit-user-select: none;
   user-select: none;
+  touch-action: none;
 }
 
 .camera-stage.is-zoomed {
@@ -1188,6 +1210,9 @@ svg.lucide {
   min-height: 0;
   background: radial-gradient(circle at 50% 42%, #172332 0%, #090e14 78%);
   overflow: hidden;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 #cadCanvas {
@@ -1195,6 +1220,9 @@ svg.lucide {
   height: 100%;
   display: block;
   outline: none;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .overlay-layer {
@@ -2717,8 +2745,14 @@ svg.lucide {
 }
 
 /* ==========================================================================
-   RESPONSIVE WIDESCREEN ADAPTATION (1280px COMPACT & <1180px REFLOW)
+   RESPONSIVE WIDESCREEN & IPAD AIR M4 LANDSCAPE ADAPTATION
    ========================================================================== */
+.hmi-grid {
+  padding-left: max(8px, env(safe-area-inset-left, 8px));
+  padding-right: max(8px, env(safe-area-inset-right, 8px));
+  padding-bottom: max(8px, env(safe-area-inset-bottom, 8px));
+}
+
 @media (max-width: 1460px) {
   .brand-meta,
   .sys-runtime-pill {
@@ -2739,7 +2773,46 @@ svg.lucide {
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1366px) {
+  .command-row-top {
+    padding: 0 10px;
+    gap: 8px;
+  }
+
+  .command-row-workflow {
+    padding: 0 10px;
+    gap: 8px;
+  }
+
+  .step-btn {
+    height: 32px;
+    padding: 0 9px;
+    font-size: 11px;
+  }
+
+  .hmi-grid {
+    height: calc(100vh - 90px - env(safe-area-inset-top, 0px));
+    padding: 6px max(6px, env(safe-area-inset-right, 6px)) max(6px, env(safe-area-inset-bottom, 6px)) max(6px, env(safe-area-inset-left, 6px));
+    grid-template-columns: minmax(268px, 0.96fr) minmax(316px, 1.22fr) minmax(286px, 328px);
+    grid-template-rows: minmax(250px, 1.26fr) minmax(192px, 0.94fr);
+    gap: 6px;
+  }
+
+  .scada-grid {
+    grid-template-columns: 52px minmax(256px, 1.06fr) minmax(210px, 0.94fr);
+    gap: 7px;
+  }
+
+  .readout-val {
+    font-size: clamp(19px, 1.9vw, 25px);
+  }
+
+  .manual-viewer-box {
+    height: 112px;
+  }
+}
+
+@media (max-width: 1020px) {
   html,
   body {
     overflow-y: auto;

@@ -88,34 +88,133 @@ def _downscale_jpeg_for_vlm(jpeg_bytes: bytes, max_dim: int = 640) -> bytes:
     return enc.tobytes() if ok else jpeg_bytes
 
 
+def _normalize_wav_to_16khz_mono_in_memory(audio_bytes: bytes) -> bytes | None:
+    """Normalize and resample any uncompressed RIFF/WAVE payload to 16 kHz 16-bit mono PCM in memory."""
+    if not audio_bytes or len(audio_bytes) < 44:
+        return None
+    if audio_bytes[:4] != b"RIFF" or audio_bytes[8:12] != b"WAVE":
+        return None
+
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
+            nchannels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+            framerate = wf.getframerate()
+            nframes = wf.getnframes()
+            raw_frames = wf.readframes(nframes)
+    except Exception:
+        return None
+
+    if nchannels < 1 or framerate <= 0 or sampwidth not in (1, 2, 3, 4):
+        return None
+
+    if sampwidth == 2 and nchannels == 1 and framerate == 16000:
+        pcm_i16 = np.frombuffer(raw_frames[: (len(raw_frames) // 2) * 2], dtype="<i2")
+    else:
+        if sampwidth == 1:
+            u8 = np.frombuffer(raw_frames, dtype=np.uint8)
+            samples = (u8.astype(np.float32) - 128.0) / 128.0
+        elif sampwidth == 2:
+            i16 = np.frombuffer(raw_frames[: (len(raw_frames) // 2) * 2], dtype="<i2")
+            samples = i16.astype(np.float32) / 32768.0
+        elif sampwidth == 3:
+            usable = (len(raw_frames) // 3) * 3
+            triplets = np.frombuffer(raw_frames[:usable], dtype=np.uint8).reshape(-1, 3)
+            vals = (
+                triplets[:, 0].astype(np.int32)
+                | (triplets[:, 1].astype(np.int32) << 8)
+                | (triplets[:, 2].astype(np.int32) << 16)
+            )
+            vals = np.where(vals & 0x800000, vals - 0x1000000, vals)
+            samples = vals.astype(np.float32) / 8388608.0
+        else:
+            i32 = np.frombuffer(raw_frames[: (len(raw_frames) // 4) * 4], dtype="<i4")
+            samples = i32.astype(np.float32) / 2147483648.0
+
+        if nchannels > 1:
+            total_frames = len(samples) // nchannels
+            if total_frames == 0:
+                samples = np.zeros(0, dtype=np.float32)
+            else:
+                samples = samples[: total_frames * nchannels].reshape(total_frames, nchannels).mean(axis=1)
+
+        if framerate != 16000 and len(samples) > 0:
+            target_len = max(1, int(round(len(samples) * 16000.0 / float(framerate))))
+            x_old = np.linspace(0.0, 1.0, num=len(samples), endpoint=False, dtype=np.float64)
+            x_new = np.linspace(0.0, 1.0, num=target_len, endpoint=False, dtype=np.float64)
+            samples = np.interp(x_new, x_old, samples).astype(np.float32)
+
+        pcm_i16 = np.clip(np.round(samples * 32767.0), -32768, 32767).astype("<i2")
+
+    out_buf = io.BytesIO()
+    with wave.open(out_buf, "wb") as out_wf:
+        out_wf.setnchannels(1)
+        out_wf.setsampwidth(2)
+        out_wf.setframerate(16000)
+        out_wf.writeframes(pcm_i16.tobytes())
+    return out_buf.getvalue()
+
+
+def _wrap_raw_pcm_as_16khz_wav(raw_bytes: bytes) -> bytes:
+    """Wrap raw 16-bit mono PCM bytes into a clean 16 kHz WAV container when running without subprocess."""
+    if not raw_bytes:
+        return raw_bytes
+    if len(raw_bytes) >= 12 and raw_bytes[:4] == b"RIFF" and raw_bytes[8:12] == b"WAVE":
+        return raw_bytes
+    even_len = (len(raw_bytes) // 2) * 2
+    payload = raw_bytes[:even_len] if even_len > 0 else b"\x00\x00"
+    out_buf = io.BytesIO()
+    with wave.open(out_buf, "wb") as out_wf:
+        out_wf.setnchannels(1)
+        out_wf.setsampwidth(2)
+        out_wf.setframerate(16000)
+        out_wf.writeframes(payload)
+    return out_buf.getvalue()
+
+
 def _transcode_to_16khz_mono_wav(audio_bytes: bytes) -> bytes:
-    """Convert WebM/Opus/WAV/MP3 browser recording to 16 kHz 16-bit mono PCM WAV via local ffmpeg."""
-    proc = subprocess.run(
-        [
-            "ffmpeg",
-            "-nostdin",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            "pipe:0",
-            "-ar",
-            "16000",
-            "-ac",
-            "1",
-            "-c:a",
-            "pcm_s16le",
-            "-f",
-            "wav",
-            "pipe:1",
-        ],
-        input=audio_bytes,
-        capture_output=True,
-        timeout=8.0,
-        check=False,
-    )
-    if proc.returncode == 0 and len(proc.stdout) > 44:
-        return proc.stdout
+    """Convert browser or microphone audio to 16 kHz 16-bit mono PCM WAV in memory, falling back to ffmpeg only on desktop."""
+    in_mem_wav = _normalize_wav_to_16khz_mono_in_memory(audio_bytes)
+    if in_mem_wav is not None and len(in_mem_wav) > 44:
+        return in_mem_wav
+
+    if (
+        os.environ.get("FIELDSCAN_PLATFORM", "").lower() == "ios"
+        or os.environ.get("FIELDSCAN_NO_SUBPROCESS", "") == "1"
+    ):
+        if len(audio_bytes) >= 12 and audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE":
+            return audio_bytes
+        return _wrap_raw_pcm_as_16khz_wav(audio_bytes)
+
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-c:a",
+                "pcm_s16le",
+                "-f",
+                "wav",
+                "pipe:1",
+            ],
+            input=audio_bytes,
+            capture_output=True,
+            timeout=8.0,
+            check=False,
+        )
+        if proc.returncode == 0 and len(proc.stdout) > 44:
+            return proc.stdout
+    except (OSError, subprocess.SubprocessError):
+        pass
     return audio_bytes
 
 

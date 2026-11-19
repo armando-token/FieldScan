@@ -19,6 +19,7 @@ from collections import deque
 import glob
 import math
 import os
+import socket
 import struct
 import sys
 import threading
@@ -237,8 +238,76 @@ def build_simulated_tht02_response(
     return append_crc16(pdu)
 
 
+def _parse_tcp_bridge_endpoint(host_port: str, default_port: int = 5502) -> tuple[str, int]:
+    """Parse a TCP serial bridge URI or host:port string into (host, port)."""
+    raw = (host_port or "").strip()
+    for prefix in ("tcp://", "socket://"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix) :].strip()
+            break
+    if "/" in raw:
+        raw = raw.split("/", 1)[0]
+    if ":" in raw:
+        host_part, port_part = raw.rsplit(":", 1)
+        try:
+            return host_part.strip() or "169.254.37.69", int(port_part.strip())
+        except ValueError:
+            return host_part.strip() or "169.254.37.69", default_port
+    return (raw or "169.254.37.69"), default_port
+
+
+def _poll_tcp_rs485_bridge(
+    host_port: str,
+    slave_id: int = 1,
+    baud_bps: int = 9600,
+    timeout_s: float = 0.35,
+) -> tuple[bytes, bytes]:
+    """Poll a TCP-to-RS485 Modbus-RTU bridge over USB-C NCM tether or local LAN.
+
+    Sends the 8-byte Function 0x03 request (`build_read_registers_request(slave_id, 0x0000, 8)`)
+    and reads up to 21 bytes back, returning `(tx_frame, rx_frame)`.
+    """
+    _ = baud_bps
+    tx_frame = build_read_registers_request(slave_id=slave_id, start_reg=0x0000, count=8)
+    host, port = _parse_tcp_bridge_endpoint(host_port)
+    rx_chunks = bytearray()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(max(0.05, float(timeout_s)))
+        sock.connect((host, port))
+        sock.sendall(tx_frame)
+        deadline = time.perf_counter() + max(0.05, float(timeout_s))
+        while len(rx_chunks) < 21:
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                break
+            sock.settimeout(max(0.02, remaining))
+            try:
+                chunk = sock.recv(21 - len(rx_chunks))
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            rx_chunks.extend(chunk)
+            if len(rx_chunks) >= 5 and (rx_chunks[1] & 0x80) and verify_crc16(bytes(rx_chunks[:5])):
+                break
+    return tx_frame, bytes(rx_chunks)
+
+
+def _is_tcp_bridge_reachable(host_port: str, timeout_s: float = 0.04) -> bool:
+    """Quick non-blocking check whether a TCP RS-485 bridge socket is listening."""
+    host, port = _parse_tcp_bridge_endpoint(host_port)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout_s)
+            sock.connect((host, port))
+            return True
+    except Exception:
+        return False
+
+
 def discover_serial_ports() -> list[dict[str, Any]]:
-    """Discover USB-to-RS485 ports across Linux (`/dev/ttyUSB*`) and macOS (`/dev/cu.usbserial*`).
+    """Discover USB-to-RS485 ports across Linux (`/dev/ttyUSB*`), macOS (`/dev/cu.usbserial*`),
+    and iPadOS / USB-C TCP RS-485 bridges (`tcp://169.254.37.69:5502`).
 
     Prioritizes FTDI `FT2232HL` (VID `0x0403`, PID `0x6010`) 2-channel isolated industrial adapters.
     """
@@ -256,6 +325,23 @@ def discover_serial_ports() -> list[dict[str, Any]]:
                 "priority": 0,
             }
         )
+
+    env_bridge = os.environ.get("FIELDSCAN_RS485_BRIDGE", "").strip()
+    if env_bridge:
+        host, port = _parse_tcp_bridge_endpoint(env_bridge)
+        bridge_uri = f"tcp://{host}:{port}"
+        if bridge_uri not in seen:
+            seen.add(bridge_uri)
+            candidates.append(
+                {
+                    "device": bridge_uri,
+                    "description": f"USB-C / TCP RS-485 Bridge ({host}:{port})",
+                    "is_ftdi": True,
+                    "is_ft2232hl": True,
+                    "is_tcp_bridge": True,
+                    "priority": 0,
+                }
+            )
 
     try:
         ports = list(list_ports.comports())
@@ -315,6 +401,29 @@ def discover_serial_ports() -> list[dict[str, Any]]:
                         "priority": 4,
                     }
                 )
+
+    # On iPadOS (or when USB-C bridge probing is enabled) with no local /dev/cu.usbserial*,
+    # check if the Mac Mini FT2232HL USB-C bridge (169.254.37.69:5502) is reachable.
+    if not candidates and (
+        os.environ.get("FIELDSCAN_PLATFORM", "").strip().lower() == "ios"
+        or sys.platform == "ios"
+        or os.environ.get("FIELDSCAN_PROBE_USB_BRIDGE", "0") == "1"
+    ):
+        default_bridge = os.environ.get("FIELDSCAN_DEFAULT_RS485_BRIDGE", "169.254.37.69:5502")
+        if _is_tcp_bridge_reachable(default_bridge):
+            host, port = _parse_tcp_bridge_endpoint(default_bridge)
+            bridge_uri = f"tcp://{host}:{port}"
+            seen.add(bridge_uri)
+            candidates.append(
+                {
+                    "device": bridge_uri,
+                    "description": f"USB-C FT2232HL Bridge ({host}:{port})",
+                    "is_ftdi": True,
+                    "is_ft2232hl": True,
+                    "is_tcp_bridge": True,
+                    "priority": 1,
+                }
+            )
 
     candidates.sort(key=lambda item: (item["priority"], item["device"]))
     return candidates
@@ -408,32 +517,55 @@ class ModbusRTUScanner:
                 self._active_baud = int(baud_bps)
         return self.step_once()
 
+    @staticmethod
+    def _poll_tcp_rs485_bridge(
+        host_port: str,
+        slave_id: int = 1,
+        baud_bps: int = 9600,
+        timeout_s: float = 0.35,
+    ) -> tuple[bytes, bytes]:
+        return _poll_tcp_rs485_bridge(
+            host_port=host_port,
+            slave_id=slave_id,
+            baud_bps=baud_bps,
+            timeout_s=timeout_s,
+        )
+
     def _probe_single_serial(
         self, port_name: str, slave_id: int, baud_bps: int, timeout_s: float = 0.18
     ) -> tuple[dict[str, Any] | None, str, str, float]:
-        """Send Function 0x03 Read Holding Registers over real RS-485 serial port."""
+        """Send Function 0x03 Read Holding Registers over real RS-485 serial port or USB-C TCP bridge."""
         tx = build_read_registers_request(slave_id=slave_id, start_reg=0x0000, count=8)
         tx_hex = format_hex(tx)
         t0 = time.perf_counter()
         try:
-            with serial.Serial(
-                port=port_name,
-                baudrate=baud_bps,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                timeout=timeout_s,
-                write_timeout=timeout_s,
-            ) as ser:
-                ser.reset_input_buffer()
-                ser.write(tx)
-                ser.flush()
-                # 8 registers response = 1(addr) + 1(func) + 1(byte_count=16) + 16(data) + 2(crc) = 21 bytes
-                rx = ser.read(21)
-                if rx and (len(rx) < 21 or not verify_crc16(rx)):
-                    waiting = ser.in_waiting
-                    if waiting > 0:
-                        rx += ser.read(min(16, waiting))
+            if port_name.lower().startswith(("tcp://", "socket://")):
+                tx_sent, rx = _poll_tcp_rs485_bridge(
+                    host_port=port_name,
+                    slave_id=slave_id,
+                    baud_bps=baud_bps,
+                    timeout_s=max(timeout_s, 0.35),
+                )
+                tx_hex = format_hex(tx_sent)
+            else:
+                with serial.Serial(
+                    port=port_name,
+                    baudrate=baud_bps,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    timeout=timeout_s,
+                    write_timeout=timeout_s,
+                ) as ser:
+                    ser.reset_input_buffer()
+                    ser.write(tx)
+                    ser.flush()
+                    # 8 registers response = 1(addr) + 1(func) + 1(byte_count=16) + 16(data) + 2(crc) = 21 bytes
+                    rx = ser.read(21)
+                    if rx and (len(rx) < 21 or not verify_crc16(rx)):
+                        waiting = ser.in_waiting
+                        if waiting > 0:
+                            rx += ser.read(min(16, waiting))
             rtt_ms = round((time.perf_counter() - t0) * 1000.0, 2)
             if not rx:
                 return None, tx_hex, "", rtt_ms
@@ -743,20 +875,33 @@ class ModbusRTUScanner:
 
         if port_name and not port_name.startswith("sim://") and os.environ.get("FIELDSCAN_ANDON_RELAY_SLAVE"):
             try:
-                with serial.Serial(
-                    port=port_name,
-                    baudrate=baud,
-                    bytesize=serial.EIGHTBITS,
-                    parity=serial.PARITY_NONE,
-                    stopbits=serial.STOPBITS_ONE,
-                    timeout=0.05,
-                    write_timeout=0.05,
-                ) as ser:
+                if port_name.lower().startswith(("tcp://", "socket://")):
+                    host, port = _parse_tcp_bridge_endpoint(port_name)
                     for frm in raw_frames:
-                        ser.write(frm)
-                        ser.flush()
-                        ser.read(8)
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                            sock.settimeout(0.15)
+                            sock.connect((host, port))
+                            sock.sendall(frm)
+                            try:
+                                sock.recv(8)
+                            except socket.timeout:
+                                pass
                     transmitted = True
+                else:
+                    with serial.Serial(
+                        port=port_name,
+                        baudrate=baud,
+                        bytesize=serial.EIGHTBITS,
+                        parity=serial.PARITY_NONE,
+                        stopbits=serial.STOPBITS_ONE,
+                        timeout=0.05,
+                        write_timeout=0.05,
+                    ) as ser:
+                        for frm in raw_frames:
+                            ser.write(frm)
+                            ser.flush()
+                            ser.read(8)
+                        transmitted = True
             except Exception:
                 transmitted = False
 

@@ -355,6 +355,38 @@ async def api_upload_camera_frame(
     return await asyncio.to_thread(_build_unified_status, False)
 
 
+@app.post("/api/video/ipad_frame")
+@app.post("/api/camera/ipad_frame")
+async def api_push_ipad_camera_frame(request: Request) -> dict[str, Any]:
+    source_label = (
+        request.query_params.get("source")
+        or request.headers.get("x-camera-source")
+        or "ipad:avfoundation:back"
+    )
+    content_type = request.headers.get("content-type", "").lower()
+    raw_bytes = b""
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        cand = form.get("file") or form.get("image") or form.get("frame")
+        if cand is None:
+            for val in form.values():
+                if hasattr(val, "read"):
+                    cand = val
+                    break
+        if cand is not None and hasattr(cand, "read"):
+            raw_bytes = await cand.read()
+    else:
+        raw_bytes = await request.body()
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="No camera frame bytes provided")
+    try:
+        await asyncio.to_thread(_SCANNER.push_live_camera_frame, raw_bytes, source_label)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await asyncio.to_thread(_evaluate_live_reactive_watch)
+    return await asyncio.to_thread(_build_unified_status, False)
+
+
 # ==========================================================================
 # MODBUS-RTU / FT2232HL USB-RS485 SCADA & INTERACTIVE LIVE REPAIR ENDPOINTS
 # ==========================================================================

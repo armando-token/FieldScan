@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="FieldScan M4" />
   <meta
     name="description"
     content="FieldScan CAD Digital Twin, 30 FPS Optical Scanner, 60 FPS 3D Reconstruction, Industrial Modbus-RTU SCADA HMI, and Offline Multimodal AI Voice Engineer for TZ THT-02."
@@ -45,10 +48,11 @@
 
       <div class="toolbar-selectors">
         <div class="select-group">
-          <label class="select-shell" for="selectCameraMode" title="Select live USB optical camera or workbench fault simulation">
+          <label class="select-shell" for="selectCameraMode" title="Select live USB optical camera, iPad Air M4 camera, or workbench fault simulation">
             <i data-lucide="camera"></i>
-            <select id="selectCameraMode" aria-label="Camera Feed Mode">
+            <select id="selectCameraMode" data-role="camera-mode-select" aria-label="Camera Feed Mode">
               <option value="usb" selected>Cam: Live USB (/dev/video0)</option>
+              <option value="ipad_camera">Cam: iPad Air M4 Camera (Live 30 FPS)</option>
               <option value="sim_normal">Cam: Nominal Sensor Sim</option>
               <option value="sim_open_dip">Cam: Open Housing DIP-8</option>
               <option value="sim_hand_screwdriver">Cam: Hand + Screwdriver (Masked)</option>
@@ -82,8 +86,8 @@
       </div>
 
       <div class="telemetry-cluster">
-        <div class="sys-runtime-pill" id="pillEngine" title="Local LiquidAI LFM3 On-Device Inference Telemetry">
-          <span id="pillModelText">LFM3-VL-2B + Audio-2B</span>
+        <div class="sys-runtime-pill" id="pillEngine" title="Local On-Device Inference Telemetry">
+          <span id="pillModelText">Qwen3-VL-4B + M4 ANE</span>
           <span class="pill-divider">·</span>
           <span id="pillRamText">3.4 / 16 GB</span>
           <span class="pill-divider">·</span>

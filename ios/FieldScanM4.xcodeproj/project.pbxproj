@@ -1,0 +1,328 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A100000126B1000100000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000126B1000100000001 /* AppDelegate.swift */; };
+		A100000226B1000100000001 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000226B1000100000001 /* SceneDelegate.swift */; };
+		A100000326B1000100000001 /* FieldScanRuntimeConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000326B1000100000001 /* FieldScanRuntimeConfig.swift */; };
+		A100000426B1000100000001 /* LlamaServerBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000426B1000100000001 /* LlamaServerBridge.swift */; };
+		A100000526B1000100000001 /* PythonRuntimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000526B1000100000001 /* PythonRuntimeBridge.swift */; };
+		A100000626B1000100000001 /* NativeCameraBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000626B1000100000001 /* NativeCameraBridge.swift */; };
+		A100000726B1000100000001 /* FieldScanWebViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000726B1000100000001 /* FieldScanWebViewController.swift */; };
+		A100000926B1000100000001 /* StandaloneFieldScanServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000B26B1000100000001 /* StandaloneFieldScanServer.swift */; };
+		A100000826B1000100000001 /* BundleResources in Resources */ = {isa = PBXBuildFile; fileRef = A200000826B1000100000001 /* BundleResources */; };
+		A100001026B1000100000001 /* libggml-base.0.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001026B1000100000001 /* libggml-base.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A100001126B1000100000001 /* libggml-blas.0.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001126B1000100000001 /* libggml-blas.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A100001226B1000100000001 /* libggml-cpu.0.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001226B1000100000001 /* libggml-cpu.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A100001326B1000100000001 /* libggml-metal.0.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001326B1000100000001 /* libggml-metal.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A100001426B1000100000001 /* libggml-rpc.0.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001426B1000100000001 /* libggml-rpc.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A100001526B1000100000001 /* libggml.0.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001526B1000100000001 /* libggml.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A100001626B1000100000001 /* libllama.0.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001626B1000100000001 /* libllama.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A100001726B1000100000001 /* libmtmd.0.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001726B1000100000001 /* libmtmd.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A100001826B1000100000001 /* libllama-common.0.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001826B1000100000001 /* libllama-common.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A100001926B1000100000001 /* libllama-server-impl.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001926B1000100000001 /* libllama-server-impl.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A350000126B1000100000001 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		A200000026B1000100000001 /* FieldScanM4.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FieldScanM4.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A200000126B1000100000001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A200000226B1000100000001 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		A200000326B1000100000001 /* FieldScanRuntimeConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldScanRuntimeConfig.swift; sourceTree = "<group>"; };
+		A200000426B1000100000001 /* LlamaServerBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LlamaServerBridge.swift; sourceTree = "<group>"; };
+		A200000526B1000100000001 /* PythonRuntimeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonRuntimeBridge.swift; sourceTree = "<group>"; };
+		A200000626B1000100000001 /* NativeCameraBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraBridge.swift; sourceTree = "<group>"; };
+		A200000726B1000100000001 /* FieldScanWebViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldScanWebViewController.swift; sourceTree = "<group>"; };
+		A200000B26B1000100000001 /* StandaloneFieldScanServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandaloneFieldScanServer.swift; sourceTree = "<group>"; };
+		A200000826B1000100000001 /* BundleResources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = BundleResources; sourceTree = "<group>"; };
+		A200000926B1000100000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A200000A26B1000100000001 /* FieldScanM4.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FieldScanM4.entitlements; sourceTree = "<group>"; };
+		A200001026B1000100000001 /* libggml-base.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "Frameworks/libggml-base.0.dylib"; sourceTree = "<group>"; };
+		A200001126B1000100000001 /* libggml-blas.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "Frameworks/libggml-blas.0.dylib"; sourceTree = "<group>"; };
+		A200001226B1000100000001 /* libggml-cpu.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "Frameworks/libggml-cpu.0.dylib"; sourceTree = "<group>"; };
+		A200001326B1000100000001 /* libggml-metal.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "Frameworks/libggml-metal.0.dylib"; sourceTree = "<group>"; };
+		A200001426B1000100000001 /* libggml-rpc.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "Frameworks/libggml-rpc.0.dylib"; sourceTree = "<group>"; };
+		A200001526B1000100000001 /* libggml.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "Frameworks/libggml.0.dylib"; sourceTree = "<group>"; };
+		A200001626B1000100000001 /* libllama.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "Frameworks/libllama.0.dylib"; sourceTree = "<group>"; };
+		A200001726B1000100000001 /* libmtmd.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "Frameworks/libmtmd.0.dylib"; sourceTree = "<group>"; };
+		A200001826B1000100000001 /* libllama-common.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "Frameworks/libllama-common.0.dylib"; sourceTree = "<group>"; };
+		A200001926B1000100000001 /* libllama-server-impl.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "Frameworks/libllama-server-impl.dylib"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A300000126B1000100000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A400000126B1000100000001 = {
+			isa = PBXGroup;
+			children = (
+				A400000226B1000100000001 /* FieldScanM4 */,
+				A400000326B1000100000001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A400000226B1000100000001 /* FieldScanM4 */ = {
+			isa = PBXGroup;
+			children = (
+				A200000926B1000100000001 /* Info.plist */,
+				A200000A26B1000100000001 /* FieldScanM4.entitlements */,
+				A200000126B1000100000001 /* AppDelegate.swift */,
+				A200000226B1000100000001 /* SceneDelegate.swift */,
+				A200000326B1000100000001 /* FieldScanRuntimeConfig.swift */,
+				A200000426B1000100000001 /* LlamaServerBridge.swift */,
+				A200000526B1000100000001 /* PythonRuntimeBridge.swift */,
+				A200000626B1000100000001 /* NativeCameraBridge.swift */,
+				A200000726B1000100000001 /* FieldScanWebViewController.swift */,
+				A200000B26B1000100000001 /* StandaloneFieldScanServer.swift */,
+				A200000826B1000100000001 /* BundleResources */,
+				A200001026B1000100000001 /* libggml-base.0.dylib */,
+				A200001126B1000100000001 /* libggml-blas.0.dylib */,
+				A200001226B1000100000001 /* libggml-cpu.0.dylib */,
+				A200001326B1000100000001 /* libggml-metal.0.dylib */,
+				A200001426B1000100000001 /* libggml-rpc.0.dylib */,
+				A200001526B1000100000001 /* libggml.0.dylib */,
+				A200001626B1000100000001 /* libllama.0.dylib */,
+				A200001726B1000100000001 /* libmtmd.0.dylib */,
+				A200001826B1000100000001 /* libllama-common.0.dylib */,
+				A200001926B1000100000001 /* libllama-server-impl.dylib */,
+			);
+			path = FieldScanM4;
+			sourceTree = "<group>";
+		};
+		A400000326B1000100000001 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A200000026B1000100000001 /* FieldScanM4.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A500000126B1000100000001 /* FieldScanM4 */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A800000226B1000100000001 /* Build configuration list for PBXNativeTarget "FieldScanM4" */;
+			buildPhases = (
+				A600000126B1000100000001 /* Sources */,
+				A300000126B1000100000001 /* Frameworks */,
+				A700000126B1000100000001 /* Resources */,
+				A350000126B1000100000001 /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FieldScanM4;
+			productName = FieldScanM4;
+			productReference = A200000026B1000100000001 /* FieldScanM4.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A900000126B1000100000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					A500000126B1000100000001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = A800000126B1000100000001 /* Build configuration list for PBXProject "FieldScanM4" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A400000126B1000100000001;
+			productRefGroup = A400000326B1000100000001 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A500000126B1000100000001 /* FieldScanM4 */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A700000126B1000100000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000826B1000100000001 /* BundleResources in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A600000126B1000100000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000126B1000100000001 /* AppDelegate.swift in Sources */,
+				A100000226B1000100000001 /* SceneDelegate.swift in Sources */,
+				A100000326B1000100000001 /* FieldScanRuntimeConfig.swift in Sources */,
+				A100000426B1000100000001 /* LlamaServerBridge.swift in Sources */,
+				A100000526B1000100000001 /* PythonRuntimeBridge.swift in Sources */,
+				A100000626B1000100000001 /* NativeCameraBridge.swift in Sources */,
+				A100000726B1000100000001 /* FieldScanWebViewController.swift in Sources */,
+				A100000926B1000100000001 /* StandaloneFieldScanServer.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AA00000126B1000100000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AA00000226B1000100000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		AA00000326B1000100000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = FieldScanM4/FieldScanM4.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 200;
+				DEVELOPMENT_TEAM = ZT5222SBBL;
+				ENABLE_DEBUG_DYLIB = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FieldScanM4/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 2.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.fieldscan.tht02.ipadm4;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		AA00000426B1000100000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = FieldScanM4/FieldScanM4.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 200;
+				DEVELOPMENT_TEAM = ZT5222SBBL;
+				ENABLE_DEBUG_DYLIB = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FieldScanM4/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 2.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.fieldscan.tht02.ipadm4;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A800000126B1000100000001 /* Build configuration list for PBXProject "FieldScanM4" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000126B1000100000001 /* Debug */,
+				AA00000226B1000100000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A800000226B1000100000001 /* Build configuration list for PBXNativeTarget "FieldScanM4" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000326B1000100000001 /* Debug */,
+				AA00000426B1000100000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A900000126B1000100000001 /* Project object */;
+}

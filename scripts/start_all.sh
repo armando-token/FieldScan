@@ -18,11 +18,30 @@ fi
 
 OS_NAME="$(uname -s)"
 ARCH="$(uname -m)"
+BIND_HOST="${FIELDSCAN_BIND_HOST:-0.0.0.0}"
+BIND_PORT="${FIELDSCAN_BIND_PORT:-8088}"
+HTTPS_PORT="${FIELDSCAN_HTTPS_PORT:-8443}"
+FORCE_HTTPS=0
+
+for arg in "$@"; do
+  case "${arg}" in
+    --https)
+      FORCE_HTTPS=1
+      ;;
+    --usb-ipad)
+      BIND_HOST="0.0.0.0"
+      export FIELDSCAN_ALLOW_USB_TETHER=1
+      ;;
+  esac
+done
+
 echo "=================================================================="
 echo " FIELDSCAN CAD v2.0 — TZ THT-02 Closed-Loop Repair & SCADA Twin"
 echo " Host Platform     : ${OS_NAME} (${ARCH})"
 echo " Vendor Root       : ${VENDOR_ROOT}"
-echo " Airplane Policy   : 127.0.0.1 Loopback Only (Wi-Fi Safe)"
+echo " Airplane Policy   : 127.0.0.1 Loopback + USB-C Tether (169.254.37.69)"
+echo " HTTP Studio URL   : http://127.0.0.1:${BIND_PORT} | http://169.254.37.69:${BIND_PORT}"
+echo " HTTPS iPad M4 URL : https://169.254.37.69:${HTTPS_PORT}"
 echo "=================================================================="
 
 # Hardware pre-check (RS-485 FT2232HL + USB Camera)
@@ -138,7 +157,43 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 
-# 3. Start FieldScan FastAPI + OpenCV + Modbus SCADA + Three.js Studio on 127.0.0.1:8088
-echo "[3/3] Starting FieldScan CAD v2.0 Studio on 127.0.0.1:8088 ..."
+# Auto-generate self-signed TLS certificate for iPad Air M4 WebKit Secure Context (getUserMedia camera + mic)
+TLS_CRT="${PROJECT_ROOT}/logs/ipad_tls.crt"
+TLS_KEY="${PROJECT_ROOT}/logs/ipad_tls.key"
+if [[ ! -f "${TLS_CRT}" || ! -f "${TLS_KEY}" ]]; then
+  if command -v openssl >/dev/null 2>&1; then
+    echo "[TLS] Generating local self-signed certificate for iPad Air M4 USB-C tether (169.254.37.69)..."
+    openssl req -x509 -newkey rsa:2048 -nodes \
+      -keyout "${TLS_KEY}" \
+      -out "${TLS_CRT}" \
+      -days 825 \
+      -subj "/CN=FieldScan-M4-Local/O=FieldScan CAD v2.0" \
+      -addext "subjectAltName=IP:127.0.0.1,IP:169.254.37.69,IP:10.0.0.15,DNS:localhost,DNS:armandos-mac-mini.local" \
+      >/dev/null 2>&1 || true
+  fi
+fi
+
+# 3. Start FieldScan FastAPI + OpenCV + Modbus SCADA + Three.js Studio
 cd "${PROJECT_ROOT}"
-exec uv run uvicorn fieldscan.server:app --host 127.0.0.1 --port 8088
+if [[ "${FORCE_HTTPS}" == "1" && -f "${TLS_CRT}" && -f "${TLS_KEY}" ]]; then
+  echo "[3/3] Starting FieldScan CAD v2.0 Studio (HTTPS) on https://${BIND_HOST}:${BIND_PORT} ..."
+  exec uv run uvicorn fieldscan.server:app \
+    --host "${BIND_HOST}" \
+    --port "${BIND_PORT}" \
+    --ssl-keyfile "${TLS_KEY}" \
+    --ssl-certfile "${TLS_CRT}"
+else
+  if [[ -f "${TLS_CRT}" && -f "${TLS_KEY}" ]]; then
+    if ! lsof -iTCP:"${HTTPS_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "[TLS] Starting companion HTTPS endpoint for iPad Air M4 camera/mic on https://${BIND_HOST}:${HTTPS_PORT} ..."
+      nohup uv run uvicorn fieldscan.server:app \
+        --host "${BIND_HOST}" \
+        --port "${HTTPS_PORT}" \
+        --ssl-keyfile "${TLS_KEY}" \
+        --ssl-certfile "${TLS_CRT}" \
+        > "${PROJECT_ROOT}/logs/fieldscan_https_${HTTPS_PORT}.log" 2>&1 &
+    fi
+  fi
+  echo "[3/3] Starting FieldScan CAD v2.0 Studio on http://${BIND_HOST}:${BIND_PORT} ..."
+  exec uv run uvicorn fieldscan.server:app --host "${BIND_HOST}" --port "${BIND_PORT}"
+fi

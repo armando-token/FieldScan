@@ -57,6 +57,8 @@ VALID_MODES: tuple[str, ...] = (
     "auto",
     "uvc",
     "usb",
+    "ipad_camera",
+    "ios_camera",
     "/dev/video0",
     "/dev/video1",
     *SIM_MODES,
@@ -619,6 +621,9 @@ class VisionScanner:
         self._active_sim_mode = "sim_normal"
         self._camera_source = "simulator:workbench"
         self._custom_bgr: np.ndarray | None = None
+        self._ipad_live_bgr: np.ndarray | None = None
+        self._last_ipad_frame_ts: float = 0.0
+        self._ipad_source_label: str = "ipad:avfoundation:back"
 
         self._latest_hud_jpeg: bytes = b""
         self._latest_raw_jpeg: bytes = b""
@@ -651,6 +656,21 @@ class VisionScanner:
         self.step_once()
         if auto_start:
             self.start()
+
+    @property
+    def mode(self) -> str:
+        return self._requested_mode
+
+    @mode.setter
+    def mode(self, value: str) -> None:
+        self._requested_mode = (value or "auto").strip().lower()
+
+    def _is_ios_or_no_subprocess(self) -> bool:
+        return (
+            os.environ.get("FIELDSCAN_PLATFORM", "").lower() == "ios"
+            or os.environ.get("FIELDSCAN_NO_SUBPROCESS", "") == "1"
+            or self._requested_mode in ("ipad_camera", "ios_camera")
+        )
 
     @staticmethod
     def _render_uvc_standby_frame(width: int = 960, height: int = 540, reason: str = "NO USB CAMERA SIGNAL") -> np.ndarray:
@@ -688,6 +708,11 @@ class VisionScanner:
     @staticmethod
     def _discover_macos_uvc_indices() -> list[int]:
         """Enumerate AVFoundation video indices and exclude Continuity iPhone/iPad & screen-capture devices."""
+        if (
+            os.environ.get("FIELDSCAN_PLATFORM", "").lower() == "ios"
+            or os.environ.get("FIELDSCAN_NO_SUBPROCESS", "") == "1"
+        ):
+            return [0, 1]
         import re as _re
         import shutil
         import subprocess
@@ -775,7 +800,10 @@ class VisionScanner:
                 now_ts = time.perf_counter()
                 with self._lock:
                     self._mac_latest_packet = (bgr, src_name, now_ts)
-                    if self._requested_mode not in SIM_MODES and self._requested_mode != "custom":
+                    if (
+                        self._requested_mode not in SIM_MODES
+                        and self._requested_mode not in ("custom", "ipad_camera", "ios_camera")
+                    ):
                         self._active_sim_mode = "live_uvc"
                         self._camera_source = src_name
         except Exception:
@@ -810,6 +838,8 @@ class VisionScanner:
     def _spawn_mac_worker_unlocked(self, preferred_device: str | None = None) -> bool:
         """Spawn isolated macOS AVFoundation worker; caller must hold `self._cap_lock`."""
         self._stop_mac_worker_unlocked()
+        if self._is_ios_or_no_subprocess():
+            return False
         worker_script = str(Path(__file__).resolve().with_name("mac_uvc_worker.py"))
         cmd = [sys.executable, "-u", worker_script]
         if preferred_device and preferred_device.isdigit():
@@ -837,8 +867,23 @@ class VisionScanner:
             self._mac_proc = None
             return False
 
+    def _ensure_mac_uvc_worker(self, preferred_device: str | None = None) -> bool:
+        """Ensure macOS UVC worker is active when allowed (never spawns subprocess on iOS)."""
+        if self._is_ios_or_no_subprocess():
+            return False
+        with self._cap_lock:
+            return self._spawn_mac_worker_unlocked(preferred_device=preferred_device)
+
+    def _open_uvc(self, preferred_device: str | None = None) -> tuple[cv2.VideoCapture | None, str]:
+        """Open hardware UVC camera handle when allowed (never spawns subprocess on iOS)."""
+        if self._is_ios_or_no_subprocess():
+            return None, ""
+        return self._try_open_uvc(preferred_device=preferred_device)
+
     def _try_open_uvc(self, preferred_device: str | None = None) -> tuple[cv2.VideoCapture | None, str]:
         """Attempt to open a real Linux V4L2 USB UVC webcam (`/dev/video*`)."""
+        if self._is_ios_or_no_subprocess():
+            return None, ""
         candidates: list[int | str] = []
         if preferred_device and preferred_device.startswith("/dev/video"):
             candidates.append(preferred_device)
@@ -920,6 +965,24 @@ class VisionScanner:
         with self._lock:
             self._requested_mode = mode_clean
             existing_pkt = self._mac_latest_packet
+            has_fresh_ipad = (
+                self._ipad_live_bgr is not None
+                and (time.monotonic() - self._last_ipad_frame_ts) <= 3.0
+            )
+            ipad_src = self._ipad_source_label
+
+        # In-process iPad / iOS camera stream path (zero subprocesses)
+        if mode_clean in ("ipad_camera", "ios_camera") or self._is_ios_or_no_subprocess():
+            with self._cap_lock:
+                self._release_cap()
+            with self._lock:
+                if has_fresh_ipad:
+                    self._active_sim_mode = "live_uvc"
+                    self._camera_source = ipad_src
+                else:
+                    self._active_sim_mode = "uvc_offline"
+                    self._camera_source = "ipad:standby"
+            return
 
         # macOS dedicated AVFoundation worker subprocess path
         if sys.platform == "darwin":
@@ -1052,9 +1115,62 @@ class VisionScanner:
             self._camera_source = "custom:injected_frame"
         return self.step_once()
 
+    def push_live_camera_frame(
+        self, image_bytes: bytes, source_label: str = "ipad:avfoundation:back"
+    ) -> dict[str, Any]:
+        """Decode an in-memory iPad/iOS live camera frame and execute the full OpenCV pipeline on it."""
+        if not image_bytes:
+            raise ValueError("Invalid camera frame bytes")
+        arr = np.frombuffer(image_bytes, dtype=np.uint8)
+        bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if bgr is None or bgr.size == 0:
+            raise ValueError("Invalid camera frame bytes")
+
+        with self._step_lock:
+            now_perf = time.perf_counter()
+            dt = max(1e-4, now_perf - self._last_tick)
+            self._last_tick = now_perf
+            inst_fps = min(60.0, 1.0 / dt)
+            self._fps_ema = 0.85 * self._fps_ema + 0.15 * inst_fps if self._frame_seq > 0 else self.target_fps
+
+            with self._lock:
+                if self.mode not in ("ipad_camera", "ios_camera"):
+                    self.mode = "ipad_camera"
+                self._last_ipad_frame_ts = time.monotonic()
+                self._ipad_live_bgr = bgr
+                self._ipad_source_label = source_label
+                self._active_sim_mode = "live_uvc"
+                self._camera_source = source_label
+                effective_mode = self.mode
+
+            hud_bgr, tel = self.analyze_frame(
+                bgr, sim_mode="live_uvc", camera_source=source_label, fps=self._fps_ema
+            )
+            if effective_mode in ("ipad_camera", "ios_camera"):
+                tel["mode"] = effective_mode
+
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
+            ok_hud, buf_hud = cv2.imencode(".jpg", hud_bgr, encode_params)
+            ok_raw, buf_raw = cv2.imencode(".jpg", bgr, encode_params)
+
+            with self._lock:
+                self._frame_seq += 1
+                tel["frame_seq"] = self._frame_seq
+                tel["scan_coverage_pct"] = (
+                    min(98, 86 + min(12, self._frame_seq)) if tel.get("detected") else 28
+                )
+                self._latest_raw_bgr = bgr
+                if ok_hud:
+                    self._latest_hud_jpeg = buf_hud.tobytes()
+                if ok_raw:
+                    self._latest_raw_jpeg = buf_raw.tobytes()
+                self._latest_telemetry = tel
+                return dict(self._latest_telemetry)
+
     def list_modes(self) -> list[dict[str, Any]]:
         return [
             {"id": "usb", "label": "Live USB Camera (UVC / AVFoundation)"},
+            {"id": "ipad_camera", "label": "iPad Air M4 Camera (Live Optical Scan)"},
             {"id": "sim_normal", "label": "Sim: Clean TZ THT-02 Probe"},
             {"id": "sim_strainer_patch", "label": "Sim: Strainer Red X-Patch (+56 mm)"},
             {"id": "sim_open_dip", "label": "Sim: Unscrewed Blue DIP PCB (+18 mm)"},
@@ -1069,6 +1185,27 @@ class VisionScanner:
             custom_bgr = self._custom_bgr
             req_mode = self._requested_mode
             mac_pkt = self._mac_latest_packet
+            ipad_bgr = self._ipad_live_bgr
+            ipad_ts = self._last_ipad_frame_ts
+            ipad_src = self._ipad_source_label
+
+        # iPad / iOS live camera stream or subprocess-free mode
+        if req_mode in ("ipad_camera", "ios_camera") or (
+            self._is_ios_or_no_subprocess() and req_mode not in SIM_MODES and req_mode != "custom"
+        ):
+            if ipad_bgr is not None and (time.monotonic() - ipad_ts) <= 3.0:
+                with self._lock:
+                    self._active_sim_mode = "live_uvc"
+                    self._camera_source = ipad_src
+                return ipad_bgr.copy(), "live_uvc", ipad_src
+            with self._lock:
+                self._active_sim_mode = "uvc_offline"
+                self._camera_source = "ipad:standby"
+            return (
+                self._render_uvc_standby_frame(reason="AWAITING IPAD CAMERA STREAM"),
+                "uvc_offline",
+                "ipad:standby",
+            )
 
         # macOS non-blocking pipe consumer (zero AVFoundation calls inside uvicorn process)
         if sys.platform == "darwin" and req_mode not in SIM_MODES and req_mode != "custom":
@@ -2009,7 +2146,7 @@ class VisionScanner:
             cv2.putText(
                 hud, status_txt, (12, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (165, 235, 250), 1, cv2.LINE_AA
             )
-            badge_txt = "NO USB CAMERA"
+            badge_txt = "IPAD STANDBY" if camera_source.startswith("ipad:") else "NO USB CAMERA"
             (bw_t, _), _ = cv2.getTextSize(badge_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
             bx0 = orig_w - bw_t - 26
             cv2.rectangle(hud, (bx0, 5), (orig_w - 10, 29), (52, 64, 86), -1)
@@ -2018,7 +2155,7 @@ class VisionScanner:
             )
             return hud, {
                 "detected": False,
-                "mode": "usb",
+                "mode": "ipad_camera" if camera_source.startswith("ipad:") else "usb",
                 "frame_size": [orig_w, orig_h],
                 "angle_deg": 0.0,
                 "bbox": [0, 0, 0, 0],
@@ -2738,7 +2875,11 @@ class VisionScanner:
 
         telemetry: dict[str, Any] = {
             "detected": detected,
-            "mode": "usb" if sim_mode in ("live_uvc", "uvc_offline") else sim_mode,
+            "mode": (
+                ("ipad_camera" if camera_source.startswith("ipad:") else "usb")
+                if sim_mode in ("live_uvc", "uvc_offline")
+                else sim_mode
+            ),
             "frame_size": [orig_w, orig_h],
             "angle_deg": angle_deg,
             "bbox": bbox,
@@ -2785,6 +2926,16 @@ class VisionScanner:
     def step_once(self) -> dict[str, Any]:
         """Acquire, analyze, and JPEG-encode a single frame synchronously."""
         with self._step_lock:
+            with self._lock:
+                if (
+                    self.mode in ("ipad_camera", "ios_camera")
+                    and self._ipad_live_bgr is not None
+                    and (time.monotonic() - self._last_ipad_frame_ts) <= 3.0
+                    and self._latest_telemetry
+                    and self._latest_hud_jpeg
+                ):
+                    return dict(self._latest_telemetry)
+
             now = time.perf_counter()
             dt = max(1e-4, now - self._last_tick)
             self._last_tick = now

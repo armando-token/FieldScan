@@ -8,17 +8,38 @@ import socket
 from typing import Any
 
 
-LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}
+
+
+def is_allowed_local_host(host: str) -> bool:
+    """Return True if host is loopback, allowed USB-C NCM link-local tether, or allowed LAN."""
+    clean = (host or "").strip().lower()
+    if clean in LOOPBACK_HOSTS or clean.startswith("127."):
+        return True
+
+    allow_usb_tether = (
+        os.environ.get("FIELDSCAN_ALLOW_USB_TETHER", "1") == "1"
+        and os.environ.get("FIELDSCAN_ALLOW_USB_LINKLOCAL", "1") == "1"
+    )
+    if allow_usb_tether and (clean.startswith("169.254.") or clean.startswith("fe80:")):
+        return True
+
+    if os.environ.get("FIELDSCAN_ALLOW_LAN", "0") == "1":
+        if clean.startswith("10.") or clean.startswith("192.168."):
+            return True
+
+    return False
 
 
 class OfflineSocketGuard:
-    """Optional runtime monkeypatch + live audit proving zero non-loopback egress."""
+    """Optional runtime monkeypatch + live audit proving zero public internet egress."""
 
     def __init__(self) -> None:
         self._installed = False
         self._orig_connect = socket.socket.connect
         self.blocked_attempts: list[str] = []
         self.loopback_connections: int = 0
+        self.usb_tether_connections: int = 0
         self.verified_at: str | None = None
 
     def install(self) -> None:
@@ -31,13 +52,16 @@ class OfflineSocketGuard:
             if isinstance(address, tuple) and len(address) >= 2:
                 host = str(address[0])
                 port = address[1]
-                if host not in LOOPBACK_HOSTS and not host.startswith("127."):
+                if not is_allowed_local_host(host):
                     attempt = f"{host}:{port}"
                     guard.blocked_attempts.append(attempt)
                     raise OSError(
                         f"[AIRPLANE_MODE_GUARD] Blocked external socket egress to {attempt}"
                     )
-                guard.loopback_connections += 1
+                if host.startswith("169.254.") or host.lower().startswith("fe80:"):
+                    guard.usb_tether_connections += 1
+                else:
+                    guard.loopback_connections += 1
             return orig(sock, address)
 
         socket.socket.connect = _guarded_connect  # type: ignore[assignment]
@@ -76,6 +100,8 @@ class OfflineSocketGuard:
             "external_egress_blocked": external_blocked,
             "blocked_external_attempts": len(self.blocked_attempts),
             "loopback_connections": self.loopback_connections,
+            "usb_tether_connections": self.usb_tether_connections,
+            "usb_tether_allowed": is_allowed_local_host("169.254.37.69"),
             "verified_at": self.verified_at,
         }
 

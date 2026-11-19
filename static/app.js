@@ -94,6 +94,33 @@ const MANUAL_PAGES = {
 
 const DIP_WEIGHTS = [128, 64, 32, 16, 8, 4, 2, 1];
 
+const CAMERA_MODE_LABELS = {
+  usb: 'Cam: Live USB (/dev/video0)',
+  ipad_camera: 'Cam: iPad Air M4 Camera (Live 30 FPS)',
+  sim_normal: 'Cam: Nominal Sensor Sim',
+  sim_open_dip: 'Cam: Open Housing DIP-8',
+  sim_hand_screwdriver: 'Cam: Hand + Screwdriver (Masked)',
+  sim_strainer_patch: 'Cam: Strainer Tip Fault',
+  sim_gland_fault: 'Cam: RS-485 Gland Fault',
+};
+
+function notifyNativeBridge(event, payload = {}) {
+  try {
+    const handler = window.webkit?.messageHandlers?.fieldscanNative;
+    if (handler && typeof handler.postMessage === 'function') {
+      handler.postMessage({
+        event,
+        timestamp: Date.now(),
+        ...payload,
+      });
+      return true;
+    }
+  } catch (_err) {
+    // Ignore when running outside native FieldScanM4 WKWebView
+  }
+  return false;
+}
+
 /* ==========================================================================
    APPLICATION STATE
    ========================================================================== */
@@ -1582,23 +1609,37 @@ function renderSpatialVisionHud(nowMs, dt) {
   if (dom.liveFeedProofText && dom.liveFeedProof) {
     const isOffline = Boolean(state.cameraOffline);
     const srcStr = String(v?.camera_source || '').toLowerCase();
-    const isUsb = !isOffline && (srcStr.startsWith('uvc:') || state.activeCameraMode === 'usb');
+    const isIpadCam =
+      !isOffline && (state.activeCameraMode === 'ipad_camera' || srcStr.includes('ipad'));
+    const isUsb =
+      !isOffline &&
+      (isIpadCam || srcStr.startsWith('uvc:') || state.activeCameraMode === 'usb');
     dom.liveFeedProof.classList.toggle('is-standby', isOffline || !isUsb);
     const resTag = fh >= 1000 ? '1080P' : `${fh}P`;
     const seqNum = v?.frame_seq ? ` #${v.frame_seq}` : '';
     dom.liveFeedProofText.textContent = isOffline
       ? 'USB STANDBY'
-      : isUsb
-        ? `LIVE ${resTag}${seqNum}`
-        : `SIM${seqNum}`;
+      : isIpadCam
+        ? `IPAD ${resTag}${seqNum}`
+        : isUsb
+          ? `LIVE ${resTag}${seqNum}`
+          : `SIM${seqNum}`;
   }
 
-  // Compute smooth 60 FPS Auto-Zoom & Pan onto detected TZ THT-02 sensor (or directly onto SW1 DIP-8 pins when open!)
+  // Compute smooth 60 FPS Auto-Zoom & Pan onto detected TZ THT-02 sensor (or keep full 1.0x HD wide view on handheld iPad M4)
+  const isHandheldIpadCamera = Boolean(
+    window.FIELDSCAN_IOS_NATIVE === true ||
+    state.activeCameraMode === 'ipad_camera' ||
+    String(v?.camera_source || '').toLowerCase().includes('ipad')
+  );
   const hasDipPinLock = Boolean(
-    v && v.detected && v.pcb_open_detected && Array.isArray(v.dip_focus_pt) && v.dip_focus_pt.length === 2
+    !isHandheldIpadCamera && v && v.detected && v.pcb_open_detected && Array.isArray(v.dip_focus_pt) && v.dip_focus_pt.length === 2
   );
   if (state.camZoomMode === 'auto') {
-    if (hasDipPinLock) {
+    if (isHandheldIpadCamera) {
+      state.camZoomTarget = 1.0;
+      state.camPanTarget = [0.5, 0.5];
+    } else if (hasDipPinLock) {
       state.lastLostSensorTs = 0;
       const pinCxStage = (offX + v.dip_focus_pt[0] * coverScale) / vw;
       const pinCyStage = (offY + v.dip_focus_pt[1] * coverScale) / vh;
@@ -2801,6 +2842,9 @@ function applyTelemetryPayload(data) {
   const camSrc = vision.camera_source || vision.sim_mode || state.activeCameraMode;
   const srcStr = String(camSrc).toLowerCase();
   const isUvcOffline = vision.sim_mode === 'uvc_offline' || srcStr.includes('offline');
+  const isIpadCam =
+    !isUvcOffline &&
+    (state.activeCameraMode === 'ipad_camera' || srcStr.includes('ipad'));
   const isRealUsb =
     !isUvcOffline &&
     (srcStr.startsWith('uvc:') || srcStr.includes('video') || camSrc === 'uvc' || camSrc === 'usb');
@@ -2810,11 +2854,13 @@ function applyTelemetryPayload(data) {
   }
   if (fps !== undefined) {
     dom.pillCamText.textContent = isUvcOffline ? 'STANDBY' : `${Number(fps).toFixed(0)} FPS`;
-    dom.camSourceBadge.textContent = isRealUsb
-      ? 'LIVE USB CAM'
-      : isUvcOffline
-        ? 'USB CAM STANDBY'
-        : String(camSrc).toUpperCase();
+    dom.camSourceBadge.textContent = isIpadCam
+      ? 'IPAD M4 CAM'
+      : isRealUsb
+        ? 'LIVE USB CAM'
+        : isUvcOffline
+          ? 'USB CAM STANDBY'
+          : String(camSrc).toUpperCase();
   }
 
   // Sync camera dropdown if changed externally
@@ -3066,12 +3112,226 @@ async function pollVisionSpatialTelemetry() {
   }
 }
 
+function applyUnifiedStatus(data) {
+  return applyTelemetryPayload(data);
+}
+
+/* ==========================================================================
+   LIVE IPAD AIR M4 CAMERA STREAMING (ipad_camera MODE -> POST /api/video/ipad_frame)
+   ========================================================================== */
+let ipadCamStream = null;
+let ipadCamVideoEl = null;
+let ipadCamOffscreenCanvas = null;
+let ipadCamLoopActive = false;
+let ipadCamFrameInFlight = false;
+let ipadCamTimerId = 0;
+let ipadCamUseRawBody = false;
+
+async function postIpadCameraFrameBlob(jpegBlob) {
+  if (!jpegBlob) return null;
+  const tryPost = async (useRaw) => {
+    if (useRaw) {
+      return fetch('/api/video/ipad_frame', {
+        method: 'POST',
+        headers: { 'Content-Type': 'image/jpeg' },
+        body: jpegBlob,
+      });
+    }
+    const fd = new FormData();
+    fd.append('file', jpegBlob, 'ipad_frame.jpg');
+    fd.append('image', jpegBlob, 'ipad_frame.jpg');
+    fd.append('frame', jpegBlob, 'ipad_frame.jpg');
+    return fetch('/api/video/ipad_frame', {
+      method: 'POST',
+      body: fd,
+    });
+  };
+
+  let resp = await tryPost(ipadCamUseRawBody);
+  if (resp.status === 415 || resp.status === 422 || resp.status === 400) {
+    ipadCamUseRawBody = !ipadCamUseRawBody;
+    resp = await tryPost(ipadCamUseRawBody);
+  }
+  if (resp.status === 404) {
+    const fdFallback = new FormData();
+    fdFallback.append('file', jpegBlob, 'ipad_frame.jpg');
+    fdFallback.append('image', jpegBlob, 'ipad_frame.jpg');
+    resp = await fetch('/api/video/upload', {
+      method: 'POST',
+      body: fdFallback,
+    });
+  }
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+function stopIpadCameraStream() {
+  ipadCamLoopActive = false;
+  ipadCamFrameInFlight = false;
+  if (ipadCamTimerId) {
+    clearTimeout(ipadCamTimerId);
+    ipadCamTimerId = 0;
+  }
+  if (ipadCamStream) {
+    try {
+      ipadCamStream.getTracks().forEach((track) => track.stop());
+    } catch (_e) {}
+    ipadCamStream = null;
+  }
+  if (ipadCamVideoEl) {
+    try {
+      ipadCamVideoEl.pause();
+      ipadCamVideoEl.srcObject = null;
+    } catch (_e) {}
+    ipadCamVideoEl = null;
+  }
+  notifyNativeBridge('ipad_camera_stopped', { mode: state.activeCameraMode });
+}
+
+async function startIpadCameraStream() {
+  stopIpadCameraStream();
+  ipadCamLoopActive = true;
+  notifyNativeBridge('ipad_camera_started', {
+    mode: 'ipad_camera',
+    label: CAMERA_MODE_LABELS.ipad_camera,
+    target_fps: 30,
+  });
+
+  if (window.FIELDSCAN_IOS_NATIVE) {
+    if (window.fieldscanNativeBridge && typeof window.fieldscanNativeBridge.startNativeCamera === 'function') {
+      window.fieldscanNativeBridge.startNativeCamera('back');
+    }
+    return;
+  }
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return;
+  }
+
+  try {
+    try {
+      ipadCamStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 },
+        },
+        audio: false,
+      });
+    } catch (_constraintErr) {
+      ipadCamStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+    }
+
+    if (!ipadCamLoopActive || state.activeCameraMode !== 'ipad_camera') {
+      stopIpadCameraStream();
+      return;
+    }
+
+    const video = document.createElement('video');
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
+    video.muted = true;
+    video.autoplay = true;
+    video.srcObject = ipadCamStream;
+    ipadCamVideoEl = video;
+    await video.play().catch(() => {});
+
+    if (!ipadCamOffscreenCanvas) {
+      ipadCamOffscreenCanvas = document.createElement('canvas');
+      ipadCamOffscreenCanvas.width = 960;
+      ipadCamOffscreenCanvas.height = 540;
+    }
+
+    const pumpIpadFrame = () => {
+      if (!ipadCamLoopActive || state.activeCameraMode !== 'ipad_camera' || !ipadCamVideoEl) {
+        return;
+      }
+      if (ipadCamFrameInFlight || ipadCamVideoEl.readyState < 2) {
+        ipadCamTimerId = window.setTimeout(pumpIpadFrame, 45);
+        return;
+      }
+
+      const vw = ipadCamVideoEl.videoWidth || 1280;
+      const vh = ipadCamVideoEl.videoHeight || 720;
+      const targetW = vw >= 1280 ? 960 : Math.max(640, vw);
+      const targetH = Math.round((targetW * vh) / Math.max(1, vw));
+      if (
+        ipadCamOffscreenCanvas.width !== targetW ||
+        ipadCamOffscreenCanvas.height !== targetH
+      ) {
+        ipadCamOffscreenCanvas.width = targetW;
+        ipadCamOffscreenCanvas.height = targetH;
+      }
+
+      const ctx = ipadCamOffscreenCanvas.getContext('2d');
+      ctx.drawImage(ipadCamVideoEl, 0, 0, targetW, targetH);
+
+      if (dom.videoFallbackCanvas && state.videoStreamFailed) {
+        const fbCtx = dom.videoFallbackCanvas.getContext('2d');
+        fbCtx.drawImage(
+          ipadCamOffscreenCanvas,
+          0,
+          0,
+          dom.videoFallbackCanvas.width,
+          dom.videoFallbackCanvas.height
+        );
+        state.hasLiveSnapshotFallback = true;
+      }
+
+      ipadCamFrameInFlight = true;
+      ipadCamOffscreenCanvas.toBlob(
+        async (blob) => {
+          try {
+            if (blob && ipadCamLoopActive && state.activeCameraMode === 'ipad_camera') {
+              const statusData = await postIpadCameraFrameBlob(blob);
+              if (statusData) {
+                applyUnifiedStatus(statusData);
+              }
+            }
+          } catch (_postErr) {
+            // Next frame will retry automatically
+          } finally {
+            ipadCamFrameInFlight = false;
+            if (ipadCamLoopActive && state.activeCameraMode === 'ipad_camera') {
+              ipadCamTimerId = window.setTimeout(pumpIpadFrame, 55);
+            }
+          }
+        },
+        'image/jpeg',
+        0.82
+      );
+    };
+
+    pumpIpadFrame();
+  } catch (err) {
+    appendChatMessage({
+      role: 'assistant',
+      author: 'IPAD M4 CAMERA',
+      text: `iPad camera capture awaiting permission (${err.message || 'camera access'}).`,
+    });
+  }
+}
+
 /* ==========================================================================
    CAMERA & MODBUS BENCH MODE SELECTORS
    ========================================================================== */
 async function switchCameraMode(mode) {
+  const prevMode = state.activeCameraMode;
   state.activeCameraMode = mode;
   state.lastDiagnosisFaultLock = false;
+
+  if (prevMode === 'ipad_camera' && mode !== 'ipad_camera') {
+    stopIpadCameraStream();
+  }
+
+  notifyNativeBridge('camera_mode_changed', {
+    mode,
+    label: CAMERA_MODE_LABELS[mode] || mode,
+  });
 
   if (mode === 'sim_open_dip' || mode === 'sim_hand_screwdriver') {
     state.dipPipDismissed = false;
@@ -3083,7 +3343,7 @@ async function switchCameraMode(mode) {
         : 'Open housing detected exposing internal SW1 DIP-8 block.'
     );
     setManualPage(5, { flash: true });
-  } else if (mode === 'sim_normal' || mode === 'usb') {
+  } else if (mode === 'sim_normal' || mode === 'usb' || mode === 'ipad_camera') {
     setExplodedState(false);
     setFaultHighlight(null);
     reset3DCamera();
@@ -3106,13 +3366,17 @@ async function switchCameraMode(mode) {
         body: JSON.stringify({ mode }),
       }
     );
-    applyTelemetryPayload(res);
+    applyUnifiedStatus(res);
     state.videoStreamFailed = false;
     dom.videoFallbackCanvas.hidden = true;
     dom.videoStream.hidden = false;
     dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
   } catch (_err) {
     drawFallbackScannerFrame();
+  }
+
+  if (mode === 'ipad_camera') {
+    await startIpadCameraStream();
   }
 }
 
@@ -3413,7 +3677,7 @@ function handleCopilotResponse(res) {
     populateEscalationModal(res.signoff_package);
   }
 
-  if (state.autoSpeak) {
+  if (state.autoSpeak && !window.FIELDSCAN_IOS_NATIVE) {
     playDiagnosisAudio(audioB64, answerText);
   }
 }
@@ -3597,10 +3861,96 @@ async function submitDiagnosisQuery(queryText, { includeCamera = true, zoneHint 
 }
 
 /* ==========================================================================
-   PUSH-TO-SPEAK + CONTINUOUS HANDS-FREE VAD (LFM3-Audio-2B -> POST /api/voice)
+   DIRECT 16 kHz 16-BIT MONO PCM WAV WEBAUDIO RECORDER (ZERO FFMPEG REQUIRED)
+   + PUSH-TO-SPEAK + CONTINUOUS HANDS-FREE VAD (LFM3-Audio-2B -> POST /api/voice)
    ========================================================================== */
+function encodeFloat32To16kHzWavBlob(float32Chunks, inputSampleRate = 48000) {
+  const chunks = Array.isArray(float32Chunks)
+    ? float32Chunks
+    : float32Chunks instanceof Float32Array
+      ? [float32Chunks]
+      : [];
+
+  let totalInputSamples = 0;
+  for (let i = 0; i < chunks.length; i += 1) {
+    if (chunks[i] && chunks[i].length) {
+      totalInputSamples += chunks[i].length;
+    }
+  }
+
+  const merged = new Float32Array(totalInputSamples);
+  let writeOffset = 0;
+  for (let i = 0; i < chunks.length; i += 1) {
+    const c = chunks[i];
+    if (c && c.length) {
+      merged.set(c, writeOffset);
+      writeOffset += c.length;
+    }
+  }
+
+  const targetSampleRate = 16000;
+  const inRate = Math.max(8000, Number(inputSampleRate) || 48000);
+  let resampled;
+
+  if (totalInputSamples === 0) {
+    resampled = new Float32Array(0);
+  } else if (Math.abs(inRate - targetSampleRate) < 1) {
+    resampled = merged;
+  } else {
+    const ratio = inRate / targetSampleRate;
+    const outLength = Math.max(1, Math.round(totalInputSamples / ratio));
+    resampled = new Float32Array(outLength);
+    for (let i = 0; i < outLength; i += 1) {
+      const srcPos = i * ratio;
+      const idx0 = Math.floor(srcPos);
+      const idx1 = Math.min(totalInputSamples - 1, idx0 + 1);
+      const frac = srcPos - idx0;
+      resampled[i] = merged[idx0] * (1 - frac) + merged[idx1] * frac;
+    }
+  }
+
+  const numSamples = resampled.length;
+  const dataByteLen = numSamples * 2;
+  const wavBuffer = new ArrayBuffer(44 + dataByteLen);
+  const view = new DataView(wavBuffer);
+
+  const writeAscii = (byteOffset, str) => {
+    for (let i = 0; i < str.length; i += 1) {
+      view.setUint8(byteOffset + i, str.charCodeAt(i));
+    }
+  };
+
+  // Standard 44-byte RIFF WAVEfmt header (16000 Hz, 1 channel mono, 16-bit PCM)
+  writeAscii(0, 'RIFF');
+  view.setUint32(4, 36 + dataByteLen, true);
+  writeAscii(8, 'WAVE');
+  writeAscii(12, 'fmt ');
+  view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
+  view.setUint16(20, 1, true); // AudioFormat (1 = Linear PCM)
+  view.setUint16(22, 1, true); // NumChannels (1 = Mono)
+  view.setUint32(24, targetSampleRate, true); // SampleRate (16000 Hz)
+  view.setUint32(28, targetSampleRate * 2, true); // ByteRate (16000 * 1 * 2)
+  view.setUint16(32, 2, true); // BlockAlign (1 * 2)
+  view.setUint16(34, 16, true); // BitsPerSample (16)
+  writeAscii(36, 'data');
+  view.setUint32(40, dataByteLen, true);
+
+  let pcmOffset = 44;
+  for (let i = 0; i < numSamples; i += 1) {
+    const clamped = Math.max(-1, Math.min(1, resampled[i] || 0));
+    const int16 = clamped < 0 ? Math.round(clamped * 0x8000) : Math.round(clamped * 0x7fff);
+    view.setInt16(pcmOffset, int16, true);
+    pcmOffset += 2;
+  }
+
+  return new Blob([wavBuffer], { type: 'audio/wav' });
+}
+
 let mediaRecorder = null;
 let audioChunks = [];
+let pcmFloatChunks = [];
+let pcmScriptProcessor = null;
+let pcmSilentGain = null;
 let audioStream = null;
 let audioCtx = null;
 let meterRaf = 0;
@@ -3608,6 +3958,10 @@ let meterRaf = 0;
 let hfStream = null;
 let hfAudioCtx = null;
 let hfAnalyser = null;
+let hfScriptProcessor = null;
+let hfSilentGain = null;
+let hfPcmChunks = [];
+let hfPreRollChunks = [];
 let hfRaf = 0;
 let hfRecorder = null;
 let hfChunks = [];
@@ -3616,19 +3970,90 @@ let hfSpeechStartTs = 0;
 let hfAboveSinceTs = 0;
 let hfLastVoiceTs = 0;
 let hfNoiseFloor = 0.008;
+let nativeHfPollTimer = null;
+let nativeHfPollInFlight = false;
 
 function syncMicDeckIdleUi() {
   if (state.handsFreeEnabled) {
     dom.btnVoiceRecord.classList.remove('recording');
     dom.btnVoiceRecord.classList.add('handsfree-listening');
     dom.pttLabel.textContent = 'Hands-Free Live Mic Active';
-    dom.pttSubLabel.textContent = 'Speak anytime in English · Auto-pauses during AI voice';
+    dom.pttSubLabel.textContent = 'Speak anytime · Auto-sends when you pause speaking';
     dom.voiceMeter.hidden = false;
   } else {
     dom.btnVoiceRecord.classList.remove('recording', 'handsfree-listening');
     dom.pttLabel.textContent = 'Push to Speak to AI Engineer';
     dom.pttSubLabel.textContent = 'Offline LFM3-Audio-2B · Click to Record (or enable Hands-Free)';
     dom.voiceMeter.hidden = true;
+  }
+}
+
+async function startNativeIosHandsFreeMode() {
+  try {
+    const resp = await fetch('/api/voice/handsfree_start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dip_address: computeDipAddress() }),
+    });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    state.handsFreeEnabled = true;
+    state.usingNativeHandsFree = true;
+    if (dom.btnHandsFreeMic) dom.btnHandsFreeMic.classList.add('active');
+    if (dom.handsFreeText) dom.handsFreeText.textContent = 'Hands-Free: LIVE';
+    syncMicDeckIdleUi();
+
+    if (nativeHfPollTimer) {
+      clearInterval(nativeHfPollTimer);
+    }
+    nativeHfPollTimer = setInterval(async () => {
+      if (!state.handsFreeEnabled || !state.usingNativeHandsFree || nativeHfPollInFlight) {
+        return;
+      }
+      nativeHfPollInFlight = true;
+      try {
+        const pollResp = await fetch('/api/voice/handsfree_poll');
+        if (!pollResp.ok) return;
+        const data = await pollResp.json();
+        if (!state.handsFreeEnabled) return;
+
+        dom.voiceMeterFill.style.width = `${data.rms_pct || 8}%`;
+
+        if (data.ai_speaking) {
+          dom.btnVoiceRecord.classList.remove('recording');
+          dom.btnVoiceRecord.classList.add('handsfree-listening');
+          dom.pttLabel.textContent = 'AI Speaking · Mic Paused (Echo Guard)';
+          dom.pttSubLabel.textContent = 'Hands-Free Live Voice · Resumes automatically after reply';
+        } else if (data.partial_transcript && data.partial_transcript.trim().length > 0) {
+          dom.btnVoiceRecord.classList.remove('handsfree-listening');
+          dom.btnVoiceRecord.classList.add('recording');
+          dom.pttLabel.textContent = `Listening: "${data.partial_transcript}"`;
+          dom.pttSubLabel.textContent = 'Pause speaking to send automatically to FieldScan AI';
+        } else {
+          syncMicDeckIdleUi();
+        }
+
+        if (data.completed_turn && typeof data.completed_turn === 'object') {
+          const turn = data.completed_turn;
+          if (turn.transcript) {
+            appendChatMessage({
+              role: 'user',
+              author: 'FIELD OPERATOR (LIVE VOICE)',
+              text: turn.transcript,
+            });
+          }
+          handleCopilotResponse(turn);
+        }
+      } catch (_err) {
+        // Ignore transient poll errors
+      } finally {
+        nativeHfPollInFlight = false;
+      }
+    }, 220);
+    return true;
+  } catch (_err) {
+    return false;
   }
 }
 
@@ -3640,12 +4065,16 @@ async function toggleHandsFreeMode() {
   if (state.isRecording) {
     stopVoiceRecording();
   }
-  if (!navigator.mediaDevices?.getUserMedia) {
-    appendChatMessage({
-      role: 'assistant',
-      author: 'AUDIO INTERFACE',
-      text: 'Browser microphone capture is unavailable in this context; use the English prompt bar below.',
-    });
+
+  if (window.FIELDSCAN_IOS_NATIVE === true || !navigator.mediaDevices?.getUserMedia) {
+    const ok = await startNativeIosHandsFreeMode();
+    if (!ok) {
+      appendChatMessage({
+        role: 'assistant',
+        author: 'AUDIO INTERFACE',
+        text: 'Could not start native Hands-Free microphone; use Push-to-Speak or the prompt bar below.',
+      });
+    }
     return;
   }
 
@@ -3657,12 +4086,39 @@ async function toggleHandsFreeMode() {
         autoGainControl: true,
       },
     });
-    hfAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+    hfAudioCtx = new AudioCtxClass();
+    if (hfAudioCtx.state === 'suspended') {
+      await hfAudioCtx.resume().catch(() => {});
+    }
     const src = hfAudioCtx.createMediaStreamSource(hfStream);
     hfAnalyser = hfAudioCtx.createAnalyser();
     hfAnalyser.fftSize = 512;
     src.connect(hfAnalyser);
     const pcmBuf = new Float32Array(hfAnalyser.fftSize);
+
+    hfPcmChunks = [];
+    hfPreRollChunks = [];
+    if (typeof hfAudioCtx.createScriptProcessor === 'function') {
+      hfScriptProcessor = hfAudioCtx.createScriptProcessor(4096, 1, 1);
+      hfSilentGain = hfAudioCtx.createGain();
+      hfSilentGain.gain.value = 0;
+      src.connect(hfScriptProcessor);
+      hfScriptProcessor.connect(hfSilentGain);
+      hfSilentGain.connect(hfAudioCtx.destination);
+      hfScriptProcessor.onaudioprocess = (ev) => {
+        if (!state.handsFreeEnabled) return;
+        const copy = new Float32Array(ev.inputBuffer.getChannelData(0));
+        if (hfSpeechActive) {
+          hfPcmChunks.push(copy);
+        } else {
+          hfPreRollChunks.push(copy);
+          if (hfPreRollChunks.length > 2) {
+            hfPreRollChunks.shift();
+          }
+        }
+      };
+    }
 
     state.handsFreeEnabled = true;
     hfSpeechActive = false;
@@ -3674,38 +4130,66 @@ async function toggleHandsFreeMode() {
 
     const startHfUtterance = (now) => {
       if (!hfStream || hfSpeechActive) return;
-      hfChunks = [];
-      hfRecorder = new MediaRecorder(hfStream);
-      hfRecorder.addEventListener('dataavailable', (ev) => {
-        if (ev.data && ev.data.size > 0) hfChunks.push(ev.data);
-      });
-      hfRecorder.addEventListener('stop', async () => {
-        const durMs = Date.now() - hfSpeechStartTs;
-        const mimeType = hfRecorder?.mimeType || 'audio/webm';
-        const blob = new Blob(hfChunks, { type: mimeType });
-        hfChunks = [];
-        if (!state.handsFreeEnabled || durMs < 400 || blob.size < 900) {
-          if (state.handsFreeEnabled) syncMicDeckIdleUi();
-          return;
-        }
-        await sendVoiceBlob(blob, { handsFree: true });
-        if (state.handsFreeEnabled) syncMicDeckIdleUi();
-      });
       hfSpeechActive = true;
       hfSpeechStartTs = now;
       hfLastVoiceTs = now;
+      hfPcmChunks = hfPreRollChunks.slice();
+      hfPreRollChunks = [];
+
+      if (!hfScriptProcessor && typeof MediaRecorder !== 'undefined') {
+        hfChunks = [];
+        hfRecorder = new MediaRecorder(hfStream);
+        hfRecorder.addEventListener('dataavailable', (ev) => {
+          if (ev.data && ev.data.size > 0) hfChunks.push(ev.data);
+        });
+        hfRecorder.addEventListener('stop', async () => {
+          const durMs = Date.now() - hfSpeechStartTs;
+          const mimeType = hfRecorder?.mimeType || 'audio/webm';
+          const blob = new Blob(hfChunks, { type: mimeType });
+          hfChunks = [];
+          if (!state.handsFreeEnabled || durMs < 400 || blob.size < 900) {
+            if (state.handsFreeEnabled) syncMicDeckIdleUi();
+            return;
+          }
+          await sendVoiceBlob(blob, { handsFree: true });
+          if (state.handsFreeEnabled) syncMicDeckIdleUi();
+        });
+        hfRecorder.start();
+      }
+
       dom.btnVoiceRecord.classList.remove('handsfree-listening');
       dom.btnVoiceRecord.classList.add('recording');
       dom.pttLabel.textContent = 'Listening to You... (Auto-Send on Pause)';
-      dom.pttSubLabel.textContent = 'Hands-Free VAD · Offline LFM3-Audio-2B';
-      hfRecorder.start();
+      dom.pttSubLabel.textContent = 'Hands-Free VAD · 16 kHz PCM WAV -> LFM3-Audio-2B';
     };
 
-    const stopHfUtterance = () => {
+    const stopHfUtterance = async () => {
       if (!hfSpeechActive) return;
       hfSpeechActive = false;
       hfAboveSinceTs = 0;
+      const durMs = Date.now() - hfSpeechStartTs;
       dom.btnVoiceRecord.classList.remove('recording');
+
+      if (hfScriptProcessor) {
+        const captured = hfPcmChunks;
+        hfPcmChunks = [];
+        if (!state.handsFreeEnabled || durMs < 360 || captured.length === 0) {
+          if (state.handsFreeEnabled) syncMicDeckIdleUi();
+          return;
+        }
+        const wavBlob = encodeFloat32To16kHzWavBlob(
+          captured,
+          hfAudioCtx?.sampleRate || 48000
+        );
+        if (wavBlob.size < 900) {
+          if (state.handsFreeEnabled) syncMicDeckIdleUi();
+          return;
+        }
+        await sendVoiceBlob(wavBlob, { handsFree: true, filename: 'speech.wav' });
+        if (state.handsFreeEnabled) syncMicDeckIdleUi();
+        return;
+      }
+
       if (hfRecorder && hfRecorder.state !== 'inactive') {
         hfRecorder.stop();
       }
@@ -3780,11 +4264,36 @@ async function toggleHandsFreeMode() {
 }
 
 function disableHandsFreeMode() {
+  const wasNativeHandsFree = Boolean(state.usingNativeHandsFree);
   state.handsFreeEnabled = false;
+  state.usingNativeHandsFree = false;
+  if (nativeHfPollTimer) {
+    clearInterval(nativeHfPollTimer);
+    nativeHfPollTimer = null;
+  }
+  nativeHfPollInFlight = false;
+  if (wasNativeHandsFree || window.FIELDSCAN_IOS_NATIVE === true) {
+    fetch('/api/voice/handsfree_stop', { method: 'POST' }).catch(() => {});
+  }
   hfSpeechActive = false;
   hfAboveSinceTs = 0;
+  hfPcmChunks = [];
+  hfPreRollChunks = [];
   if (hfRaf) cancelAnimationFrame(hfRaf);
   hfRaf = 0;
+  if (hfScriptProcessor) {
+    try {
+      hfScriptProcessor.onaudioprocess = null;
+      hfScriptProcessor.disconnect();
+    } catch (_e) {}
+    hfScriptProcessor = null;
+  }
+  if (hfSilentGain) {
+    try {
+      hfSilentGain.disconnect();
+    } catch (_e) {}
+    hfSilentGain = null;
+  }
   if (hfRecorder && hfRecorder.state !== 'inactive') {
     try {
       hfSpeechStartTs = Date.now(); // Skip sending partial audio when turning off
@@ -3806,6 +4315,73 @@ function disableHandsFreeMode() {
   syncMicDeckIdleUi();
 }
 
+async function startNativeIosMicRecording() {
+  try {
+    const resp = await fetch('/api/voice/native_start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dip_address: computeDipAddress() }),
+    });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    state.isRecording = true;
+    state.usingNativeIosMic = true;
+    dom.btnVoiceRecord.classList.add('recording');
+    dom.pttLabel.textContent = 'Recording on iPad M4... Tap to Send';
+    dom.pttSubLabel.textContent = '16 kHz Native Mic -> On-Device ASR & LFM3';
+    dom.voiceMeter.hidden = false;
+
+    const animateNativeMeter = () => {
+      if (!state.isRecording || !state.usingNativeIosMic) return;
+      const pct = 28 + Math.round(45 * Math.abs(Math.sin(performance.now() * 0.008)));
+      dom.voiceMeterFill.style.width = `${pct}%`;
+      meterRaf = requestAnimationFrame(animateNativeMeter);
+    };
+    animateNativeMeter();
+    return true;
+  } catch (_err) {
+    return false;
+  }
+}
+
+async function stopNativeIosMicRecording() {
+  state.usingNativeIosMic = false;
+  state.voiceRequestInFlight = true;
+  dom.pttLabel.textContent = 'Transcribing & Diagnosing...';
+  dom.pttSubLabel.textContent = 'Running On-Device ASR + FieldScan AI...';
+  setThinkingState(true, 'Transcribing voice & inspecting sensor on iPad M4...');
+  try {
+    const resp = await fetch('/api/voice/native_stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dip_address: computeDipAddress() }),
+    });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    const data = await resp.json();
+    if (data.transcript) {
+      appendChatMessage({
+        role: 'user',
+        author: 'FIELD OPERATOR (VOICE)',
+        text: data.transcript,
+      });
+    }
+    handleCopilotResponse(data);
+  } catch (err) {
+    appendChatMessage({
+      role: 'assistant',
+      author: 'VOICE PIPELINE',
+      text: `Voice processing note: ${err.message}`,
+    });
+  } finally {
+    state.voiceRequestInFlight = false;
+    setThinkingState(false);
+    syncMicDeckIdleUi();
+  }
+}
+
 async function toggleVoiceRecording() {
   if (state.handsFreeEnabled) {
     disableHandsFreeMode();
@@ -3817,62 +4393,104 @@ async function toggleVoiceRecording() {
 
   stopActiveTtsPlayback();
 
-  if (!navigator.mediaDevices?.getUserMedia) {
-    appendChatMessage({
-      role: 'assistant',
-      author: 'AUDIO INTERFACE',
-      text: 'Browser microphone capture is unavailable in this context; use the prompt bar or the 4 color-coded workflow buttons above.',
-    });
+  if (window.FIELDSCAN_IOS_NATIVE || !navigator.mediaDevices?.getUserMedia) {
+    const ok = await startNativeIosMicRecording();
+    if (!ok) {
+      appendChatMessage({
+        role: 'assistant',
+        author: 'AUDIO INTERFACE',
+        text: 'Microphone capture is unavailable; use the prompt bar or the 4 color-coded workflow buttons above.',
+      });
+    }
     return;
   }
 
   try {
     audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioChunks = [];
-    mediaRecorder = new MediaRecorder(audioStream);
+    pcmFloatChunks = [];
 
-    mediaRecorder.addEventListener('dataavailable', (e) => {
-      if (e.data && e.data.size > 0) audioChunks.push(e.data);
-    });
+    const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioCtxClass) {
+      audioCtx = new AudioCtxClass();
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume().catch(() => {});
+      }
+      const source = audioCtx.createMediaStreamSource(audioStream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
 
-    mediaRecorder.addEventListener('stop', async () => {
-      const mimeType = mediaRecorder.mimeType || 'audio/webm';
-      const blob = new Blob(audioChunks, { type: mimeType });
-      cleanupAudioStream();
-      await sendVoiceBlob(blob, { handsFree: false });
-    });
+      if (typeof audioCtx.createScriptProcessor === 'function') {
+        pcmScriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+        pcmSilentGain = audioCtx.createGain();
+        pcmSilentGain.gain.value = 0;
+        source.connect(pcmScriptProcessor);
+        pcmScriptProcessor.connect(pcmSilentGain);
+        pcmSilentGain.connect(audioCtx.destination);
+        pcmScriptProcessor.onaudioprocess = (ev) => {
+          if (!state.isRecording) return;
+          pcmFloatChunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+        };
+      } else if (typeof MediaRecorder !== 'undefined') {
+        mediaRecorder = new MediaRecorder(audioStream);
+        mediaRecorder.addEventListener('dataavailable', (e) => {
+          if (e.data && e.data.size > 0) audioChunks.push(e.data);
+        });
+        mediaRecorder.addEventListener('stop', async () => {
+          const mimeType = mediaRecorder.mimeType || 'audio/webm';
+          const blob = new Blob(audioChunks, { type: mimeType });
+          cleanupAudioStream();
+          await sendVoiceBlob(blob, { handsFree: false });
+        });
+        mediaRecorder.start();
+      }
 
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = audioCtx.createMediaStreamSource(audioStream);
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 256;
-    source.connect(analyser);
-    const dataArr = new Uint8Array(analyser.frequencyBinCount);
+      const dataArr = new Uint8Array(analyser.frequencyBinCount);
+      const updateMeter = () => {
+        if (!state.isRecording) return;
+        analyser.getByteFrequencyData(dataArr);
+        let sum = 0;
+        for (let i = 0; i < dataArr.length; i++) sum += dataArr[i];
+        const avg = sum / dataArr.length;
+        const pct = Math.min(100, Math.max(8, (avg / 105) * 100));
+        dom.voiceMeterFill.style.width = `${pct}%`;
+        meterRaf = requestAnimationFrame(updateMeter);
+      };
 
-    const updateMeter = () => {
-      if (!state.isRecording) return;
-      analyser.getByteFrequencyData(dataArr);
-      let sum = 0;
-      for (let i = 0; i < dataArr.length; i++) sum += dataArr[i];
-      const avg = sum / dataArr.length;
-      const pct = Math.min(100, Math.max(8, (avg / 105) * 100));
-      dom.voiceMeterFill.style.width = `${pct}%`;
-      meterRaf = requestAnimationFrame(updateMeter);
-    };
-
-    state.isRecording = true;
-    dom.btnVoiceRecord.classList.add('recording');
-    dom.pttLabel.textContent = 'Recording... Click to Send';
-    dom.pttSubLabel.textContent = 'Streaming to Offline LFM3-Audio-2B';
-    dom.voiceMeter.hidden = false;
-    mediaRecorder.start();
-    updateMeter();
+      state.isRecording = true;
+      dom.btnVoiceRecord.classList.add('recording');
+      dom.pttLabel.textContent = 'Recording... Click to Send';
+      dom.pttSubLabel.textContent = '16 kHz PCM WAV -> Offline LFM3-Audio-2B';
+      dom.voiceMeter.hidden = false;
+      updateMeter();
+    } else if (typeof MediaRecorder !== 'undefined') {
+      mediaRecorder = new MediaRecorder(audioStream);
+      mediaRecorder.addEventListener('dataavailable', (e) => {
+        if (e.data && e.data.size > 0) audioChunks.push(e.data);
+      });
+      mediaRecorder.addEventListener('stop', async () => {
+        const mimeType = mediaRecorder.mimeType || 'audio/webm';
+        const blob = new Blob(audioChunks, { type: mimeType });
+        cleanupAudioStream();
+        await sendVoiceBlob(blob, { handsFree: false });
+      });
+      state.isRecording = true;
+      dom.btnVoiceRecord.classList.add('recording');
+      dom.pttLabel.textContent = 'Recording... Click to Send';
+      dom.pttSubLabel.textContent = 'Streaming to Offline LFM3-Audio-2B';
+      dom.voiceMeter.hidden = false;
+      mediaRecorder.start();
+    }
   } catch (err) {
-    appendChatMessage({
-      role: 'assistant',
-      author: 'AUDIO PERMISSIONS',
-      text: `Could not open local microphone (${err.message}). Check browser audio permissions or type your command below.`,
-    });
+    const okNative = await startNativeIosMicRecording();
+    if (!okNative) {
+      appendChatMessage({
+        role: 'assistant',
+        author: 'AUDIO PERMISSIONS',
+        text: `Could not open local microphone (${err.message}). Check browser audio permissions or type your command below.`,
+      });
+    }
   }
 }
 
@@ -3881,12 +4499,41 @@ function stopVoiceRecording() {
   state.isRecording = false;
   syncMicDeckIdleUi();
   if (meterRaf) cancelAnimationFrame(meterRaf);
+
+  if (state.usingNativeIosMic) {
+    stopNativeIosMicRecording();
+    return;
+  }
+
+  if (pcmScriptProcessor) {
+    const sampleRate = audioCtx?.sampleRate || 48000;
+    const capturedChunks = pcmFloatChunks;
+    pcmFloatChunks = [];
+    const wavBlob = encodeFloat32To16kHzWavBlob(capturedChunks, sampleRate);
+    cleanupAudioStream();
+    sendVoiceBlob(wavBlob, { handsFree: false, filename: 'speech.wav' });
+    return;
+  }
+
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
   }
 }
 
 function cleanupAudioStream() {
+  if (pcmScriptProcessor) {
+    try {
+      pcmScriptProcessor.onaudioprocess = null;
+      pcmScriptProcessor.disconnect();
+    } catch (_e) {}
+    pcmScriptProcessor = null;
+  }
+  if (pcmSilentGain) {
+    try {
+      pcmSilentGain.disconnect();
+    } catch (_e) {}
+    pcmSilentGain = null;
+  }
   if (audioStream) {
     audioStream.getTracks().forEach((t) => t.stop());
     audioStream = null;
@@ -3897,11 +4544,13 @@ function cleanupAudioStream() {
   }
 }
 
-async function sendVoiceBlob(blob, { handsFree = false } = {}) {
+async function sendVoiceBlob(blob, { handsFree = false, filename = null } = {}) {
   state.voiceRequestInFlight = true;
+  const uploadName =
+    filename || (blob?.type === 'audio/wav' ? 'speech.wav' : 'field_query.webm');
   const formData = new FormData();
-  formData.append('audio', blob, 'field_query.webm');
-  formData.append('file', blob, 'field_query.webm');
+  formData.append('audio', blob, uploadName);
+  formData.append('file', blob, uploadName);
   formData.append('include_camera', 'true');
   formData.append('dip_address', String(computeDipAddress()));
   formData.append('hands_free', handsFree ? 'true' : 'false');
@@ -3949,6 +4598,11 @@ async function sendVoiceBlob(blob, { handsFree = false } = {}) {
    AUTOCAD (.DXF), 3D SOLID (.STL) & 4-ANGLE SIGN-OFF DOSSIER (.ZIP / .EML)
    ========================================================================== */
 function triggerBlobDownload(blob, filename) {
+  notifyNativeBridge('cad_export_ready', {
+    filename,
+    mime_type: blob?.type || 'application/octet-stream',
+    size_bytes: blob?.size || 0,
+  });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -4184,6 +4838,17 @@ function populateEscalationModal(pkg) {
   };
 
   dom.escQueueTag.textContent = 'Sign-Off Ready';
+
+  notifyNativeBridge('signoff_bundle_ready', {
+    package_id: pkg.package_id || 'OUTBOX',
+    zip_url: zipUrl,
+    dxf_url: dxfUrl,
+    stl_url: stlUrl,
+    eml_url: emlUrl,
+    quad_3d_url: quadUrl,
+    strip_url: stripUrl,
+    outbox_path: pkg.outbox_path || pkg.zip_path || null,
+  });
 
   if (zipUrl) {
     dom.escZipDownloadLink.href = zipUrl;
@@ -4593,6 +5258,12 @@ function bootstrap() {
   pollVisionSpatialTelemetry();
   setInterval(pollTelemetry, 650);
   setInterval(pollVisionSpatialTelemetry, 115);
+
+  window.encodeFloat32To16kHzWavBlob = encodeFloat32To16kHzWavBlob;
+  window.startIpadCameraStream = startIpadCameraStream;
+  window.stopIpadCameraStream = stopIpadCameraStream;
+  window.applyUnifiedStatus = applyUnifiedStatus;
+  window.notifyNativeBridge = notifyNativeBridge;
 }
 
 bootstrap();

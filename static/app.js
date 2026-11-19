@@ -4059,16 +4059,42 @@ function syncMicDeckIdleUi() {
   }
 }
 
+async function fetchNativeVoiceWithTimeout(url, options = {}, timeoutMs = 2200) {
+  const ctrl = new AbortController();
+  const timerId = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timerId);
+  }
+}
+
 async function startNativeIosHandsFreeMode() {
   try {
-    const resp = await fetch('/api/voice/handsfree_start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dip_address: computeDipAddress() }),
-    });
+    const resp = await fetchNativeVoiceWithTimeout(
+      '/api/voice/handsfree_start',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dip_address: computeDipAddress() }),
+      },
+      2500
+    );
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
     }
+    const startData = await resp.json().catch(() => ({}));
+    if (startData.status === 'permission_denied' || startData.active === false) {
+      appendChatMessage({
+        role: 'assistant',
+        author: 'AUDIO INTERFACE',
+        text:
+          startData.message ||
+          'Microphone or Speech Recognition permission is turned off in iPadOS Settings > Privacy & Security. Use Push-to-Speak or touch controls until enabled.',
+      });
+      return false;
+    }
+
     state.handsFreeEnabled = true;
     state.usingNativeHandsFree = true;
     if (dom.btnHandsFreeMic) dom.btnHandsFreeMic.classList.add('active');
@@ -4084,10 +4110,20 @@ async function startNativeIosHandsFreeMode() {
       }
       nativeHfPollInFlight = true;
       try {
-        const pollResp = await fetch('/api/voice/handsfree_poll');
+        const pollResp = await fetchNativeVoiceWithTimeout('/api/voice/handsfree_poll', {}, 1800);
         if (!pollResp.ok) return;
         const data = await pollResp.json();
         if (!state.handsFreeEnabled) return;
+
+        if (data.permission_state === 'denied') {
+          disableHandsFreeMode();
+          appendChatMessage({
+            role: 'assistant',
+            author: 'AUDIO INTERFACE',
+            text: 'Microphone or Speech Recognition permission was denied on iPadOS. Enable it in Settings > Privacy & Security or use touch/text controls.',
+          });
+          return;
+        }
 
         dom.voiceMeterFill.style.width = `${data.rms_pct || 8}%`;
 
@@ -4117,11 +4153,11 @@ async function startNativeIosHandsFreeMode() {
           handleCopilotResponse(turn);
         }
       } catch (_err) {
-        // Ignore transient poll errors
+        // Ignore transient poll errors or AbortController timeouts
       } finally {
         nativeHfPollInFlight = false;
       }
-    }, 220);
+    }, 260);
     return true;
   } catch (_err) {
     return false;
@@ -4344,7 +4380,7 @@ function disableHandsFreeMode() {
   }
   nativeHfPollInFlight = false;
   if (wasNativeHandsFree || window.FIELDSCAN_IOS_NATIVE === true) {
-    fetch('/api/voice/handsfree_stop', { method: 'POST' }).catch(() => {});
+    fetchNativeVoiceWithTimeout('/api/voice/handsfree_stop', { method: 'POST' }, 1500).catch(() => {});
   }
   hfSpeechActive = false;
   hfAboveSinceTs = 0;
@@ -4388,13 +4424,26 @@ function disableHandsFreeMode() {
 
 async function startNativeIosMicRecording() {
   try {
-    const resp = await fetch('/api/voice/native_start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dip_address: computeDipAddress() }),
-    });
+    const resp = await fetchNativeVoiceWithTimeout(
+      '/api/voice/native_start',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dip_address: computeDipAddress() }),
+      },
+      2500
+    );
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
+    }
+    const startJson = await resp.json().catch(() => ({}));
+    if (startJson.status === 'permission_denied') {
+      appendChatMessage({
+        role: 'assistant',
+        author: 'AUDIO INTERFACE',
+        text: 'Microphone or Speech Recognition permission is disabled in iPadOS Settings > Privacy & Security.',
+      });
+      return false;
     }
     state.isRecording = true;
     state.usingNativeIosMic = true;
@@ -4423,11 +4472,15 @@ async function stopNativeIosMicRecording() {
   dom.pttSubLabel.textContent = 'Running On-Device ASR + FieldScan AI...';
   setThinkingState(true, 'Transcribing voice & inspecting sensor on iPad M4...');
   try {
-    const resp = await fetch('/api/voice/native_stop', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dip_address: computeDipAddress() }),
-    });
+    const resp = await fetchNativeVoiceWithTimeout(
+      '/api/voice/native_stop',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dip_address: computeDipAddress() }),
+      },
+      6500
+    );
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
     }

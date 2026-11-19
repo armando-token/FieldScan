@@ -121,7 +121,7 @@ if [[ -d "/Applications/Xcode.app/Contents/Developer" ]] && xcodebuild -version 
             if [[ -n "${DEVICE_ID}" ]]; then
                 xcrun devicectl device install app --device "${DEVICE_ID}" "${BUILT_APP}"
                 echo "  + Installed FieldScanM4.app onto device ${DEVICE_ID}."
-                xcrun devicectl device process launch --device "${DEVICE_ID}" com.fieldscan.tht02.ipadm4 || true
+                xcrun devicectl device process launch --terminate-existing --device "${DEVICE_ID}" com.fieldscan.tht02.ipadm4 || true
             else
                 echo "  ! Note: Pair iPad in Xcode Devices window to enable signed devicectl install."
             fi

@@ -50,12 +50,18 @@ extension NativeCameraBridge {
 /// Complete, self-contained HTTP/1.1 backend server running on `127.0.0.1:8088` inside `FieldScanM4.app`.
 /// Guarantees 100% standalone operation on the iPad Air M4 even when the Mac Mini is powered off,
 /// unplugged, and Wi-Fi / Airplane Mode is active.
-public final class StandaloneFieldScanServer: NSObject {
+public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDelegate {
     public static let shared = StandaloneFieldScanServer()
 
     public let listenHost: String = "127.0.0.1"
     public let listenPort: UInt16 = 8088
 
+    /// Strictly serial socket queue for Network.framework (`NWListener` / `NWConnection`) non-blocking I/O.
+    private let nwSocketQueue = DispatchQueue(
+        label: "com.fieldscan.tht02.ipadm4.nw-socket",
+        qos: .userInitiated
+    )
+    /// Concurrent worker pool for HTTP route handlers so socket framing never stalls.
     private let serverQueue = DispatchQueue(
         label: "com.fieldscan.tht02.ipadm4.standalone-http",
         qos: .userInitiated,
@@ -64,6 +70,20 @@ public final class StandaloneFieldScanServer: NSObject {
     private let stateLock = NSLock()
     private let renderQueue = DispatchQueue(
         label: "com.fieldscan.tht02.ipadm4.workbench-render",
+        qos: .userInitiated
+    )
+    private let modbusQueue = DispatchQueue(
+        label: "com.fieldscan.tht02.ipadm4.modbus-poll",
+        qos: .utility
+    )
+    /// Strictly serial queue owning all `AVAudioEngine` (`liveAudioEngine`) and Hands-Free timer mutations.
+    private let audioEngineQueue = DispatchQueue(
+        label: "com.fieldscan.tht02.ipadm4.audio-engine",
+        qos: .userInitiated
+    )
+    /// Background serial queue for Hands-Free speech transcription & LLM/rule diagnosis turns.
+    private let voiceDiagnosisQueue = DispatchQueue(
+        label: "com.fieldscan.tht02.ipadm4.voice-diagnosis",
         qos: .userInitiated
     )
     private let ttsQueue = DispatchQueue(
@@ -114,6 +134,11 @@ public final class StandaloneFieldScanServer: NSObject {
     private var handsFreeMonitorTimer: DispatchSourceTimer?
     private var activeSpeechSessionGeneration: Int = 0
     private var lastTtsActiveUptime: TimeInterval = 0
+    private var ttsSpeakingFlag: Bool = false
+    private var ttsExpectedEndUptime: TimeInterval = 0
+    private var lastAudioStartAttemptUptime: TimeInterval = 0
+    private var audioPermissionState: String = "unknown"
+    private var permissionPromptInFlight: Bool = false
     private var audioSessionConfigured: Bool = false
     private var cachedPreferredVoice: AVSpeechSynthesisVoice?
     private var recentChatHistory: [[String: String]] = []
@@ -198,6 +223,52 @@ public final class StandaloneFieldScanServer: NSObject {
 
     private override init() {
         super.init()
+        speechSynthesizer.delegate = self
+    }
+
+    /// Lock-only TTS check (`caller must hold stateLock`). Never touches `AVSpeechSynthesizer` off the main thread.
+    private func isTtsSpeakingLocked(now: TimeInterval) -> Bool {
+        if ttsSpeakingFlag {
+            if now <= ttsExpectedEndUptime {
+                return true
+            }
+            ttsSpeakingFlag = false
+        }
+        return false
+    }
+
+    private func isTtsSpeakingNow() -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        stateLock.lock()
+        let active = isTtsSpeakingLocked(now: now)
+        stateLock.unlock()
+        return active
+    }
+
+    public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        let now = ProcessInfo.processInfo.systemUptime
+        stateLock.lock()
+        ttsSpeakingFlag = true
+        lastTtsActiveUptime = now
+        stateLock.unlock()
+    }
+
+    public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        let now = ProcessInfo.processInfo.systemUptime
+        stateLock.lock()
+        ttsSpeakingFlag = false
+        ttsExpectedEndUptime = 0
+        lastTtsActiveUptime = now
+        stateLock.unlock()
+    }
+
+    public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        let now = ProcessInfo.processInfo.systemUptime
+        stateLock.lock()
+        ttsSpeakingFlag = false
+        ttsExpectedEndUptime = 0
+        lastTtsActiveUptime = now
+        stateLock.unlock()
     }
 
     // MARK: - Lifecycle
@@ -335,7 +406,7 @@ public final class StandaloneFieldScanServer: NSObject {
         rTimer.resume()
         self.renderTimer = rTimer
 
-        let mTimer = DispatchSource.makeTimerSource(queue: serverQueue)
+        let mTimer = DispatchSource.makeTimerSource(queue: modbusQueue)
         mTimer.schedule(deadline: .now() + 0.5, repeating: 0.5, leeway: .milliseconds(25))
         mTimer.setEventHandler { [weak self] in
             guard let self = self else { return }
@@ -377,7 +448,7 @@ public final class StandaloneFieldScanServer: NSObject {
                 self?.handleIncomingConnection(connection)
             }
 
-            nwListener.start(queue: serverQueue)
+            nwListener.start(queue: nwSocketQueue)
             self.listener = nwListener
         } catch {
             stateLock.lock()
@@ -398,7 +469,7 @@ public final class StandaloneFieldScanServer: NSObject {
     }
 
     private func handleIncomingConnection(_ connection: NWConnection) {
-        connection.start(queue: serverQueue)
+        connection.start(queue: nwSocketQueue)
         receiveHTTPRequest(on: connection, accumulated: Data())
     }
 
@@ -463,7 +534,9 @@ public final class StandaloneFieldScanServer: NSObject {
                     headers: headers,
                     body: bodyData
                 )
-                self.dispatchHTTPRequest(packet, on: connection)
+                self.serverQueue.async { [weak self] in
+                    self?.dispatchHTTPRequest(packet, on: connection)
+                }
                 return
             }
 
@@ -973,7 +1046,7 @@ public final class StandaloneFieldScanServer: NSObject {
                 connection.cancel()
                 return
             }
-            self.serverQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self.nwSocketQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
                 self?.pumpNextMJPEGFrame(on: connection, raw: raw)
             }
         })
@@ -2931,8 +3004,9 @@ public final class StandaloneFieldScanServer: NSObject {
         let pcbOpen = (visionTel["pcb_open_detected"] as? Bool) ?? false
 
         var triggerType: String?
+        let nowUptime = ProcessInfo.processInfo.systemUptime
         stateLock.lock()
-        if !liveWatchEnabled || handsFreeActive || liveTapInstalled || speechSynthesizer.isSpeaking {
+        if !liveWatchEnabled || handsFreeActive || liveTapInstalled || isTtsSpeakingLocked(now: nowUptime) {
             lastModbusHealthy = healthy
             lastModbus7FFF = abn7fff
             lastPcbOpen = pcbOpen
@@ -4114,8 +4188,11 @@ public final class StandaloneFieldScanServer: NSObject {
 
         // Speak aloud immediately through the iPad Air M4 native audio output with natural premium/enhanced voice
         if speakOnDevice {
+            let nowUp = ProcessInfo.processInfo.systemUptime
             stateLock.lock()
-            lastTtsActiveUptime = ProcessInfo.processInfo.systemUptime
+            ttsSpeakingFlag = true
+            ttsExpectedEndUptime = nowUp + estDur + 1.5
+            lastTtsActiveUptime = nowUp
             stateLock.unlock()
 
             DispatchQueue.main.async { [weak self] in
@@ -4717,28 +4794,41 @@ public final class StandaloneFieldScanServer: NSObject {
     private func queryAppleFoundationModelIfAvailable(query: String, contextSummary: String) -> String? {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
+            // Fast availability check (`[A5]`): return immediately without spawning XPC tasks if Apple Intelligence is off/unavailable
+            guard SystemLanguageModel.default.isAvailable else {
+                return nil
+            }
             let sema = DispatchSemaphore(value: 0)
+            let boxLock = NSLock()
             var outputText: String?
-            Task {
+            let genTask = Task.detached(priority: .userInitiated) {
                 defer { sema.signal() }
                 do {
                     let session = LanguageModelSession(instructions: """
                     You are FieldScan AI, a friendly, natural, real-time conversational AI and industrial field engineer running locally on an iPad Air M4 (12 GB RAM).
-                    Always respond strictly in natural, clear English (2 to 3 concise sentences).
-                    Answer any question the user asks freely and naturally like a smart human colleague (including the current time, general questions, or TZ THT-02 sensor diagnostics).
-                    Live context: \(contextSummary)
+                    Respond concisely in 1 to 3 clear sentences in the same language the user spoke (Spanish or English).
+                    Never invent SCADA/PLC confirmations or unverified sensor readings; rely strictly on the provided live context: \(contextSummary)
                     """)
                     let resp = try await session.respond(to: query)
+                    if Task.isCancelled { return }
                     let text = resp.content.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !text.isEmpty {
+                        boxLock.lock()
                         outputText = text
+                        boxLock.unlock()
                     }
                 } catch {
                     // Apple Intelligence may not be enabled or available on this device state
                 }
             }
-            _ = sema.wait(timeout: .now() + 2.8)
-            return outputText
+            let waitRes = sema.wait(timeout: .now() + 1.8)
+            if waitRes == .timedOut {
+                genTask.cancel()
+            }
+            boxLock.lock()
+            let finalOut = outputText
+            boxLock.unlock()
+            return finalOut
         }
         #endif
         return nil
@@ -4909,20 +4999,82 @@ public final class StandaloneFieldScanServer: NSObject {
         return String(format: "%.2f", res)
     }
 
-    // MARK: - Live Streaming Speech Recognition (`AVAudioEngine` + `LFM3-Omni-2B-Q8_0` Audio ASR + Bilingual `SFSpeechRecognizer`) & Hands-Free Mode
+    // MARK: - Live Streaming Speech Recognition (`AVAudioEngine` + Bilingual `SFSpeechRecognizer`) & Deadlock-Free Hands-Free Mode
 
-    private func ensureSpeechAndMicPermissions() {
-        if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
-            SFSpeechRecognizer.requestAuthorization { _ in }
-        }
+    /// Evaluates current Microphone + Speech permissions without blocking any thread (`0` semaphores).
+    /// Returns `"granted"`, `"awaiting_permission"`, or `"denied"`.
+    private func evaluateAndRequestVoicePermissionsNonBlocking(onGranted: (() -> Void)? = nil) -> String {
+        let speechStatus = SFSpeechRecognizer.authorizationStatus()
         #if os(iOS)
-        if AVAudioApplication.shared.recordPermission == .undetermined {
-            let micPermSema = DispatchSemaphore(value: 0)
-            AVAudioApplication.requestRecordPermission { _ in
-                micPermSema.signal()
-            }
-            _ = micPermSema.wait(timeout: .now() + 2.0)
+        let micPerm = AVAudioApplication.shared.recordPermission
+        if micPerm == .denied || speechStatus == .denied || speechStatus == .restricted {
+            stateLock.lock()
+            audioPermissionState = "denied"
+            stateLock.unlock()
+            return "denied"
         }
+        if micPerm == .granted && speechStatus == .authorized {
+            stateLock.lock()
+            audioPermissionState = "granted"
+            stateLock.unlock()
+            return "granted"
+        }
+
+        stateLock.lock()
+        let alreadyPrompting = permissionPromptInFlight
+        permissionPromptInFlight = true
+        audioPermissionState = "awaiting_permission"
+        stateLock.unlock()
+
+        if !alreadyPrompting {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                let finishCheck: () -> Void = { [weak self] in
+                    guard let self = self else { return }
+                    let micOK = (AVAudioApplication.shared.recordPermission == .granted)
+                    let spStatus = SFSpeechRecognizer.authorizationStatus()
+                    let spOK = (spStatus == .authorized)
+                    self.stateLock.lock()
+                    self.permissionPromptInFlight = false
+                    self.audioPermissionState = micOK ? (spOK ? "granted" : "mic_only") : "denied"
+                    self.stateLock.unlock()
+                    if micOK {
+                        onGranted?()
+                    } else {
+                        self.stateLock.lock()
+                        self.handsFreeActive = false
+                        self.handsFreeMonitorTimer?.cancel()
+                        self.handsFreeMonitorTimer = nil
+                        self.stateLock.unlock()
+                    }
+                }
+
+                if AVAudioApplication.shared.recordPermission == .undetermined {
+                    AVAudioApplication.requestRecordPermission { granted in
+                        if !granted {
+                            finishCheck()
+                            return
+                        }
+                        if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+                            SFSpeechRecognizer.requestAuthorization { _ in
+                                finishCheck()
+                            }
+                        } else {
+                            finishCheck()
+                        }
+                    }
+                } else if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+                    SFSpeechRecognizer.requestAuthorization { _ in
+                        finishCheck()
+                    }
+                } else {
+                    finishCheck()
+                }
+            }
+        }
+        return "awaiting_permission"
+        #else
+        return speechStatus == .denied ? "denied" : "granted"
         #endif
     }
 
@@ -4937,11 +5089,19 @@ public final class StandaloneFieldScanServer: NSObject {
         return SFSpeechRecognizer(locale: Locale(identifier: "en-US")) ?? SFSpeechRecognizer()
     }
 
-    private func startLiveAudioRecognitionPipeline(resetTranscript: Bool = true) -> Bool {
-        configureAudioSessionForOfflineVoice()
-        ensureSpeechAndMicPermissions()
+    /// MUST execute strictly on `audioEngineQueue` so `liveAudioEngine` is never mutated concurrently.
+    private func startLiveAudioRecognitionPipelineOnAudioQueue(resetTranscript: Bool = true) -> Bool {
+        dispatchPrecondition(condition: .onQueue(audioEngineQueue))
 
+        #if os(iOS)
+        guard AVAudioApplication.shared.recordPermission == .granted else {
+            return false
+        }
+        #endif
+
+        let nowStart = ProcessInfo.processInfo.systemUptime
         stateLock.lock()
+        lastAudioStartAttemptUptime = nowStart
         activeSpeechSessionGeneration += 1
         let sessionGen = activeSpeechSessionGeneration
         if resetTranscript {
@@ -4963,7 +5123,9 @@ public final class StandaloneFieldScanServer: NSObject {
         liveTapInstalled = false
         stateLock.unlock()
 
-        // Always stop previous tap and engine OUTSIDE stateLock to prevent AB-BA deadlock with CoreAudio tap thread
+        configureAudioSessionForOfflineVoice()
+
+        // Always stop previous tap and engine OUTSIDE stateLock on serial `audioEngineQueue`
         prevReq?.endAudio()
         prevTask?.cancel()
         if wasTapInstalled {
@@ -4974,6 +5136,8 @@ public final class StandaloneFieldScanServer: NSObject {
         }
 
         let inputNode = liveAudioEngine.inputNode
+        // Always remove any defensive residual tap before installing
+        inputNode.removeTap(onBus: 0)
         let tapFormat = inputNode.outputFormat(forBus: 0)
         guard tapFormat.sampleRate > 0 && tapFormat.channelCount > 0 else {
             return false
@@ -4987,14 +5151,16 @@ public final class StandaloneFieldScanServer: NSObject {
            SFSpeechRecognizer.authorizationStatus() == .authorized {
             let req = SFSpeechAudioBufferRecognitionRequest()
             req.shouldReportPartialResults = true
-            req.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
+            if recognizer.supportsOnDeviceRecognition {
+                req.requiresOnDeviceRecognition = true
+            }
             optionalRequest = req
 
             optionalTask = recognizer.recognitionTask(with: req) { [weak self] result, error in
                 guard let self = self else { return }
                 let now = ProcessInfo.processInfo.systemUptime
-                let isSpeakingNow = self.speechSynthesizer.isSpeaking
                 self.stateLock.lock()
+                let isSpeakingNow = self.isTtsSpeakingLocked(now: now)
                 if isSpeakingNow {
                     self.lastTtsActiveUptime = now
                 }
@@ -5028,10 +5194,10 @@ public final class StandaloneFieldScanServer: NSObject {
             guard frameLen > 0 else { return }
 
             let now = ProcessInfo.processInfo.systemUptime
-            let isSpeakingNow = self.speechSynthesizer.isSpeaking
 
-            // Strict acoustic echo guard: never feed iPad speaker output into SFSpeechRecognizer or PCM buffer
+            // Lock-only acoustic echo guard — NEVER call AVSpeechSynthesizer on CoreAudio real-time IO thread!
             self.stateLock.lock()
+            let isSpeakingNow = self.isTtsSpeakingLocked(now: now)
             if isSpeakingNow {
                 self.lastTtsActiveUptime = now
             }
@@ -5114,7 +5280,9 @@ public final class StandaloneFieldScanServer: NSObject {
         }
     }
 
-    private func stopLiveAudioRecognitionPipeline() -> (String, [Int16], Int) {
+    /// MUST execute strictly on `audioEngineQueue`.
+    private func stopLiveAudioRecognitionPipelineOnAudioQueue() -> (String, [Int16], Int) {
+        dispatchPrecondition(condition: .onQueue(audioEngineQueue))
         stateLock.lock()
         activeSpeechSessionGeneration += 1
         let prevReq = liveSpeechRequest
@@ -5136,7 +5304,7 @@ public final class StandaloneFieldScanServer: NSObject {
         liveMicRmsPct = 6
         stateLock.unlock()
 
-        // Stop tap and AVAudioEngine OUTSIDE stateLock so CoreAudio tap thread can never deadlock
+        // Stop tap and AVAudioEngine OUTSIDE stateLock on serial `audioEngineQueue`
         prevReq?.endAudio()
         if wasTapInstalled {
             liveAudioEngine.inputNode.removeTap(onBus: 0)
@@ -5148,19 +5316,17 @@ public final class StandaloneFieldScanServer: NSObject {
         return (capturedText, capturedSamples, speechFrames)
     }
 
-    /// Transcribes a captured English voice turn using live streaming `SFSpeechRecognizer` (`en-US`, 0 ms) on the M4 Neural Engine.
+    /// Transcribes a captured voice turn using live streaming `SFSpeechRecognizer` or 16 kHz WAV fallback.
     private func transcribeCapturedVoiceSession(
         partialTranscript: String,
         pcmSamples: [Int16],
         activeFrames: Int
     ) -> String {
-        // 1. Real-time streaming SFSpeechRecognizer (en-US) on the M4 Neural Engine — 0 ms wait!
-        let partialAlpha = partialTranscript.replacingOccurrences(of: "[^a-zA-Z0-9]+", with: "", options: .regularExpression)
+        let partialAlpha = partialTranscript.replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
         if partialAlpha.count >= 2 {
             return partialTranscript
         }
 
-        // 2. Fast en-US SFSpeechURLRecognitionRequest fallback on the recorded 16 kHz WAV
         if pcmSamples.count >= 2400 && activeFrames >= 2 {
             let wavData = Self.encode16kHzMonoPCMToWAV(samples: pcmSamples)
             let (fallbackText, isEmpty) = transcribeAudioOnDevice(audioBytes: wavData, allowEmpty: true)
@@ -5172,11 +5338,47 @@ public final class StandaloneFieldScanServer: NSObject {
         return partialTranscript
     }
 
-    private func startNativeMicrophoneRecording() -> [String: Any] {
-        if speechSynthesizer.isSpeaking {
-            speechSynthesizer.stopSpeaking(at: .immediate)
+    private func stopTtsImmediatelyOnMain() {
+        stateLock.lock()
+        ttsSpeakingFlag = false
+        ttsExpectedEndUptime = 0
+        stateLock.unlock()
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if self.speechSynthesizer.isSpeaking {
+                self.speechSynthesizer.stopSpeaking(at: .immediate)
+            }
         }
-        let startedOK = startLiveAudioRecognitionPipeline(resetTranscript: true)
+    }
+
+    private func startNativeMicrophoneRecording() -> [String: Any] {
+        stopTtsImmediatelyOnMain()
+        let perm = evaluateAndRequestVoicePermissionsNonBlocking { [weak self] in
+            guard let self = self else { return }
+            self.audioEngineQueue.async {
+                _ = self.startLiveAudioRecognitionPipelineOnAudioQueue(resetTranscript: true)
+            }
+        }
+        if perm == "denied" {
+            return [
+                "status": "permission_denied",
+                "error_code": "MIC_OR_SPEECH_PERMISSION_DENIED",
+                "native_mic": false,
+                "sample_rate": 16000,
+            ]
+        }
+        if perm == "awaiting_permission" {
+            return [
+                "status": "awaiting_permission",
+                "native_mic": true,
+                "sample_rate": 16000,
+            ]
+        }
+
+        var startedOK = false
+        audioEngineQueue.sync {
+            startedOK = self.startLiveAudioRecognitionPipelineOnAudioQueue(resetTranscript: true)
+        }
         return [
             "status": startedOK ? "recording" : "error",
             "native_mic": true,
@@ -5188,8 +5390,7 @@ public final class StandaloneFieldScanServer: NSObject {
         let t0 = ProcessInfo.processInfo.systemUptime
         let dipAddr = intFromAny(payload["dip_address"]) ?? targetSlaveId
 
-        // Wait up to 0.25s if SFSpeechRecognizer is finalizing its last English word
-        let deadline = ProcessInfo.processInfo.systemUptime + 0.25
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.22
         while ProcessInfo.processInfo.systemUptime < deadline {
             stateLock.lock()
             let currentText = livePartialTranscript
@@ -5201,7 +5402,16 @@ public final class StandaloneFieldScanServer: NSObject {
             Thread.sleep(forTimeInterval: 0.03)
         }
 
-        let (partialText, pcmSamples, speechFrames) = stopLiveAudioRecognitionPipeline()
+        var partialText = ""
+        var pcmSamples: [Int16] = []
+        var speechFrames = 0
+        audioEngineQueue.sync {
+            let stopped = self.stopLiveAudioRecognitionPipelineOnAudioQueue()
+            partialText = stopped.0
+            pcmSamples = stopped.1
+            speechFrames = stopped.2
+        }
+
         let transcript = transcribeCapturedVoiceSession(
             partialTranscript: partialText,
             pcmSamples: pcmSamples,
@@ -5209,7 +5419,7 @@ public final class StandaloneFieldScanServer: NSObject {
         )
         let asrMs = ((ProcessInfo.processInfo.systemUptime - t0) * 1000.0 * 10).rounded() / 10
 
-        let cleanedAlpha = transcript.replacingOccurrences(of: "[^a-zA-Z0-9]+", with: "", options: .regularExpression)
+        let cleanedAlpha = transcript.replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
         if cleanedAlpha.count < 2 {
             let msg = "I didn't catch any speech on the microphone—please try speaking again."
             let audioB64 = synthesizeSpeechB64(msg)
@@ -5248,6 +5458,36 @@ public final class StandaloneFieldScanServer: NSObject {
             stateLock.unlock()
         }
 
+        stopTtsImmediatelyOnMain()
+
+        let perm = evaluateAndRequestVoicePermissionsNonBlocking { [weak self] in
+            guard let self = self else { return }
+            self.audioEngineQueue.async {
+                self.stateLock.lock()
+                let stillActive = self.handsFreeActive
+                self.stateLock.unlock()
+                if stillActive {
+                    _ = self.startLiveAudioRecognitionPipelineOnAudioQueue(resetTranscript: true)
+                }
+            }
+        }
+
+        if perm == "denied" {
+            stateLock.lock()
+            handsFreeActive = false
+            handsFreeTurnInFlight = false
+            handsFreeMonitorTimer?.cancel()
+            handsFreeMonitorTimer = nil
+            stateLock.unlock()
+            return [
+                "status": "permission_denied",
+                "active": false,
+                "error_code": "MIC_OR_SPEECH_PERMISSION_DENIED",
+                "message": "Microphone or Speech Recognition permission is disabled in iPadOS Settings > Privacy & Security.",
+                "native_mic": false,
+            ]
+        }
+
         stateLock.lock()
         handsFreeActive = true
         handsFreeTurnInFlight = false
@@ -5256,40 +5496,70 @@ public final class StandaloneFieldScanServer: NSObject {
         handsFreeMonitorTimer = nil
         stateLock.unlock()
 
-        let started = startLiveAudioRecognitionPipeline(resetTranscript: true)
-
-        let timer = DispatchSource.makeTimerSource(queue: serverQueue)
-        timer.schedule(deadline: .now() + 0.15, repeating: 0.15, leeway: .milliseconds(20))
-        timer.setEventHandler { [weak self] in
-            self?.evaluateHandsFreePauseAndTurn()
+        audioEngineQueue.async { [weak self] in
+            guard let self = self else { return }
+            if perm == "granted" {
+                _ = self.startLiveAudioRecognitionPipelineOnAudioQueue(resetTranscript: true)
+            }
+            let timer = DispatchSource.makeTimerSource(queue: self.audioEngineQueue)
+            timer.schedule(deadline: .now() + 0.20, repeating: 0.20, leeway: .milliseconds(30))
+            timer.setEventHandler { [weak self] in
+                self?.evaluateHandsFreePauseAndTurnOnAudioQueue()
+            }
+            self.stateLock.lock()
+            if self.handsFreeActive {
+                self.handsFreeMonitorTimer?.cancel()
+                self.handsFreeMonitorTimer = timer
+                timer.resume()
+            } else {
+                timer.cancel()
+            }
+            self.stateLock.unlock()
         }
-        timer.resume()
-
-        stateLock.lock()
-        handsFreeMonitorTimer = timer
-        stateLock.unlock()
 
         return [
-            "status": started ? "handsfree_active" : "error",
-            "active": started,
+            "status": perm == "awaiting_permission" ? "awaiting_permission" : "handsfree_active",
+            "active": true,
+            "permission_state": perm,
             "native_mic": true,
         ]
     }
 
-    private func evaluateHandsFreePauseAndTurn() {
+    /// Runs strictly on serial `audioEngineQueue` — never blocks HTTP sockets or Main Thread.
+    private func evaluateHandsFreePauseAndTurnOnAudioQueue() {
+        dispatchPrecondition(condition: .onQueue(audioEngineQueue))
         let now = ProcessInfo.processInfo.systemUptime
-        let aiSpeaking = speechSynthesizer.isSpeaking
 
         stateLock.lock()
         guard handsFreeActive && !handsFreeTurnInFlight else {
             stateLock.unlock()
             return
         }
+        let permState = audioPermissionState
+        let aiSpeaking = isTtsSpeakingLocked(now: now)
         if aiSpeaking {
             lastTtsActiveUptime = now
         }
         let inEchoCooldown = aiSpeaking || (now - lastTtsActiveUptime) < 0.85
         let tapCurrentlyInstalled = liveTapInstalled
+        let sinceLastStartAttempt = now - lastAudioStartAttemptUptime
+
+        if permState == "denied" {
+            handsFreeActive = false
+            handsFreeMonitorTimer?.cancel()
+            handsFreeMonitorTimer = nil
+            stateLock.unlock()
+            if tapCurrentlyInstalled {
+                _ = stopLiveAudioRecognitionPipelineOnAudioQueue()
+            }
+            return
+        }
+
+        if permState == "awaiting_permission" {
+            stateLock.unlock()
+            return
+        }
+
         if inEchoCooldown {
             livePartialTranscript = ""
             lastTranscriptChangeTime = 0
@@ -5299,15 +5569,17 @@ public final class StandaloneFieldScanServer: NSObject {
             liveActiveSpeechFrames = 0
             stateLock.unlock()
             if tapCurrentlyInstalled {
-                _ = stopLiveAudioRecognitionPipeline()
+                _ = stopLiveAudioRecognitionPipelineOnAudioQueue()
             }
             return
         }
         stateLock.unlock()
 
-        // Once AI speech + echo guard cooldown have finished, automatically resume live listening with a fresh session
+        // Resume listening after cooldown with a >=1.5s retry throttle so CoreAudio is never hammered in a loop
         if !tapCurrentlyInstalled {
-            _ = startLiveAudioRecognitionPipeline(resetTranscript: true)
+            if sinceLastStartAttempt >= 1.5 {
+                _ = startLiveAudioRecognitionPipelineOnAudioQueue(resetTranscript: true)
+            }
             return
         }
 
@@ -5339,47 +5611,58 @@ public final class StandaloneFieldScanServer: NSObject {
         lastTranscriptChangeTime = 0
         stateLock.unlock()
 
-        let (capturedPartial, capturedPcm, capturedFrames) = stopLiveAudioRecognitionPipeline()
-        let finalTranscript = transcribeCapturedVoiceSession(
-            partialTranscript: capturedPartial.isEmpty ? currentTranscript : capturedPartial,
-            pcmSamples: capturedPcm,
-            activeFrames: max(capturedFrames, 5)
-        )
+        let (capturedPartial, capturedPcm, capturedFrames) = stopLiveAudioRecognitionPipelineOnAudioQueue()
 
-        let cleanedAlpha = finalTranscript.replacingOccurrences(of: "[^a-zA-Z0-9]+", with: "", options: .regularExpression)
-        guard cleanedAlpha.count >= 2 else {
-            stateLock.lock()
-            handsFreeTurnInFlight = false
-            stateLock.unlock()
-            return
+        // Offload ASR fallback + diagnosis onto `voiceDiagnosisQueue` so `audioEngineQueue` returns in <1 ms
+        voiceDiagnosisQueue.async { [weak self] in
+            guard let self = self else { return }
+            let finalTranscript = self.transcribeCapturedVoiceSession(
+                partialTranscript: capturedPartial.isEmpty ? currentTranscript : capturedPartial,
+                pcmSamples: capturedPcm,
+                activeFrames: max(capturedFrames, 5)
+            )
+
+            let cleanedAlpha = finalTranscript.replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
+            guard cleanedAlpha.count >= 2 else {
+                self.stateLock.lock()
+                self.handsFreeTurnInFlight = false
+                self.stateLock.unlock()
+                return
+            }
+
+            var diag = self.handleDiagnoseRequest(payload: [
+                "query": finalTranscript,
+                "include_camera": true,
+                "dip_address": dipAddr,
+            ])
+            diag["transcript"] = finalTranscript
+            diag["sensor_id"] = "TZ-THT-02"
+            diag["matched_alias"] = "TZ THT-02"
+
+            self.stateLock.lock()
+            if self.handsFreeActive {
+                self.pendingHandsFreeResult = diag
+            }
+            self.handsFreeTurnInFlight = false
+            self.lastTtsActiveUptime = ProcessInfo.processInfo.systemUptime
+            self.stateLock.unlock()
         }
-
-        var diag = handleDiagnoseRequest(payload: [
-            "query": finalTranscript,
-            "include_camera": true,
-            "dip_address": dipAddr,
-        ])
-        diag["transcript"] = finalTranscript
-        diag["sensor_id"] = "TZ-THT-02"
-        diag["matched_alias"] = "TZ THT-02"
-
-        stateLock.lock()
-        pendingHandsFreeResult = diag
-        handsFreeTurnInFlight = false
-        lastTtsActiveUptime = ProcessInfo.processInfo.systemUptime
-        stateLock.unlock()
     }
 
     private func pollHandsFreeVoiceMode() -> [String: Any] {
-        let aiSpeaking = speechSynthesizer.isSpeaking
+        let now = ProcessInfo.processInfo.systemUptime
         stateLock.lock()
+        let aiSpeaking = isTtsSpeakingLocked(now: now)
         let active = handsFreeActive
+        let permState = audioPermissionState
         let turnInFlight = handsFreeTurnInFlight
         let rmsPct = aiSpeaking ? 6 : liveMicRmsPct
         var partial = aiSpeaking ? "" : livePartialTranscript
         if partial.isEmpty && !aiSpeaking {
-            if turnInFlight {
-                partial = "Processing with Qwen3-VL-4B..."
+            if permState == "awaiting_permission" {
+                partial = "Allow Microphone & Speech permission on iPad..."
+            } else if turnInFlight {
+                partial = "Processing voice command..."
             } else if liveVoiceDetectedInSession && liveActiveSpeechFrames >= 3 {
                 partial = "Listening to your voice..."
             }
@@ -5390,6 +5673,7 @@ public final class StandaloneFieldScanServer: NSObject {
 
         return [
             "active": active,
+            "permission_state": permState,
             "rms_pct": rmsPct,
             "partial_transcript": partial,
             "ai_speaking": aiSpeaking,
@@ -5406,7 +5690,9 @@ public final class StandaloneFieldScanServer: NSObject {
         handsFreeMonitorTimer = nil
         stateLock.unlock()
 
-        _ = stopLiveAudioRecognitionPipeline()
+        audioEngineQueue.async { [weak self] in
+            _ = self?.stopLiveAudioRecognitionPipelineOnAudioQueue()
+        }
         return [
             "status": "stopped",
             "active": false,

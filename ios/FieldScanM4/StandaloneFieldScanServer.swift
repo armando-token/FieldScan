@@ -134,8 +134,11 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
     private var handsFreeMonitorTimer: DispatchSourceTimer?
     private var activeSpeechSessionGeneration: Int = 0
     private var lastTtsActiveUptime: TimeInterval = 0
+    private var ttsUtteranceStartUptime: TimeInterval = 0
     private var ttsSpeakingFlag: Bool = false
     private var ttsExpectedEndUptime: TimeInterval = 0
+    private var pttRecordingActive: Bool = false
+    private var bargeInConsecutiveFrames: Int = 0
     private var lastAudioStartAttemptUptime: TimeInterval = 0
     private var audioPermissionState: String = "unknown"
     private var permissionPromptInFlight: Bool = false
@@ -151,7 +154,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
     private var smoothedLiveWid: Double = 58.0
     private var liveDetectionHoldFrames: Int = 0
     private var hasInitializedLiveSmoothing: Bool = false
-    private var cachedLiveAnalysis: LiveFramePixelTelemetry?
+    private var cachedLiveAnalysis: FieldScanLiveVisionResult?
     private var lastLiveAnalysisSeq: Int = 0
 
     private var frameSequence: Int = 0
@@ -249,7 +252,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let now = ProcessInfo.processInfo.systemUptime
         stateLock.lock()
         ttsSpeakingFlag = true
+        ttsUtteranceStartUptime = now
         lastTtsActiveUptime = now
+        bargeInConsecutiveFrames = 0
         stateLock.unlock()
     }
 
@@ -259,15 +264,17 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         ttsSpeakingFlag = false
         ttsExpectedEndUptime = 0
         lastTtsActiveUptime = now
+        bargeInConsecutiveFrames = 0
         stateLock.unlock()
     }
 
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        let now = ProcessInfo.processInfo.systemUptime
         stateLock.lock()
         ttsSpeakingFlag = false
         ttsExpectedEndUptime = 0
-        lastTtsActiveUptime = now
+        // Do NOT reset `lastTtsActiveUptime = now` on user barge-in or PTT cancellation so mic captures immediately!
+        lastTtsActiveUptime = 0
+        bargeInConsecutiveFrames = 0
         stateLock.unlock()
     }
 
@@ -378,17 +385,28 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         if audioSessionConfigured && !force {
             return
         }
+        let session = AVAudioSession.sharedInstance()
         do {
-            let session = AVAudioSession.sharedInstance()
+            // `.voiceChat` activates M4 hardware Acoustic Echo Cancellation (AEC) so user can barge-in mid-TTS
             try session.setCategory(
                 .playAndRecord,
-                mode: .default,
+                mode: .voiceChat,
                 options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP, .mixWithOthers]
             )
             try session.setActive(true, options: [])
             audioSessionConfigured = true
         } catch {
-            // Non-fatal if another audio session is active
+            do {
+                try session.setCategory(
+                    .playAndRecord,
+                    mode: .default,
+                    options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP, .mixWithOthers]
+                )
+                try session.setActive(true, options: [])
+                audioSessionConfigured = true
+            } catch {
+                // Non-fatal if another audio session is active
+            }
         }
         #endif
     }
@@ -1322,16 +1340,16 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         format.scale = 1.0
         format.opaque = true
 
-        var liveAnalysis: LiveFramePixelTelemetry?
-        if useLiveCamera, let liveData = liveJpeg {
-            stateLock.lock()
-            let cached = cachedLiveAnalysis
-            let lastSeq = lastLiveAnalysisSeq
-            stateLock.unlock()
-            if let validCached = cached, (seq - lastSeq) < 2 {
-                liveAnalysis = validCached
-            } else if let camUIImage = UIImage(data: liveData) {
-                let fresh = analyzeLiveCameraImage(camUIImage, frameWidth: width, frameHeight: height)
+        var decodedLiveUIImage: UIImage?
+        var liveAnalysis: FieldScanLiveVisionResult?
+        if useLiveCamera, let liveData = liveJpeg, let camUIImage = UIImage(data: liveData) {
+            decodedLiveUIImage = camUIImage
+            if let cgImg = camUIImage.cgImage {
+                let fresh = FieldScanVisionDetector.shared.analyzeCGImage(
+                    cgImg,
+                    outputWidth: width,
+                    outputHeight: height
+                )
                 stateLock.lock()
                 cachedLiveAnalysis = fresh
                 lastLiveAnalysisSeq = seq
@@ -1394,8 +1412,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let isStrainerFault = (mode == "sim_strainer_patch") || (liveAnalysis?.redAnomalyZone == "strainer_head")
         let isGlandFault = (mode == "sim_gland_fault") || (liveAnalysis?.redAnomalyZone == "waterproof_gland_leads")
 
-        let dipCenterPt = mapLocal(68.0 * scaleL, 0)
-        let dipQuadPts: [[Int]] = [
+        let dipCenterPt = liveAnalysis?.dipFocusPoint ?? mapLocal(68.0 * scaleL, 0)
+        let dipQuadPts: [[Int]] = liveAnalysis?.dipQuadPoints ?? [
             mapLocal(26.0 * scaleL, -20.0 * scaleR),
             mapLocal(110.0 * scaleL, -20.0 * scaleR),
             mapLocal(110.0 * scaleL, 20.0 * scaleR),
@@ -1461,7 +1479,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let rawUIImage = rawRenderer.image { ctx in
             let cg = ctx.cgContext
 
-            if useLiveCamera, let liveData = liveJpeg, let camImg = UIImage(data: liveData) {
+            if useLiveCamera, let camImg = decodedLiveUIImage {
                 camImg.draw(in: CGRect(origin: .zero, size: size))
             } else if isHardwareCameraMode {
                 cg.setFillColor(UIColor(red: 0.05, green: 0.08, blue: 0.12, alpha: 1.0).cgColor)
@@ -1751,12 +1769,14 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             ]
             let binStr = dipBits.map(String.init).joined()
 
-            if useLiveCamera, let liveData = liveJpeg, let camUIImage = UIImage(data: liveData) {
-                // Crop 3.3x macro region directly from the actual live camera frame around the detected sensor center (cx, cy)
+            if useLiveCamera, let camUIImage = decodedLiveUIImage {
+                // Crop & deskew 3.3x macro region directly around the true detected SW1 DIP-8 focus point
                 let srcW = max(1.0, camUIImage.size.width)
                 let srcH = max(1.0, camUIImage.size.height)
-                let focusX = (CGFloat(dipCenterPt[0]) * 0.45 + cx * 0.55) / CGFloat(width) * srcW
-                let focusY = (CGFloat(dipCenterPt[1]) * 0.45 + cy * 0.55) / CGFloat(height) * srcH
+                let targetOutX = liveAnalysis?.dipFocusPoint != nil ? CGFloat(dipCenterPt[0]) : (CGFloat(dipCenterPt[0]) * 0.45 + cx * 0.55)
+                let targetOutY = liveAnalysis?.dipFocusPoint != nil ? CGFloat(dipCenterPt[1]) : (CGFloat(dipCenterPt[1]) * 0.45 + cy * 0.55)
+                let focusX = targetOutX / CGFloat(width) * srcW
+                let focusY = targetOutY / CGFloat(height) * srcH
                 let cropW = max(90.0, srcW / 3.3)
                 let cropH = max(55.0, srcH / 3.3)
                 let cropX = max(0.0, min(srcW - cropW, focusX - cropW * 0.5))
@@ -1844,9 +1864,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             }
         }
 
-        let rawData = rawUIImage.jpegData(compressionQuality: 0.88) ?? Data()
-        let hudData = hudUIImage.jpegData(compressionQuality: 0.88) ?? rawData
-        let dipData = dipUIImage.jpegData(compressionQuality: 0.90) ?? rawData
+        let rawData = (useLiveCamera && liveJpeg != nil) ? liveJpeg! : (rawUIImage.jpegData(compressionQuality: 0.88) ?? Data())
+        let hudData = hudUIImage.jpegData(compressionQuality: 0.86) ?? rawData
+        let dipData = dipUIImage.jpegData(compressionQuality: 0.88) ?? rawData
 
         let srcLabel: String
         if useLiveCamera {
@@ -4137,15 +4157,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
     // MARK: - On-Device Premium English Voice TTS (`AVSpeechSynthesizer` -> Speaker Playback)
 
     private func selectBestSpeechVoice(for text: String) -> AVSpeechSynthesisVoice? {
-        let langPref = FieldScanSessionEngine.shared.preferredLanguage
-        if langPref == "es" {
-            let esVoices = AVSpeechSynthesisVoice.speechVoices().filter {
-                $0.language.lowercased().hasPrefix("es")
-            }.sorted { $0.quality.rawValue > $1.quality.rawValue }
-            return esVoices.first
-                ?? AVSpeechSynthesisVoice(language: "es-MX")
-                ?? AVSpeechSynthesisVoice(language: "es-ES")
-        }
+        _ = text
         if let cached = cachedPreferredVoice {
             return cached
         }
@@ -4315,7 +4327,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let q = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return nil }
 
-        if q.hasSuffix("?") || q.range(of: "^(hello|hi|hey|good\\s+(morning|afternoon|evening)|what|which|how|why|where|who|when|can\\s+you|could\\s+you|explain|tell\\s+me|is\\s+the|are\\s+the|do\\s+i|does\\s+it)\\b", options: .regularExpression) != nil {
+        if q.hasSuffix("?") || q.hasPrefix("¿") || q.range(of: "^(hola|buenos|buenas|hello|hi|hey|good\\s+(morning|afternoon|evening)|what|which|how|why|where|who|when|can\\s+you|could\\s+you|explain|tell\\s+me|que|cual|como|por\\s+que|donde|en\\s+que|puedes|me\\s+escuchas|muestrame|dime|is\\s+the|are\\s+the|do\\s+i|does\\s+it)\\b", options: .regularExpression) != nil {
             return nil
         }
 
@@ -4413,73 +4425,44 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let modbusTel = getModbusTelemetry()
         let mbHealthy = (modbusTel["healthy"] as? Bool) ?? false
         let pcbOpen = (visionTel["pcb_open_detected"] as? Bool) ?? false
-        let qLower = query.lowercased()
+        let includeCam = (payload["include_camera"] as? Bool) ?? true
+        let rawJpegForAI: Data? = includeCam ? getRawJpeg() : nil
 
-        let isTechnicalQuery = isTechnicalSensorQuery(qLower: qLower, zoneHint: zoneHint)
-        let isSimpleGreetingOrTime = qLower.range(
-            of: "^(hello|hi|hey|good morning|good afternoon|good evening|how are you|who are you|what can you do|can you hear me|testing|test|what time|current time|time is it|what day|what date)\\b",
-            options: .regularExpression
-        ) != nil
+        let bridge = LlamaServerBridge.shared
+        let engineResult = FieldScanConversationEngine.shared.executeQuery(
+            query: query,
+            zoneHint: zoneHint,
+            dipAddr: dipAddr,
+            visionTel: visionTel,
+            modbusTel: modbusTel,
+            rawCameraJpeg: rawJpegForAI,
+            vlmBaseURL: bridge.activeOmniBaseURL,
+            vlmRunning: bridge.vlServerRunning,
+            vlmModelLabel: bridge.activeModelName,
+            describeDipFn: { addr in Self.describeDipPins(address: addr) }
+        )
 
-        // Determine target zone and whether to explode the 3D PCB only when the query is actually technical
-        let (rawTargetZone, rawExplodePcb) = inferTargetZone(query: qLower, zoneHint: zoneHint, visionTel: visionTel)
-        let targetZone = isTechnicalQuery ? rawTargetZone : ""
-        let explodePcb = isTechnicalQuery ? rawExplodePcb : false
-        let citedPages = isTechnicalQuery ? inferCitedPages(query: qLower, zoneId: rawTargetZone, explodePcb: explodePcb) : []
-        let primaryPage = explodePcb ? 5 : (rawTargetZone == "strainer_head" ? 6 : (citedPages.first ?? 1))
+        var diagnosisText = (engineResult["reply_text"] as? String) ?? ""
+        let modelUsed = (engineResult["model_used"] as? String) ?? bridge.activeModelName
+        let intentStr = (engineResult["intent"] as? String) ?? "general_chat"
+        let langStr = (engineResult["language"] as? String) ?? "en"
+        let probableCauses = (engineResult["probable_causes"] as? [String]) ?? []
+        let recommendedActions = (engineResult["recommended_actions"] as? [String]) ?? []
+        let targetZoneOpt = engineResult["target_zone"] as? String
+        let explodePcb = (engineResult["explode_pcb"] as? Bool) ?? false
+        let dipBitsOpt = engineResult["dip_bits"] as? [Int]
+        let twinActionOpt = engineResult["twin_action"] as? [String: Any]
+        let openManual = (engineResult["open_manual"] as? Bool) ?? false
+        let openManualLightbox = (engineResult["open_manual_lightbox"] as? Bool) ?? false
+        let primaryPageOpt = engineResult["manual_page"] as? Int
+        let manualSectionOpt = engineResult["manual_section"] as? [String: Any]
+        let citations = (engineResult["citations"] as? [[String: Any]]) ?? []
 
-        let contextSummary = buildLiveContextSummary(visionTel: visionTel, modbusTel: modbusTel, dipAddr: dipAddr)
-        let needsVisualImage = isVisualCameraQuery(qLower: qLower, zoneHint: zoneHint)
-
-        var diagnosisText = ""
-        var modelUsed = LlamaServerBridge.shared.activeModelName
-        var probableCauses: [String] = []
-        var recommendedActions: [String] = []
-
-        // Fast-path for simple greetings / time / math so real-time voice responds in < 5 ms
-        if isSimpleGreetingOrTime || evaluateSimpleMathIfPresent(qLower) != nil {
-            let fastReply = buildSmartConversationalFallback(
-                query: query,
-                qLower: qLower,
-                visionTel: visionTel,
-                modbusTel: modbusTel,
-                targetZone: targetZone,
-                explodePcb: false,
-                dipAddr: dipAddr
-            )
-            diagnosisText = fastReply.answer
-            probableCauses = fastReply.causes
-            recommendedActions = fastReply.actions
-        }
-
-        // 1. Query Qwen3-VL-4B-Instruct on :8091/v1/chat/completions
-        if diagnosisText.isEmpty,
-           let vlmReply = queryLocalVLMIfAvailable(query: query, contextSummary: contextSummary, includeImage: needsVisualImage) {
-            diagnosisText = vlmReply
-            modelUsed = LlamaServerBridge.shared.activeModelName
-        }
-
-        // 2. Second, if :8091 is not yet ready or times out, try iPadOS 27 FoundationModels (LanguageModelSession)
-        if diagnosisText.isEmpty,
-           let appleReply = queryAppleFoundationModelIfAvailable(query: query, contextSummary: contextSummary) {
-            diagnosisText = appleReply
-            modelUsed = "Apple Intelligence FoundationModels (iPad Air M4)"
-        }
-
-        // 3. Third, smart conversational fallback that answers time/date, camera, greetings, math, and TZ THT-02 queries naturally
-        if diagnosisText.isEmpty {
-            let fallback = buildSmartConversationalFallback(
-                query: query,
-                qLower: qLower,
-                visionTel: visionTel,
-                modbusTel: modbusTel,
-                targetZone: rawTargetZone,
-                explodePcb: explodePcb,
-                dipAddr: dipAddr
-            )
-            diagnosisText = fallback.answer
-            probableCauses = fallback.causes
-            recommendedActions = fallback.actions
+        // Sync targetSlaveId if the operator requested configuring DIP-8 pins for a specific Slave ID
+        if let ta = twinActionOpt, let reqSlave = ta["target_slave_id"] as? Int, (1...247).contains(reqSlave) {
+            stateLock.lock()
+            targetSlaveId = reqSlave
+            stateLock.unlock()
         }
 
         // Apply deterministic grounding filter (`IA-04`) so LLM output can never claim SCADA/PLC/calibration or cite pages > 9
@@ -4496,31 +4479,37 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
         recordConversationTurn(userQuery: query, assistantReply: diagnosisText)
 
-        let elapsedMs = max(12.0, ((ProcessInfo.processInfo.systemUptime - t0) * 1000.0 * 10).rounded() / 10)
+        let elapsedMs = max(8.0, ((ProcessInfo.processInfo.systemUptime - t0) * 1000.0 * 10).rounded() / 10)
         stateLock.lock()
         lastLatencyMs = elapsedMs
         lastModelLabel = modelUsed
         let andonNow = mbHealthy ? "GREEN" : (explodePcb ? "YELLOW" : "RED")
         stateLock.unlock()
 
-        let citations: [[String: Any]] = citedPages.filter { (1...9).contains($0) }.map { p in
-            ["page": p, "label": Self.manualPageTitles[p] ?? "Page \(p) · Manual V1.1"]
-        }
         let audioB64 = synthesizeSpeechB64(diagnosisText)
-        let shouldHighlightZone = isTechnicalQuery && (!mbHealthy || pcbOpen) && !targetZone.isEmpty
+        let shouldHighlightZone = (intentStr == "sensor_diagnostics") && (!mbHealthy || pcbOpen) && (targetZoneOpt != nil && !(targetZoneOpt!.isEmpty))
+        let focusDipOut = explodePcb || ((twinActionOpt?["open_dip_pip"] as? Bool) == true)
 
         return [
             "diagnosis": diagnosisText,
             "assistant_message": diagnosisText,
+            "intent": intentStr,
+            "query_mode": intentStr,
+            "language": "en",
             "grounding_corrected": groundingCorrected,
-            "probable_causes": isTechnicalQuery ? probableCauses : [],
-            "recommended_actions": isTechnicalQuery ? recommendedActions : [],
-            "highlighted_zone": shouldHighlightZone ? targetZone : NSNull(),
-            "fault_zone": shouldHighlightZone ? targetZone : NSNull(),
+            "probable_causes": probableCauses,
+            "recommended_actions": recommendedActions,
+            "highlighted_zone": shouldHighlightZone ? (targetZoneOpt as Any) : NSNull(),
+            "fault_zone": shouldHighlightZone ? (targetZoneOpt as Any) : NSNull(),
             "explode_pcb": explodePcb,
-            "focus_dip": explodePcb,
+            "focus_dip": focusDipOut,
+            "dip_bits": dipBitsOpt ?? NSNull(),
+            "twin_action": twinActionOpt ?? NSNull(),
             "andon_state": andonNow,
-            "manual_page": primaryPage,
+            "open_manual": openManual,
+            "open_manual_lightbox": openManualLightbox,
+            "manual_page": primaryPageOpt ?? NSNull(),
+            "manual_section": manualSectionOpt ?? NSNull(),
             "citations": citations,
             "manual_citations": citations,
             "inference_ms": elapsedMs,
@@ -5079,9 +5068,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
     }
 
     private func selectBestSpeechRecognizer() -> SFSpeechRecognizer? {
-        let lang = FieldScanSessionEngine.shared.preferredLanguage
-        let candidateLocales = (lang == "es") ? ["es-MX", "es-ES", "en-US"] : ["en-US", "es-MX"]
-        for locId in candidateLocales {
+        for locId in ["en-US", "en-GB", "en-CA", "en-AU"] {
             if let rec = SFSpeechRecognizer(locale: Locale(identifier: locId)), rec.isAvailable {
                 return rec
             }
@@ -5160,13 +5147,13 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 guard let self = self else { return }
                 let now = ProcessInfo.processInfo.systemUptime
                 self.stateLock.lock()
+                let isPtt = self.pttRecordingActive
                 let isSpeakingNow = self.isTtsSpeakingLocked(now: now)
-                if isSpeakingNow {
+                if isSpeakingNow && !isPtt {
                     self.lastTtsActiveUptime = now
                 }
-                guard self.activeSpeechSessionGeneration == sessionGen,
-                      !isSpeakingNow,
-                      (now - self.lastTtsActiveUptime) >= 0.80 else {
+                let cooldownOk = isPtt || (!isSpeakingNow && (now - self.lastTtsActiveUptime) >= 0.28)
+                guard self.activeSpeechSessionGeneration == sessionGen, cooldownOk else {
                     self.stateLock.unlock()
                     return
                 }
@@ -5195,25 +5182,6 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
             let now = ProcessInfo.processInfo.systemUptime
 
-            // Lock-only acoustic echo guard — NEVER call AVSpeechSynthesizer on CoreAudio real-time IO thread!
-            self.stateLock.lock()
-            let isSpeakingNow = self.isTtsSpeakingLocked(now: now)
-            if isSpeakingNow {
-                self.lastTtsActiveUptime = now
-            }
-            let inEchoCooldown = isSpeakingNow || (now - self.lastTtsActiveUptime) < 0.80
-            if inEchoCooldown {
-                self.liveMicRmsPct = 6
-                self.livePartialTranscript = ""
-                self.livePreRollPcmSamples.removeAll(keepingCapacity: true)
-                self.liveRecordedPcmSamples.removeAll(keepingCapacity: true)
-                self.liveVoiceDetectedInSession = false
-                self.liveActiveSpeechFrames = 0
-                self.stateLock.unlock()
-                return
-            }
-            self.stateLock.unlock()
-
             var rms: Float = 0.0
             if let ch = buffer.floatChannelData?[0] {
                 var sumSq: Float = 0
@@ -5230,29 +5198,93 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             let pct = min(100, max(6, Int((rms * 420.0).rounded())))
             let pcmChunk = Self.extract16kHzInt16Samples(from: buffer)
 
+            // Lock-only acoustic echo & real-time Barge-In guard (with M4 `.voiceChat` hardware AEC active)
             self.stateLock.lock()
-            self.liveMicRmsPct = pct
-
-            if rms >= 0.015 {
-                if !self.liveVoiceDetectedInSession {
-                    self.liveVoiceDetectedInSession = true
-                    if !self.livePreRollPcmSamples.isEmpty {
-                        self.liveRecordedPcmSamples.append(contentsOf: self.livePreRollPcmSamples)
-                        self.livePreRollPcmSamples.removeAll(keepingCapacity: true)
-                    }
-                }
-                self.lastVoiceActivityTime = now
-                self.liveActiveSpeechFrames += 1
+            let isPtt = self.pttRecordingActive
+            var isSpeakingNow = self.isTtsSpeakingLocked(now: now)
+            if isSpeakingNow && !isPtt {
+                self.lastTtsActiveUptime = now
             }
 
-            if self.liveVoiceDetectedInSession {
+            if !isPtt && (isSpeakingNow || (now - self.lastTtsActiveUptime) < 0.28) {
+                // Real-time Barge-In: if operator speaks over the AI (sustained AEC-cleaned RMS >= 0.046 for ~64ms), interrupt TTS immediately!
+                if isSpeakingNow && (now - self.ttsUtteranceStartUptime) >= 0.28 && rms >= 0.046 {
+                    self.bargeInConsecutiveFrames += 1
+                } else {
+                    self.bargeInConsecutiveFrames = 0
+                }
+
+                if self.bargeInConsecutiveFrames >= 3 {
+                    self.bargeInConsecutiveFrames = 0
+                    self.ttsSpeakingFlag = false
+                    self.ttsExpectedEndUptime = 0
+                    self.lastTtsActiveUptime = 0
+                    isSpeakingNow = false
+                    self.livePartialTranscript = ""
+                    self.liveRecordedPcmSamples = self.livePreRollPcmSamples
+                    self.livePreRollPcmSamples.removeAll(keepingCapacity: true)
+                    self.liveRecordedPcmSamples.append(contentsOf: pcmChunk)
+                    self.liveVoiceDetectedInSession = true
+                    self.liveActiveSpeechFrames = 2
+                    self.lastVoiceActivityTime = now
+                    self.liveMicRmsPct = pct
+                    self.stateLock.unlock()
+                    self.stopTtsImmediatelyOnMain()
+                    self.rebindSpeechRecognitionRequestAfterBargeIn()
+                    return
+                }
+
+                // Keep a rolling 200ms pre-roll so the first consonant of an interruption is never clipped
+                self.livePreRollPcmSamples.append(contentsOf: pcmChunk)
+                if self.livePreRollPcmSamples.count > 3200 {
+                    self.livePreRollPcmSamples.removeFirst(self.livePreRollPcmSamples.count - 3200)
+                }
+                self.liveMicRmsPct = 6
+                self.livePartialTranscript = ""
+                self.liveRecordedPcmSamples.removeAll(keepingCapacity: true)
+                self.liveVoiceDetectedInSession = false
+                self.liveActiveSpeechFrames = 0
+                self.stateLock.unlock()
+                return
+            }
+
+            self.bargeInConsecutiveFrames = 0
+            self.liveMicRmsPct = pct
+
+            if isPtt {
+                // In manual Push-To-Talk mode, capture every audio frame from t=0 without VAD clipping
+                self.liveVoiceDetectedInSession = true
+                if rms >= 0.005 {
+                    self.lastVoiceActivityTime = now
+                    self.liveActiveSpeechFrames += 1
+                } else if self.liveActiveSpeechFrames == 0 {
+                    self.liveActiveSpeechFrames = 1
+                }
                 if self.liveRecordedPcmSamples.count < 256_000 {
                     self.liveRecordedPcmSamples.append(contentsOf: pcmChunk)
                 }
             } else {
-                self.livePreRollPcmSamples.append(contentsOf: pcmChunk)
-                if self.livePreRollPcmSamples.count > 6400 {
-                    self.livePreRollPcmSamples.removeFirst(self.livePreRollPcmSamples.count - 6400)
+                if rms >= 0.015 {
+                    if !self.liveVoiceDetectedInSession {
+                        self.liveVoiceDetectedInSession = true
+                        if !self.livePreRollPcmSamples.isEmpty {
+                            self.liveRecordedPcmSamples.append(contentsOf: self.livePreRollPcmSamples)
+                            self.livePreRollPcmSamples.removeAll(keepingCapacity: true)
+                        }
+                    }
+                    self.lastVoiceActivityTime = now
+                    self.liveActiveSpeechFrames += 1
+                }
+
+                if self.liveVoiceDetectedInSession {
+                    if self.liveRecordedPcmSamples.count < 256_000 {
+                        self.liveRecordedPcmSamples.append(contentsOf: pcmChunk)
+                    }
+                } else {
+                    self.livePreRollPcmSamples.append(contentsOf: pcmChunk)
+                    if self.livePreRollPcmSamples.count > 6400 {
+                        self.livePreRollPcmSamples.removeFirst(self.livePreRollPcmSamples.count - 6400)
+                    }
                 }
             }
             let reqRef = self.liveSpeechRequest
@@ -5327,7 +5359,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             return partialTranscript
         }
 
-        if pcmSamples.count >= 2400 && activeFrames >= 2 {
+        if pcmSamples.count >= 1600 && activeFrames >= 1 {
             let wavData = Self.encode16kHzMonoPCMToWAV(samples: pcmSamples)
             let (fallbackText, isEmpty) = transcribeAudioOnDevice(audioBytes: wavData, allowEmpty: true)
             if !isEmpty {
@@ -5338,10 +5370,63 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         return partialTranscript
     }
 
+    private func rebindSpeechRecognitionRequestAfterBargeIn() {
+        audioEngineQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.stateLock.lock()
+            self.activeSpeechSessionGeneration += 1
+            let sessionGen = self.activeSpeechSessionGeneration
+            let prevReq = self.liveSpeechRequest
+            let prevTask = self.liveSpeechTask
+            self.liveSpeechRequest = nil
+            self.liveSpeechTask = nil
+            self.stateLock.unlock()
+
+            prevReq?.endAudio()
+            prevTask?.cancel()
+
+            guard let recognizer = self.selectBestSpeechRecognizer(),
+                  recognizer.isAvailable,
+                  SFSpeechRecognizer.authorizationStatus() == .authorized else {
+                return
+            }
+            let req = SFSpeechAudioBufferRecognitionRequest()
+            req.shouldReportPartialResults = true
+            if recognizer.supportsOnDeviceRecognition {
+                req.requiresOnDeviceRecognition = true
+            }
+            let task = recognizer.recognitionTask(with: req) { [weak self] result, _ in
+                guard let self = self else { return }
+                let now = ProcessInfo.processInfo.systemUptime
+                self.stateLock.lock()
+                guard self.activeSpeechSessionGeneration == sessionGen,
+                      !self.isTtsSpeakingLocked(now: now) else {
+                    self.stateLock.unlock()
+                    return
+                }
+                if let res = result {
+                    let text = res.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !text.isEmpty && text != self.livePartialTranscript {
+                        self.livePartialTranscript = text
+                        self.lastTranscriptChangeTime = now
+                    }
+                }
+                self.stateLock.unlock()
+            }
+            self.stateLock.lock()
+            self.liveSpeechRecognizer = recognizer
+            self.liveSpeechRequest = req
+            self.liveSpeechTask = task
+            self.stateLock.unlock()
+        }
+    }
+
     private func stopTtsImmediatelyOnMain() {
         stateLock.lock()
         ttsSpeakingFlag = false
         ttsExpectedEndUptime = 0
+        lastTtsActiveUptime = 0
+        bargeInConsecutiveFrames = 0
         stateLock.unlock()
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -5353,6 +5438,12 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
     private func startNativeMicrophoneRecording() -> [String: Any] {
         stopTtsImmediatelyOnMain()
+        stateLock.lock()
+        pttRecordingActive = true
+        lastTtsActiveUptime = 0
+        bargeInConsecutiveFrames = 0
+        stateLock.unlock()
+
         let perm = evaluateAndRequestVoicePermissionsNonBlocking { [weak self] in
             guard let self = self else { return }
             self.audioEngineQueue.async {
@@ -5360,6 +5451,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             }
         }
         if perm == "denied" {
+            stateLock.lock()
+            pttRecordingActive = false
+            stateLock.unlock()
             return [
                 "status": "permission_denied",
                 "error_code": "MIC_OR_SPEECH_PERMISSION_DENIED",
@@ -5379,6 +5473,11 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         audioEngineQueue.sync {
             startedOK = self.startLiveAudioRecognitionPipelineOnAudioQueue(resetTranscript: true)
         }
+        if !startedOK {
+            stateLock.lock()
+            pttRecordingActive = false
+            stateLock.unlock()
+        }
         return [
             "status": startedOK ? "recording" : "error",
             "native_mic": true,
@@ -5390,26 +5489,61 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let t0 = ProcessInfo.processInfo.systemUptime
         let dipAddr = intFromAny(payload["dip_address"]) ?? targetSlaveId
 
-        let deadline = ProcessInfo.processInfo.systemUptime + 0.22
+        // Step 1: Stop tap & signal `endAudio()` FIRST so SFSpeechRecognizer flushes final words before task cancel!
+        var pcmSamples: [Int16] = []
+        var speechFrames = 0
+        var pendingTask: SFSpeechRecognitionTask?
+        audioEngineQueue.sync {
+            self.stateLock.lock()
+            let prevReq = self.liveSpeechRequest
+            pendingTask = self.liveSpeechTask
+            let wasTapInstalled = self.liveTapInstalled
+            self.liveSpeechRequest = nil
+            self.liveTapInstalled = false
+            pcmSamples = self.liveRecordedPcmSamples
+            if pcmSamples.isEmpty && !self.livePreRollPcmSamples.isEmpty {
+                pcmSamples = self.livePreRollPcmSamples
+            }
+            speechFrames = max(1, self.liveActiveSpeechFrames)
+            self.livePreRollPcmSamples.removeAll(keepingCapacity: true)
+            self.liveRecordedPcmSamples.removeAll(keepingCapacity: true)
+            self.liveVoiceDetectedInSession = false
+            self.liveActiveSpeechFrames = 0
+            self.liveMicRmsPct = 6
+            self.stateLock.unlock()
+
+            if wasTapInstalled {
+                self.liveAudioEngine.inputNode.removeTap(onBus: 0)
+            }
+            if self.liveAudioEngine.isRunning {
+                self.liveAudioEngine.stop()
+            }
+            prevReq?.endAudio()
+        }
+
+        // Step 2: Allow up to 0.35s for SFSpeechRecognizer to emit flushed words after `endAudio()`
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.35
         while ProcessInfo.processInfo.systemUptime < deadline {
             stateLock.lock()
             let currentText = livePartialTranscript
             let lastChange = lastTranscriptChangeTime
             stateLock.unlock()
-            if !currentText.isEmpty && (ProcessInfo.processInfo.systemUptime - lastChange) >= 0.12 {
+            if !currentText.isEmpty && (ProcessInfo.processInfo.systemUptime - lastChange) >= 0.14 {
                 break
             }
-            Thread.sleep(forTimeInterval: 0.03)
+            Thread.sleep(forTimeInterval: 0.025)
         }
 
+        // Step 3: Collect flushed transcript, cancel recognition task, and clear PTT flag
         var partialText = ""
-        var pcmSamples: [Int16] = []
-        var speechFrames = 0
         audioEngineQueue.sync {
-            let stopped = self.stopLiveAudioRecognitionPipelineOnAudioQueue()
-            partialText = stopped.0
-            pcmSamples = stopped.1
-            speechFrames = stopped.2
+            self.stateLock.lock()
+            self.activeSpeechSessionGeneration += 1
+            partialText = self.livePartialTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.liveSpeechTask = nil
+            self.pttRecordingActive = false
+            self.stateLock.unlock()
+            pendingTask?.cancel()
         }
 
         let transcript = transcribeCapturedVoiceSession(
@@ -5540,7 +5674,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         if aiSpeaking {
             lastTtsActiveUptime = now
         }
-        let inEchoCooldown = aiSpeaking || (now - lastTtsActiveUptime) < 0.85
+        let inEchoCooldown = aiSpeaking || (now - lastTtsActiveUptime) < 0.28
         let tapCurrentlyInstalled = liveTapInstalled
         let sinceLastStartAttempt = now - lastAudioStartAttemptUptime
 
@@ -5561,23 +5695,18 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         }
 
         if inEchoCooldown {
-            livePartialTranscript = ""
-            lastTranscriptChangeTime = 0
-            livePreRollPcmSamples.removeAll(keepingCapacity: true)
-            liveRecordedPcmSamples.removeAll(keepingCapacity: true)
-            liveVoiceDetectedInSession = false
-            liveActiveSpeechFrames = 0
+            // Keep `liveAudioEngine` + hardware AEC running continuously so real-time Barge-In works with zero restart delay!
             stateLock.unlock()
-            if tapCurrentlyInstalled {
-                _ = stopLiveAudioRecognitionPipelineOnAudioQueue()
+            if !tapCurrentlyInstalled && sinceLastStartAttempt >= 0.45 {
+                _ = startLiveAudioRecognitionPipelineOnAudioQueue(resetTranscript: true)
             }
             return
         }
         stateLock.unlock()
 
-        // Resume listening after cooldown with a >=1.5s retry throttle so CoreAudio is never hammered in a loop
+        // Resume listening immediately after a completed turn with a lightweight 0.35s throttle
         if !tapCurrentlyInstalled {
-            if sinceLastStartAttempt >= 1.5 {
+            if sinceLastStartAttempt >= 0.35 {
                 _ = startLiveAudioRecognitionPipelineOnAudioQueue(resetTranscript: true)
             }
             return
@@ -5594,12 +5723,12 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let words = currentTranscript.split(whereSeparator: { $0.isWhitespace })
 
         let hasEnoughWords = words.count >= 2 || (words.count == 1 && currentTranscript.count >= 2)
-        let transcriptReady = !currentTranscript.isEmpty && hasEnoughWords && lastChange > 0 && (now - lastChange) >= 0.85
+        let transcriptReady = !currentTranscript.isEmpty && hasEnoughWords && lastChange > 0 && (now - lastChange) >= 0.55
         let acousticVadReady = liveVoiceDetectedInSession
-            && liveActiveSpeechFrames >= 5
-            && liveRecordedPcmSamples.count >= 4000
+            && liveActiveSpeechFrames >= 4
+            && liveRecordedPcmSamples.count >= 3200
             && lastVoiceActivityTime > 0
-            && (now - lastVoiceActivityTime) >= 0.90
+            && (now - lastVoiceActivityTime) >= 0.62
 
         guard transcriptReady || acousticVadReady else {
             stateLock.unlock()
@@ -5751,7 +5880,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             return ("", true)
         }
 
-        // Apple SFSpeechRecognizer in preferred session locale (en-US or es-MX/es-ES) with on-device recognition (`VOZ-01`, `OFF-01`)
+        // Apple SFSpeechRecognizer locked strictly to English (en-US) with on-device recognition (`OFF-01`)
         var recognizedText = ""
         if SFSpeechRecognizer.authorizationStatus() == .authorized,
            let recognizer = selectBestSpeechRecognizer(),
@@ -5781,7 +5910,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                         sema.signal()
                     }
                 }
-                _ = sema.wait(timeout: .now() + 1.5)
+                _ = sema.wait(timeout: .now() + 2.4)
                 task.cancel()
             } catch {
                 // Fall back cleanly if temporary file write fails

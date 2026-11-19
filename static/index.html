@@ -13,7 +13,7 @@
   <title>FIELDSCAN CAD · DIGITAL TWIN — TZ THT-02 Industrial SCADA &amp; Repair HMI</title>
   <link rel="stylesheet" href="/static/vendor/open-props.min.css" />
   <link rel="stylesheet" href="/static/vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="/static/styles.css?v=20261113c" />
+  <link rel="stylesheet" href="/static/styles.css?v=20261119e" />
 </head>
 <body>
   <!-- =====================================================================
@@ -625,17 +625,23 @@
         <div class="manual-drawer-body" id="manualDrawerBody">
           <div class="manual-quick-pills" id="manualQuickPills">
             <button type="button" class="page-pill active" data-page="1">P1 Parts</button>
+            <button type="button" class="page-pill" data-page="2">P2 SHT30</button>
+            <button type="button" class="page-pill" data-page="3">P3 Cal/Specs</button>
             <button type="button" class="page-pill" data-page="4">P4 Wiring</button>
             <button type="button" class="page-pill" data-page="5">P5 DIP-8</button>
-            <button type="button" class="page-pill" data-page="6">P6 0x7FFF</button>
+            <button type="button" class="page-pill" data-page="6">P6 Regs</button>
+            <button type="button" class="page-pill" data-page="7">P7 0x03</button>
+            <button type="button" class="page-pill" data-page="8">P8 0x06</button>
             <button type="button" class="page-pill" data-page="9">P9 140×16</button>
           </div>
+
+          <div class="manual-section-banner" id="manualSectionBanner" hidden></div>
 
           <div class="manual-viewer-box" id="manualViewerBox" title="Click to inspect full-resolution 2D blueprint">
             <img id="manualPageImg" src="/assets/manual_pages/page_1.png" alt="TZ THT-02 Technical Manual Page 1" />
             <div class="manual-caption-bar">
               <span id="manualPageCaption">Page 1 · Component Overview &amp; SHT30 Probe</span>
-              <span class="zoom-hint">ZOOM</span>
+              <span class="zoom-hint">TAP TO ENLARGE</span>
             </div>
           </div>
         </div>
@@ -693,6 +699,7 @@
           <button type="button" class="btn-close" id="lightboxCloseBtn" aria-label="Close modal">✕</button>
         </div>
       </div>
+      <div class="lightbox-section-banner" id="lightboxSectionBanner" hidden></div>
       <div class="lightbox-body">
         <img id="lightboxImg" src="/assets/manual_pages/page_1.png" alt="Enlarged TZ THT-02 manual schematic" />
       </div>
@@ -843,6 +850,6 @@
 
   <script src="/static/vendor/lucide.min.js"></script>
   <script src="/static/vendor/uPlot.iife.min.js"></script>
-  <script type="module" src="/static/app.js?v=20261113c"></script>
+  <script type="module" src="/static/app.js?v=20261119e"></script>
 </body>
 </html>

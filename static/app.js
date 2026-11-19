@@ -146,6 +146,9 @@ const state = {
 
   selectedZone: null,
   highlightedZone: null,
+  guidedZone: null,
+  guidedTitle: '',
+  guidedBody: '',
   lastDiagnosisFaultLock: false,
   faultReason: '',
   manualPage: 1,
@@ -333,6 +336,7 @@ const dom = {
   btnExpandManual: document.getElementById('btnExpandManual'),
   manualPageIndicator: document.getElementById('manualPageIndicator'),
   manualQuickPills: document.getElementById('manualQuickPills'),
+  manualSectionBanner: document.getElementById('manualSectionBanner'),
   manualViewerBox: document.getElementById('manualViewerBox'),
   manualPageImg: document.getElementById('manualPageImg'),
   manualPageCaption: document.getElementById('manualPageCaption'),
@@ -354,6 +358,7 @@ const dom = {
   manualModal: document.getElementById('manualModal'),
   lightboxTitle: document.getElementById('lightboxTitle'),
   lightboxPageBadge: document.getElementById('lightboxPageBadge'),
+  lightboxSectionBanner: document.getElementById('lightboxSectionBanner'),
   lightboxImg: document.getElementById('lightboxImg'),
   lightboxPrevBtn: document.getElementById('lightboxPrevBtn'),
   lightboxNextBtn: document.getElementById('lightboxNextBtn'),
@@ -555,7 +560,51 @@ function focusDip3DCamera() {
   flyCameraTo(13, 30, 68, 13, 1.5, 0);
 }
 
+function focusZone3DCamera(zoneId) {
+  if (!zoneId || !ZONE_SPECS[zoneId]) return;
+  if (zoneId === 'upper_barrel_dip') {
+    focusDip3DCamera();
+    return;
+  }
+  const ep = state.exploded ? 1.0 : state.explodeProgress;
+  const poses = {
+    strainer_head: { local: [0, 1.5, 58.0 + 35.0 * ep], offset: [28, 22, 58] },
+    upper_seal_ring: { local: [0, 1.5, 40.0 + 35.0 * ep], offset: [30, 22, 52] },
+    mounting_flange: { local: [0, 3.0, 18.0 + 35.0 * ep], offset: [40, 34, 54] },
+    lower_barrel_rs485: { local: [0, 1.5, -24.0 - 18.0 * ep], offset: [34, 24, 56] },
+    waterproof_gland_leads: { local: [0, 1.5, -62.0 - 18.0 * ep], offset: [-42, 26, -68] },
+  };
+  const cfg = poses[zoneId];
+  if (!cfg) return;
+  if (cad.sensorRig) {
+    cad.sensorRig.updateMatrixWorld(true);
+    const targetWorld = new THREE.Vector3(cfg.local[0], cfg.local[1], cfg.local[2]).applyMatrix4(
+      cad.sensorRig.matrixWorld
+    );
+    flyCameraTo(
+      targetWorld.x + cfg.offset[0],
+      targetWorld.y + cfg.offset[1],
+      targetWorld.z + cfg.offset[2],
+      targetWorld.x,
+      targetWorld.y,
+      targetWorld.z
+    );
+    return;
+  }
+  flyCameraTo(
+    cfg.local[0] + cfg.offset[0],
+    cfg.local[1] + cfg.offset[1],
+    cfg.local[2] + cfg.offset[2],
+    cfg.local[0],
+    cfg.local[1],
+    cfg.local[2]
+  );
+}
+
 function reset3DCamera() {
+  state.guidedZone = null;
+  state.guidedTitle = '';
+  state.guidedBody = '';
   flyCameraTo(16, 48, 185, 0, -4, 0);
 }
 
@@ -2175,6 +2224,7 @@ function updateFaultAndTwinVisuals(nowMs) {
 
   for (const [zoneId, meshes] of Object.entries(cad.zoneMeshes)) {
     const isFault = Boolean(state.highlightedZone === zoneId && !state.modbusHealthy);
+    const isGuided = Boolean(state.guidedZone === zoneId && !isFault);
     const isSelected = state.selectedZone === zoneId && !isFault;
 
     for (const mesh of meshes) {
@@ -2183,6 +2233,9 @@ function updateFaultAndTwinVisuals(nowMs) {
       if (isFault) {
         mat.emissive.setHex(0xef4444);
         mat.emissiveIntensity = 0.32 + 0.52 * pulse;
+      } else if (isGuided) {
+        mat.emissive.setHex(0x38bdf8);
+        mat.emissiveIntensity = 0.24 + 0.36 * pulse;
       } else if (emeraldGlowActive) {
         mat.emissive.setHex(0x10b981);
         mat.emissiveIntensity = 0.16 + 0.28 * pulse;
@@ -2269,29 +2322,45 @@ function updateProjectedOverlays() {
     }
   }
 
-  if (!state.modbusHealthy && state.highlightedZone && ZONE_SPECS[state.highlightedZone]) {
-    const spec = ZONE_SPECS[state.highlightedZone];
-    const faultAnchor = spec.anchorLocal.clone();
-    if (
-      ['strainer_head', 'upper_seal_ring', 'mounting_flange'].includes(state.highlightedZone)
-    ) {
-      faultAnchor.z += 35.0 * state.explodeProgress;
-    } else if (state.highlightedZone === 'waterproof_gland_leads') {
-      faultAnchor.z -= 18.0 * state.explodeProgress;
+  const activeFaultZone =
+    !state.modbusHealthy && state.highlightedZone && ZONE_SPECS[state.highlightedZone]
+      ? state.highlightedZone
+      : null;
+  const activeGuidedZone =
+    !activeFaultZone && state.guidedZone && ZONE_SPECS[state.guidedZone]
+      ? state.guidedZone
+      : null;
+  const overlayZone = activeFaultZone || activeGuidedZone;
+
+  if (overlayZone && ZONE_SPECS[overlayZone]) {
+    const spec = ZONE_SPECS[overlayZone];
+    const calloutAnchor = spec.anchorLocal.clone();
+    if (['strainer_head', 'upper_seal_ring', 'mounting_flange'].includes(overlayZone)) {
+      calloutAnchor.z += 35.0 * state.explodeProgress;
+    } else if (overlayZone === 'waterproof_gland_leads') {
+      calloutAnchor.z -= 18.0 * state.explodeProgress;
     }
-    const worldPt = faultAnchor.applyMatrix4(cad.sensorRig.matrixWorld);
+    const worldPt = calloutAnchor.applyMatrix4(cad.sensorRig.matrixWorld);
     const screenPt = projectToScreen(worldPt, w, h);
     if (screenPt) {
       dom.faultCallout.hidden = false;
-      const clampedX = Math.max(130, Math.min(w - 130, screenPt.x));
-      const clampedY = Math.max(92, Math.min(h - 78, screenPt.y));
+      dom.faultCallout.classList.toggle('is-guided', Boolean(activeGuidedZone));
+      const clampedX = Math.max(140, Math.min(w - 140, screenPt.x));
+      const clampedY = Math.max(92, Math.min(h - 84, screenPt.y));
       dom.faultCallout.style.left = `${clampedX}px`;
       dom.faultCallout.style.top = `${clampedY}px`;
-      dom.faultCalloutZone.textContent = `⚠️ TWIN DEVIATION: ${spec.shortLabel} — PROBABLE FAULT SOURCE`;
-      dom.faultCalloutText.textContent = state.faultReason || spec.summary;
+      if (activeGuidedZone) {
+        dom.faultCalloutZone.textContent =
+          state.guidedTitle || `3D DIGITAL TWIN GUIDE · ${spec.shortLabel}`;
+        dom.faultCalloutText.textContent = state.guidedBody || spec.summary;
+      } else {
+        dom.faultCalloutZone.textContent = `⚠️ TWIN DEVIATION: ${spec.shortLabel} — PROBABLE FAULT SOURCE`;
+        dom.faultCalloutText.textContent = state.faultReason || spec.summary;
+      }
     }
   } else {
     dom.faultCallout.hidden = true;
+    dom.faultCallout.classList.remove('is-guided');
   }
 }
 
@@ -2315,7 +2384,7 @@ function updateTwinMatchBadge() {
   }
 }
 
-function selectZone(zoneId, { flipManual = false } = {}) {
+function selectZone(zoneId, { flipManual = false, zoomCamera = true } = {}) {
   const spec = ZONE_SPECS[zoneId];
   if (!spec) return;
   state.selectedZone = zoneId;
@@ -2328,10 +2397,57 @@ function selectZone(zoneId, { flipManual = false } = {}) {
 
   if (zoneId === 'upper_barrel_dip' && !state.exploded) {
     setExplodedState(true, { manualTrigger: true, zoomDip: true });
+  } else if (zoomCamera) {
+    focusZone3DCamera(zoneId);
   }
 
   if (flipManual) {
     setManualPage(spec.manualPage, { flash: true });
+  }
+}
+
+function applyTwinAction(twinAction) {
+  if (!twinAction || typeof twinAction !== 'object') return;
+
+  if (twinAction.render_mode === 'wireframe' || twinAction.render_mode === 'solid') {
+    setRenderMode(twinAction.render_mode);
+  }
+
+  if (twinAction.action === 'reset_view') {
+    state.guidedZone = null;
+    state.guidedTitle = '';
+    state.guidedBody = '';
+    setExplodedState(false);
+    reset3DCamera();
+    return;
+  }
+
+  if (Array.isArray(twinAction.dip_bits) && twinAction.dip_bits.length === 8) {
+    state.dipBits = twinAction.dip_bits.map((b) => (b ? 1 : 0));
+    renderDipHud();
+  }
+
+  if (typeof twinAction.explode_pcb === 'boolean') {
+    const wantPip = Boolean(twinAction.open_dip_pip);
+    if (wantPip) {
+      state.dipPipDismissed = false;
+    }
+    setExplodedState(twinAction.explode_pcb, {
+      manualTrigger: true,
+      zoomDip: twinAction.focus_zone === 'upper_barrel_dip',
+    });
+    if (typeof twinAction.open_dip_pip === 'boolean') {
+      setDipPipVisibility(twinAction.open_dip_pip);
+    }
+  }
+
+  if (twinAction.focus_zone && ZONE_SPECS[twinAction.focus_zone]) {
+    state.guidedZone = twinAction.focus_zone;
+    state.guidedTitle = twinAction.callout_title || '';
+    state.guidedBody = twinAction.callout_body || '';
+    selectZone(twinAction.focus_zone, { flipManual: false, zoomCamera: true });
+  } else if (twinAction.camera_pose === 'isometric_home') {
+    reset3DCamera();
   }
 }
 
@@ -2639,11 +2755,35 @@ function drawFallbackScadaChart() {
 /* ==========================================================================
    MANUAL & 2D BLUEPRINT DRAWER + FULLSCREEN LIGHTBOX
    ========================================================================== */
-function setManualPage(pageNum, { flash = false, expandDrawer = false } = {}) {
+function renderManualSectionCallout(el, sectionInfo) {
+  if (!el) return;
+  if (!sectionInfo || typeof sectionInfo !== 'object' || (!sectionInfo.heading && !sectionInfo.verified_excerpt)) {
+    el.hidden = true;
+    el.textContent = '';
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML = '';
+  if (sectionInfo.heading) {
+    const strong = document.createElement('strong');
+    strong.textContent = sectionInfo.heading;
+    el.appendChild(strong);
+  }
+  if (sectionInfo.verified_excerpt) {
+    const span = document.createElement('span');
+    span.textContent = sectionInfo.verified_excerpt;
+    el.appendChild(span);
+  }
+}
+
+function setManualPage(
+  pageNum,
+  { flash = false, expandDrawer = false, openLightbox = false, sectionInfo = null, scrollIntoView = false } = {}
+) {
   const page = Math.max(1, Math.min(9, Number(pageNum) || 1));
   state.manualPage = page;
   const imgUrl = `/assets/manual_pages/page_${page}.png`;
-  const caption = MANUAL_PAGES[page] || `Page ${page} · TZ THT-02 Datasheet`;
+  const caption = sectionInfo?.heading || MANUAL_PAGES[page] || `Page ${page} · TZ THT-02 Datasheet`;
 
   dom.manualPageImg.src = imgUrl;
   dom.manualPageImg.alt = `TZ THT-02 Technical Manual Page ${page}`;
@@ -2658,10 +2798,23 @@ function setManualPage(pageNum, { flash = false, expandDrawer = false } = {}) {
   dom.lightboxPageBadge.textContent = `${page} / 9`;
   dom.lightboxTitle.textContent = `TZ THT-02 User's Manual V1.1 — ${caption}`;
 
-  if (expandDrawer && state.manualCollapsed) {
+  renderManualSectionCallout(dom.manualSectionBanner, sectionInfo);
+  renderManualSectionCallout(dom.lightboxSectionBanner, sectionInfo);
+
+  if (expandDrawer) {
     state.manualCollapsed = false;
     dom.manualDrawer.classList.remove('is-collapsed');
     dom.btnToggleManualDrawer.setAttribute('aria-expanded', 'true');
+  }
+
+  if (scrollIntoView && dom.manualDrawer?.scrollIntoView) {
+    try {
+      dom.manualDrawer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch (_e) {}
+  }
+
+  if (openLightbox && dom.manualModal) {
+    dom.manualModal.hidden = false;
   }
 
   if (flash) {
@@ -3704,17 +3857,21 @@ function handleCopilotResponse(res) {
   if (zone && ZONE_SPECS[zone] && !state.modbusHealthy) {
     state.lastDiagnosisFaultLock = true;
     setFaultHighlight(zone, res.fault_title || res.short_diagnosis || answerText.slice(0, 125));
-    selectZone(zone, { flipManual: false });
+    selectZone(zone, { flipManual: false, zoomCamera: true });
   }
 
-  const shouldFocusDip = Boolean(res.focus_dip || res.explode_pcb === true || zone === 'upper_barrel_dip');
-  if (shouldFocusDip) {
-    state.dipPipDismissed = false;
-    setExplodedState(true, { zoomDip: true });
-    setDipPipVisibility(true);
-  } else if (res.explode_pcb === false) {
-    setExplodedState(false);
-    reset3DCamera();
+  if (res.twin_action && typeof res.twin_action === 'object') {
+    applyTwinAction(res.twin_action);
+  } else {
+    const shouldFocusDip = Boolean(res.focus_dip || res.explode_pcb === true || zone === 'upper_barrel_dip');
+    if (shouldFocusDip) {
+      state.dipPipDismissed = false;
+      setExplodedState(true, { zoomDip: true });
+      setDipPipVisibility(true);
+    } else if (res.explode_pcb === false) {
+      setExplodedState(false);
+      reset3DCamera();
+    }
   }
 
   if (Array.isArray(res.dip_bits) && res.dip_bits.length === 8) {
@@ -3723,8 +3880,22 @@ function handleCopilotResponse(res) {
   }
 
   const primaryPage = res.manual_page || citations[0]?.page;
-  if (primaryPage) {
-    setManualPage(primaryPage, { flash: true });
+  const isNonManualChat =
+    !res.open_manual &&
+    citations.length === 0 &&
+    (res.intent === 'general_chat' ||
+      res.intent === 'scene_vision' ||
+      res.query_mode === 'general_chat' ||
+      res.query_mode === 'conversational' ||
+      res.query_mode === 'scene_vision');
+  if (primaryPage && !isNonManualChat) {
+    setManualPage(primaryPage, {
+      flash: true,
+      expandDrawer: Boolean(res.open_manual || citations.length > 0),
+      openLightbox: Boolean(res.open_manual_lightbox),
+      sectionInfo: res.manual_section || null,
+      scrollIntoView: Boolean(res.open_manual),
+    });
   }
 
   state.lastDiagnosisText = answerText;
@@ -4043,18 +4214,21 @@ let hfLastVoiceTs = 0;
 let hfNoiseFloor = 0.008;
 let nativeHfPollTimer = null;
 let nativeHfPollInFlight = false;
+let nativePttPollTimer = null;
+let nativePttPollInFlight = false;
+let hfBargeInSinceTs = 0;
 
 function syncMicDeckIdleUi() {
   if (state.handsFreeEnabled) {
     dom.btnVoiceRecord.classList.remove('recording');
     dom.btnVoiceRecord.classList.add('handsfree-listening');
     dom.pttLabel.textContent = 'Hands-Free Live Mic Active';
-    dom.pttSubLabel.textContent = 'Speak anytime · Auto-sends when you pause speaking';
+    dom.pttSubLabel.textContent = 'Speak in English anytime · Interrupts AI immediately';
     dom.voiceMeter.hidden = false;
   } else {
     dom.btnVoiceRecord.classList.remove('recording', 'handsfree-listening');
-    dom.pttLabel.textContent = 'Push to Speak to AI Engineer';
-    dom.pttSubLabel.textContent = 'Offline LFM3-Audio-2B · Click to Record (or enable Hands-Free)';
+    dom.pttLabel.textContent = 'Push or Tap to Speak (English)';
+    dom.pttSubLabel.textContent = 'Hold-to-Talk or Tap-to-Toggle · Offline ASR + 3D Twin AI';
     dom.voiceMeter.hidden = true;
   }
 }
@@ -4130,8 +4304,8 @@ async function startNativeIosHandsFreeMode() {
         if (data.ai_speaking) {
           dom.btnVoiceRecord.classList.remove('recording');
           dom.btnVoiceRecord.classList.add('handsfree-listening');
-          dom.pttLabel.textContent = 'AI Speaking · Mic Paused (Echo Guard)';
-          dom.pttSubLabel.textContent = 'Hands-Free Live Voice · Resumes automatically after reply';
+          dom.pttLabel.textContent = 'AI Speaking · Speak Anytime to Interrupt';
+          dom.pttSubLabel.textContent = 'Live Barge-In Active (Hardware AEC · Zero Turn Delay)';
         } else if (data.partial_transcript && data.partial_transcript.trim().length > 0) {
           dom.btnVoiceRecord.classList.remove('handsfree-listening');
           dom.btnVoiceRecord.classList.add('recording');
@@ -4305,25 +4479,6 @@ async function toggleHandsFreeMode() {
     const tickHandsFreeVad = () => {
       if (!state.handsFreeEnabled || !hfAnalyser) return;
       const now = Date.now();
-      const gated =
-        state.isAiSpeaking || now < state.aiSpeakCooldownUntil || state.voiceRequestInFlight;
-
-      if (gated) {
-        if (hfSpeechActive) {
-          hfSpeechStartTs = now; // Discard echo fragment
-          stopHfUtterance();
-        }
-        dom.voiceMeterFill.style.width = '6%';
-        dom.pttLabel.textContent = state.voiceRequestInFlight
-          ? 'Processing Speech Offline...'
-          : 'AI Speaking · Mic Paused (Echo Guard)';
-        hfRaf = requestAnimationFrame(tickHandsFreeVad);
-        return;
-      }
-
-      if (!hfSpeechActive && dom.pttLabel.textContent.startsWith('AI Speaking')) {
-        syncMicDeckIdleUi();
-      }
 
       hfAnalyser.getFloatTimeDomainData(pcmBuf);
       let sq = 0;
@@ -4331,17 +4486,52 @@ async function toggleHandsFreeMode() {
         sq += pcmBuf[i] * pcmBuf[i];
       }
       const rms = Math.sqrt(sq / pcmBuf.length);
+      const threshold = Math.max(0.021, Math.min(0.065, hfNoiseFloor * 2.65));
+
+      if (state.voiceRequestInFlight) {
+        dom.voiceMeterFill.style.width = '10%';
+        dom.pttLabel.textContent = 'Processing Speech Offline...';
+        hfRaf = requestAnimationFrame(tickHandsFreeVad);
+        return;
+      }
+
+      // Real-Time Barge-In: allow operator voice to interrupt AI speech mid-sentence!
+      if (state.isAiSpeaking || now < state.aiSpeakCooldownUntil) {
+        const bargeThreshold = Math.max(0.052, threshold * 2.1);
+        if (rms >= bargeThreshold) {
+          if (!hfBargeInSinceTs) hfBargeInSinceTs = now;
+          if (now - hfBargeInSinceTs >= 105) {
+            stopActiveTtsPlayback();
+            state.aiSpeakCooldownUntil = 0;
+            hfBargeInSinceTs = 0;
+            startHfUtterance(now);
+            hfRaf = requestAnimationFrame(tickHandsFreeVad);
+            return;
+          }
+        } else {
+          hfBargeInSinceTs = 0;
+        }
+        dom.voiceMeterFill.style.width = `${Math.min(100, Math.max(6, Math.round(rms * 320)))}%`;
+        dom.pttLabel.textContent = 'AI Speaking · Speak Anytime to Interrupt';
+        hfRaf = requestAnimationFrame(tickHandsFreeVad);
+        return;
+      }
+
+      hfBargeInSinceTs = 0;
+      if (!hfSpeechActive && dom.pttLabel.textContent.startsWith('AI Speaking')) {
+        syncMicDeckIdleUi();
+      }
+
       const pct = Math.min(100, Math.max(6, Math.round(rms * 420)));
       dom.voiceMeterFill.style.width = `${pct}%`;
 
-      const threshold = Math.max(0.021, Math.min(0.065, hfNoiseFloor * 2.65));
       if (!hfSpeechActive) {
         if (rms < threshold * 0.85) {
           hfNoiseFloor = hfNoiseFloor * 0.96 + rms * 0.04;
         }
         if (rms >= threshold) {
           if (!hfAboveSinceTs) hfAboveSinceTs = now;
-          if (now - hfAboveSinceTs >= 115) {
+          if (now - hfAboveSinceTs >= 95) {
             startHfUtterance(now);
           }
         } else {
@@ -4351,7 +4541,7 @@ async function toggleHandsFreeMode() {
         if (rms >= threshold * 0.78) {
           hfLastVoiceTs = now;
         }
-        if (now - hfLastVoiceTs >= 880 || now - hfSpeechStartTs >= 11000) {
+        if (now - hfLastVoiceTs >= 640 || now - hfSpeechStartTs >= 11000) {
           stopHfUtterance();
         }
       }
@@ -4431,7 +4621,7 @@ async function startNativeIosMicRecording() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dip_address: computeDipAddress() }),
       },
-      2500
+      3500
     );
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
@@ -4448,17 +4638,32 @@ async function startNativeIosMicRecording() {
     state.isRecording = true;
     state.usingNativeIosMic = true;
     dom.btnVoiceRecord.classList.add('recording');
-    dom.pttLabel.textContent = 'Recording on iPad M4... Tap to Send';
-    dom.pttSubLabel.textContent = '16 kHz Native Mic -> On-Device ASR & LFM3';
+    dom.pttLabel.textContent = 'Listening on iPad M4... Release or Tap to Send';
+    dom.pttSubLabel.textContent = 'Speak in English · On-Device ASR + 3D Digital Twin AI';
     dom.voiceMeter.hidden = false;
 
-    const animateNativeMeter = () => {
-      if (!state.isRecording || !state.usingNativeIosMic) return;
-      const pct = 28 + Math.round(45 * Math.abs(Math.sin(performance.now() * 0.008)));
-      dom.voiceMeterFill.style.width = `${pct}%`;
-      meterRaf = requestAnimationFrame(animateNativeMeter);
-    };
-    animateNativeMeter();
+    if (nativePttPollTimer) {
+      clearInterval(nativePttPollTimer);
+    }
+    nativePttPollTimer = setInterval(async () => {
+      if (!state.isRecording || !state.usingNativeIosMic || nativePttPollInFlight) return;
+      nativePttPollInFlight = true;
+      try {
+        const pollResp = await fetchNativeVoiceWithTimeout('/api/voice/handsfree_poll', {}, 1200);
+        if (!pollResp.ok || !state.isRecording) return;
+        const pData = await pollResp.json();
+        if (typeof pData.rms_pct === 'number') {
+          dom.voiceMeterFill.style.width = `${Math.max(12, pData.rms_pct)}%`;
+        }
+        if (pData.partial_transcript && pData.partial_transcript.trim()) {
+          dom.pttSubLabel.textContent = `Heard: "${pData.partial_transcript.trim()}"`;
+        }
+      } catch (_e) {
+        // Ignore transient poll timeout during PTT
+      } finally {
+        nativePttPollInFlight = false;
+      }
+    }, 240);
     return true;
   } catch (_err) {
     return false;
@@ -4466,11 +4671,16 @@ async function startNativeIosMicRecording() {
 }
 
 async function stopNativeIosMicRecording() {
+  if (nativePttPollTimer) {
+    clearInterval(nativePttPollTimer);
+    nativePttPollTimer = null;
+  }
+  nativePttPollInFlight = false;
   state.usingNativeIosMic = false;
   state.voiceRequestInFlight = true;
   dom.pttLabel.textContent = 'Transcribing & Diagnosing...';
-  dom.pttSubLabel.textContent = 'Running On-Device ASR + FieldScan AI...';
-  setThinkingState(true, 'Transcribing voice & inspecting sensor on iPad M4...');
+  dom.pttSubLabel.textContent = 'Running On-Device English ASR + FieldScan AI...';
+  setThinkingState(true, 'Transcribing voice & updating 3D Digital Twin...');
   try {
     const resp = await fetchNativeVoiceWithTimeout(
       '/api/voice/native_stop',
@@ -4479,18 +4689,25 @@ async function stopNativeIosMicRecording() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dip_address: computeDipAddress() }),
       },
-      6500
+      22000
     );
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
     }
     const data = await resp.json();
-    if (data.transcript) {
+    if (data.transcript && String(data.transcript).trim()) {
       appendChatMessage({
         role: 'user',
         author: 'FIELD OPERATOR (VOICE)',
         text: data.transcript,
       });
+    } else if (data.status === 'no_speech') {
+      appendChatMessage({
+        role: 'assistant',
+        author: 'VOICE PIPELINE',
+        text: data.diagnosis || 'No clear English speech was captured. Hold the button while speaking or tap once, speak, and tap again.',
+      });
+      return;
     }
     handleCopilotResponse(data);
   } catch (err) {
@@ -4530,7 +4747,13 @@ async function toggleVoiceRecording() {
   }
 
   try {
-    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
     audioChunks = [];
     pcmFloatChunks = [];
 
@@ -5251,7 +5474,67 @@ function bindWorkstationEvents() {
     dom.autoSpeakText.textContent = state.autoSpeak ? 'Voice: ON' : 'Voice: Muted';
   });
 
-  dom.btnVoiceRecord.addEventListener('click', toggleVoiceRecording);
+  // Hybrid Push-to-Talk (Press-and-Hold >= 380ms) AND Tap-to-Start / Tap-to-Stop on #btnVoiceRecord
+  let pttPointerActive = false;
+  let pttDownTs = 0;
+  let pttStopOnRelease = false;
+  let pttStartPromise = null;
+  let pttSuppressClickUntil = 0;
+
+  dom.btnVoiceRecord.addEventListener('pointerdown', (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    if (state.voiceRequestInFlight) return;
+    pttPointerActive = true;
+    pttDownTs = Date.now();
+    pttSuppressClickUntil = Date.now() + 900;
+
+    if (state.isRecording) {
+      pttStopOnRelease = true;
+      pttStartPromise = null;
+      return;
+    }
+    pttStopOnRelease = false;
+    pttStartPromise = toggleVoiceRecording();
+  });
+
+  const finishPttPointerGesture = async () => {
+    if (!pttPointerActive) return;
+    pttPointerActive = false;
+    const heldMs = Date.now() - pttDownTs;
+    pttSuppressClickUntil = Date.now() + 500;
+
+    if (pttStopOnRelease) {
+      pttStopOnRelease = false;
+      if (state.isRecording) {
+        stopVoiceRecording();
+      }
+      return;
+    }
+
+    // If operator held the button while speaking (>= 380 ms), auto-stop & transcribe on release!
+    if (heldMs >= 380) {
+      if (pttStartPromise) {
+        try {
+          await pttStartPromise;
+        } catch (_e) {}
+        pttStartPromise = null;
+      }
+      if (state.isRecording) {
+        stopVoiceRecording();
+      }
+    }
+  };
+
+  window.addEventListener('pointerup', finishPttPointerGesture);
+  window.addEventListener('pointercancel', finishPttPointerGesture);
+
+  dom.btnVoiceRecord.addEventListener('click', (e) => {
+    if (Date.now() < pttSuppressClickUntil) {
+      e.preventDefault();
+      return;
+    }
+    toggleVoiceRecording();
+  });
 
   dom.textQueryForm.addEventListener('submit', async (e) => {
     e.preventDefault();

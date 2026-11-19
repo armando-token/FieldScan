@@ -1306,6 +1306,29 @@ svg.lucide {
   line-height: 1.35;
 }
 
+/* Interactive Cyan 3D Digital Twin AI Guide Callout */
+.fault-callout.is-guided {
+  background: rgba(8, 22, 36, 0.95);
+  border-color: var(--sky-bright);
+  border-left: 4px solid var(--sky-bright);
+  box-shadow: 0 10px 26px rgba(2, 132, 199, 0.35), 0 8px 20px rgba(0, 0, 0, 0.65);
+}
+
+.fault-callout.is-guided::after {
+  background: rgba(8, 22, 36, 0.95);
+  border-right-color: var(--sky-bright);
+  border-bottom-color: var(--sky-bright);
+}
+
+.fault-callout.is-guided .fault-callout-header {
+  color: #bae6fd;
+}
+
+.fault-callout.is-guided .fault-pulse-dot {
+  background: var(--sky-bright);
+  box-shadow: 0 0 8px var(--sky-bright);
+}
+
 /* Sub-Assembly Selector Strip at Bottom of 3D Stage */
 .assembly-strip {
   position: absolute;
@@ -2983,4 +3006,29 @@ svg.lucide {
 
 .export-strip {
   flex-wrap: wrap;
+}
+
+.manual-section-banner,
+.lightbox-section-banner {
+  padding: 6px 9px;
+  border-radius: var(--r-sm);
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(251, 191, 36, 0.55);
+  color: #fef3c7;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.lightbox-section-banner {
+  margin: 8px 16px 0;
+  padding: 10px 14px;
+  font-size: 12.5px;
+}
+
+.manual-section-banner strong,
+.lightbox-section-banner strong {
+  display: block;
+  font-family: var(--font-mono);
+  color: #fde68a;
+  margin-bottom: 2px;
 }

@@ -42,8 +42,12 @@ echo "[1/5] Generating SHA-256 resource manifest & syncing BundleResources..."
 
 if command -v uv >/dev/null 2>&1; then
     (cd "${PROJECT_ROOT}" && uv run python scripts/sync_manifest.py --sync-bundle --verify)
+    echo "[1.5/5] Running System-Wide Anti-Regression & Dependency Audit Gate..."
+    (cd "${PROJECT_ROOT}" && uv run python scripts/audit_no_regressions.py)
 else
     python3 "${PROJECT_ROOT}/scripts/sync_manifest.py" --sync-bundle --verify
+    echo "[1.5/5] Running System-Wide Anti-Regression & Dependency Audit Gate..."
+    python3 "${PROJECT_ROOT}/scripts/audit_no_regressions.py"
 fi
 
 echo "[2/5] Validating Info.plist, Entitlements (12 GB M4 RAM), and Xcode project..."
@@ -56,6 +60,10 @@ SWIFT_FILES=(
     "${APP_SOURCE_DIR}/FieldScanRuntimeConfig.swift"
     "${APP_SOURCE_DIR}/ModbusTCPClient.swift"
     "${APP_SOURCE_DIR}/FieldScanSessionEngine.swift"
+    "${APP_SOURCE_DIR}/FieldScanManualNavigator.swift"
+    "${APP_SOURCE_DIR}/FieldScanTwinController.swift"
+    "${APP_SOURCE_DIR}/FieldScanVisionDetector.swift"
+    "${APP_SOURCE_DIR}/FieldScanConversationEngine.swift"
     "${APP_SOURCE_DIR}/LlamaServerBridge.swift"
     "${APP_SOURCE_DIR}/PythonRuntimeBridge.swift"
     "${APP_SOURCE_DIR}/NativeCameraBridge.swift"

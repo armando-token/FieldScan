@@ -67,16 +67,16 @@
       "size_bytes": 3189
     },
     "static/app.js": {
-      "sha256": "00583601a15ac8b36a47b59c530bc39d19191fc23040203b5a376407670f7146",
-      "size_bytes": 200486
+      "sha256": "cbcb203d37f7be00e3620e2fc3b56f72aa14f7b6c7326cd71ad550ac01f4a61f",
+      "size_bytes": 209802
     },
     "static/index.html": {
-      "sha256": "e3a4f1e85862e49e76af1b6cf0c37830436cff5b3baccb77b02a5a31cfefb042",
-      "size_bytes": 39396
+      "sha256": "2e42258c89788e38c23eec4127bbeb5ea28a026317d48b100ec24eb210bea14f",
+      "size_bytes": 39911
     },
     "static/styles.css": {
-      "sha256": "20f20847a59536d5f05ca4e5ddc9c9f9e08fc2d3b9e64dec33b035fb4c4f73b6",
-      "size_bytes": 61673
+      "sha256": "1c907cafbab3d67e579355d9f0d0db280ed507e68f318ce30817557bc845432f",
+      "size_bytes": 62808
     },
     "static/vendor/OrbitControls.js": {
       "sha256": "6f3052dd8860a60fe6999260d50558ff54609523724c6e374326228e5590cf55",
@@ -108,5 +108,5 @@
     }
   },
   "schema_version": 1,
-  "tree_sha256": "2c59486bcee2068b1d77a0e69a4b82616ae43f501560b0ee35cc5413b8c22466"
+  "tree_sha256": "0bbdae70f4db781b692e45ed4a1dde36b878627b64b22b37b3000afe6bb5507b"
 }

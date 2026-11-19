@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 // ============================================================================
 // FieldScan CAD v2.1 — Native Swift Contract & Parity Verification Runner
@@ -304,6 +305,107 @@ func runSwiftContractSuite() throws {
     let p95Idx = min(sortedLat.count - 1, Int(Double(sortedLat.count) * 0.95))
     let p95Ms = sortedLat[p95Idx]
 
+    // 9. Modular 100% English Intent, Interactive 3D Digital Twin, Manual Auto-Open & Carpet-Proof Vision Verification
+    let hearIntent = FieldScanConversationEngine.classifyIntent(query: "Can you hear me?")
+    check(hearIntent.intent == .generalChat && hearIntent.language == "en", "Anti-Parrot: hearing check must be general_chat EN")
+
+    let carpetIntent = FieldScanConversationEngine.classifyIntent(query: "Can you see what is on the carpet under the sensor?")
+    check(carpetIntent.intent == .sceneVision && carpetIntent.language == "en", "Scene-Vision: carpet question must route to scene_vision EN")
+
+    let calIntent = FieldScanConversationEngine.classifyIntent(query: "Where in the datasheet is the calibration section located?")
+    check(calIntent.intent == .manualLookup && calIntent.language == "en", "Manual-Lookup: calibration datasheet query must route to manual_lookup EN")
+
+    let calLookup = FieldScanManualNavigator.lookupManual(for: "Where in the datasheet is the calibration section?")
+    check(calLookup.matched && calLookup.openManual && calLookup.openLightbox && calLookup.primaryPage == 3, "ManualNavigator: calibration must auto-open Page 3 Section 3.1")
+
+    // Verify 1:1 Swift FieldScanTwinController parity for DIP-8, rear cable, main probe, X-ray, and close
+    let twinDip = FieldScanTwinController.resolveTwinAction(
+        query: "Show me how to configure the pins for Slave 3",
+        zoneHint: nil,
+        currentDipAddress: 1
+    )
+    check((twinDip?["focus_zone"] as? String) == "upper_barrel_dip" && (twinDip?["explode_pcb"] as? Bool) == true && (twinDip?["open_dip_pip"] as? Bool) == true, "TwinController: DIP-8 configuration must explode housing & open PiP")
+    check((twinDip?["dip_bits"] as? [Int]) == [0, 0, 0, 0, 0, 0, 1, 1], "TwinController: Slave #3 must set DIP bits [0,0,0,0,0,0,1,1]")
+
+    let twinRear = FieldScanTwinController.resolveTwinAction(
+        query: "Show me at the back how the cable connects",
+        zoneHint: nil,
+        currentDipAddress: 1
+    )
+    check((twinRear?["focus_zone"] as? String) == "waterproof_gland_leads" && (twinRear?["camera_pose"] as? String) == "rear_wiring", "TwinController: rear cable must orbit 3D camera to waterproof_gland_leads")
+
+    let twinMain = FieldScanTwinController.resolveTwinAction(
+        query: "I want to see the main sensor probe and how it is placed",
+        zoneHint: nil,
+        currentDipAddress: 1
+    )
+    check((twinMain?["focus_zone"] as? String) == "strainer_head" && (twinMain?["camera_pose"] as? String) == "tip_closeup", "TwinController: main sensor must orbit 3D camera to strainer_head")
+
+    let twinClose = FieldScanTwinController.resolveTwinAction(
+        query: "Close the housing and reset view",
+        zoneHint: nil,
+        currentDipAddress: 1
+    )
+    check((twinClose?["action"] as? String) == "reset_view" && (twinClose?["explode_pcb"] as? Bool) == false, "TwinController: close housing must reset 3D twin")
+
+    // Synthesize textured carpet frame (960x540) WITHOUT sensor -> must reject carpet (`sensorDetected == false`)
+    let cw = 960, ch = 540
+    var carpetPixels = [UInt8](repeating: 0, count: cw * ch * 4)
+    for y in 0..<ch {
+        for x in 0..<cw {
+            let p = (y * cw + x) * 4
+            let noise = Int(((x * 37 + y * 91) % 45) - 22)
+            let weave = (x % 3 == 0) ? 14 : 0
+            carpetPixels[p] = UInt8(max(0, min(255, 162 + noise + weave)))
+            carpetPixels[p + 1] = UInt8(max(0, min(255, 134 + noise + weave)))
+            carpetPixels[p + 2] = UInt8(max(0, min(255, 106 + noise + weave)))
+            carpetPixels[p + 3] = 255
+        }
+    }
+    let cs = CGColorSpaceCreateDeviceRGB()
+    let detector = FieldScanVisionDetector()
+    let emptyCarpetCG: CGImage = carpetPixels.withUnsafeMutableBytes { ptr in
+        let ctx = CGContext(data: ptr.baseAddress, width: cw, height: ch, bitsPerComponent: 8, bytesPerRow: cw * 4, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        return ctx.makeImage()!
+    }
+    let carpetOnlyRes = detector.analyzeCGImage(emptyCarpetCG, outputWidth: cw, outputHeight: ch)!
+    check(carpetOnlyRes.sensorDetected == false, "VisionDetector: textured carpet without sensor MUST NOT false-detect")
+    check(carpetOnlyRes.grainScore >= 4.0, "VisionDetector: textured carpet grain score must reflect fibrous texture")
+
+    // Now place cylindrical TZ THT-02 with open teal/blue SW1 DIP-8 PCB + 8 bright pins on the textured carpet at (x: 180..560, y: 175..223 -> center ~ (370, 199))
+    for y in 175..<223 {
+        for x in 180..<560 {
+            let p = (y * cw + x) * 4
+            if x >= 355 && x < 435 && y >= 180 && y < 218 {
+                if x >= 366 && x < 424 && y >= 187 && y < 211 {
+                    let relX = x - 370
+                    let isPin = (y >= 189 && y < 196 && relX >= 0 && relX < 48 && (relX % 6) < 3)
+                    if isPin {
+                        carpetPixels[p] = 248; carpetPixels[p + 1] = 248; carpetPixels[p + 2] = 248
+                    } else {
+                        carpetPixels[p] = 168; carpetPixels[p + 1] = 32; carpetPixels[p + 2] = 36
+                    }
+                } else {
+                    carpetPixels[p] = 16; carpetPixels[p + 1] = 95; carpetPixels[p + 2] = 172
+                }
+            } else {
+                carpetPixels[p] = 226; carpetPixels[p + 1] = 224; carpetPixels[p + 2] = 220
+            }
+        }
+    }
+    let sensorOnCarpetCG: CGImage = carpetPixels.withUnsafeMutableBytes { ptr in
+        let ctx = CGContext(data: ptr.baseAddress, width: cw, height: ch, bitsPerComponent: 8, bytesPerRow: cw * 4, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        return ctx.makeImage()!
+    }
+    let tVis0 = CFAbsoluteTimeGetCurrent()
+    let sensorRes = detector.analyzeCGImage(sensorOnCarpetCG, outputWidth: cw, outputHeight: ch)!
+    let visionMs = (CFAbsoluteTimeGetCurrent() - tVis0) * 1000.0
+    check(sensorRes.sensorDetected == true, "VisionDetector: must detect cylinder on textured carpet on frame 1")
+    check(abs(sensorRes.centerX - 370.0) < 28.0 && abs(sensorRes.centerY - 199.0) < 20.0, "VisionDetector: must lock onto cylinder center (370,199), not carpet center (480,270)")
+    check(sensorRes.pcbOpenDetected == true, "VisionDetector: must detect exposed blue PCB")
+    check(sensorRes.dipFocusPoint != nil && abs(Double(sensorRes.dipFocusPoint![0]) - 395.0) < 28.0, "VisionDetector: must lock onto SW1 DIP-8 8-pin comb")
+    check(visionMs < 25.0, "VisionDetector: single-frame analysis must complete in < 25 ms (got \(visionMs) ms)")
+
     let summary: [String: Any] = [
         "swift_contract_suite": "PASS",
         "contract_version": FieldScanSessionEngine.contractVersion,
@@ -316,6 +418,7 @@ func runSwiftContractSuite() throws {
         "swift_intent_n": sortedLat.count,
         "swift_intent_median_ms": Double(round(medianMs * 10000) / 10000),
         "swift_intent_p95_ms": Double(round(p95Ms * 10000) / 10000),
+        "vision_carpet_lock_ms": Double(round(visionMs * 100) / 100),
         "sample_export_sha256": expDemo["pdf_sha256"] ?? "",
     ]
     let outData = try JSONSerialization.data(withJSONObject: summary, options: [.sortedKeys])

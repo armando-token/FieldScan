@@ -78,9 +78,12 @@ def _detect_conversational_repair_intent(text: str) -> str | None:
     if not q:
         return None
 
-    # Never hijack conversational greetings or natural questions — route them to interactive LFM3-VL-2B
-    if q.endswith("?") or re.match(
-        r"^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening)|what|which|how|why|where|who|when|can\s+you\s+explain|explain|tell\s+me|is\s+the|are\s+the|do\s+i|does\s+it)\b",
+    # Never hijack conversational greetings or natural questions — route them to interactive VLM
+    if q.endswith("?") or q.startswith("\u00bf") or re.match(
+        r"^(?:hola|buenos|buenas|hey|hi|hello|good\s+(?:morning|afternoon|evening)|"
+        r"what|which|how|why|where|who|when|can\s+you|could\s+you|explain|tell\s+me|"
+        r"que|cual|como|por\s+que|donde|en\s+que|puedes|me\s+escuchas|muestrame|dime|"
+        r"is\s+the|are\s+the|do\s+i|does\s+it)\b",
         q,
     ):
         return None
@@ -622,13 +625,22 @@ async def _handle_multimodal_or_live_repair_query(
     intent = _detect_conversational_repair_intent(query)
 
     if intent == "inspect_open":
-        return await asyncio.to_thread(
+        res = await asyncio.to_thread(
             _REPAIR.start_open_inspection,
             _SCANNER.get_telemetry(),
             _MODBUS.get_telemetry(),
             _SCANNER.get_latest_jpeg(),
             engine.synthesize_speech_b64,
         )
+        from fieldscan.twin_controller import resolve_twin_action
+
+        res.setdefault("language", "en")
+        res["twin_action"] = resolve_twin_action(
+            query,
+            zone_hint="upper_barrel_dip",
+            current_dip_address=dip_address or 1,
+        )
+        return res
 
     if intent == "guide_dip":
         res = await asyncio.to_thread(
@@ -638,7 +650,16 @@ async def _handle_multimodal_or_live_repair_query(
             dip_address,
             engine.synthesize_speech_b64,
         )
-        await asyncio.to_thread(_MODBUS.set_target_slave, int(res["target_slave_id"]))
+        target_sid = int(res["target_slave_id"])
+        await asyncio.to_thread(_MODBUS.set_target_slave, target_sid)
+        from fieldscan.twin_controller import resolve_twin_action
+
+        res.setdefault("language", "en")
+        res["twin_action"] = resolve_twin_action(
+            query,
+            zone_hint="upper_barrel_dip",
+            current_dip_address=target_sid,
+        )
         return res
 
     if intent == "signoff_report":
@@ -678,7 +699,9 @@ async def _handle_multimodal_or_live_repair_query(
 
     spec = load_tht02_spec()
     tel = _SCANNER.get_telemetry() if include_camera else None
+    raw_jpg: bytes | None = None
     if include_camera:
+        raw_jpg = _SCANNER.get_raw_jpeg()
         q_low = query.lower()
         if bool(tel and tel.get("pcb_open_detected")) and any(
             kw in q_low for kw in ("dip", "pin", "switch", "rocker", "slave", "address", "pcb", "config")
@@ -699,6 +722,7 @@ async def _handle_multimodal_or_live_repair_query(
         modbus_telemetry=mb_tel,
         zone_hint=zone_hint,
         dip_address=dip_address,
+        raw_frame_jpeg=raw_jpg,
     )
 
 

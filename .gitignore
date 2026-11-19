@@ -38,3 +38,6 @@ data/
 *.key
 *.crt
 *.pem
+
+# Clean source & git history delivery folder (untracked export)
+/fieldscan_source_delivery/

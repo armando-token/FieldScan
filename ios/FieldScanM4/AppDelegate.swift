@@ -20,8 +20,8 @@ public final class AppDelegate: UIResponder, UIApplicationDelegate {
         // Start in-process native HTTP/1.1 listener on 127.0.0.1:8088 immediately (< 5 ms)
         StandaloneFieldScanServer.shared.start()
 
-        // Start background health probe for LFM3-Omni-2B (:8091) without blocking app launch
-        LlamaServerBridge.shared.startEmbeddedServersIfAvailable()
+        // Start background embedded Metal VLM (`Qwen3-VL-4B` / `LFM3-VL-2B` on :8091) when local GGUF weights exist & RAM >= 3.2 GB
+        LlamaServerBridge.shared.startEmbeddedServersIfAvailable(enableExperimentalInProcessLlama: true)
 
         return true
     }

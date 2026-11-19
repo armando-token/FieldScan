@@ -340,7 +340,7 @@ class LFMEngine:
         self._piper_voice: Any = None
         self._piper_lock = threading.Lock()
         self._history_lock = threading.Lock()
-        self._chat_history: deque[dict[str, str]] = deque(maxlen=6)
+        self._chat_history: deque[dict[str, str]] = deque(maxlen=10)
 
         self.last_latency_ms: float | None = None
         self.last_tokens_per_sec: float | None = None
@@ -506,13 +506,30 @@ class LFMEngine:
         modbus_telemetry: dict[str, Any] | None = None,
         zone_hint: str | None = None,
         dip_address: int | None = None,
+        raw_frame_jpeg: bytes | None = None,
     ) -> dict[str, Any]:
-        """Interactive English AI Engineer: conversational chat, datasheet Q&A, and multimodal visual fault diagnosis."""
+        """Interactive Bilingual (EN/ES) AI Engineer: natural chat, scene vision, datasheet navigation, and fault diagnosis."""
+        from fieldscan.manual_navigator import lookup_manual_for_query
+        from fieldscan.profiles_and_manual import resolve_device_profile, verify_and_resolve_citations
+        from fieldscan.scene_and_chat_router import (
+            analyze_scene_environment,
+            build_natural_conversational_fallback,
+            classify_conversation_intent,
+            evaluate_simple_math,
+        )
+        from fieldscan.session_engine import apply_deterministic_grounding_filter
+        from fieldscan.twin_controller import resolve_twin_action
+
         t0 = time.perf_counter()
-        mode = _classify_query_mode(query, zone_hint)
+        intent_info = classify_conversation_intent(query, zone_hint)
+        intent = intent_info["intent"]
+        lang = "en"
+        lang_name = "English"
+
         tel = scanner_telemetry or {}
         mb = modbus_telemetry or {}
         history_msgs = self._snapshot_chat_history()
+        clean_scene_jpg = raw_frame_jpeg or frame_jpeg
 
         is_sim_mb = bool(mb.get("simulation") or str(mb.get("source", "")).startswith("simulator"))
         is_fresh_mb = bool(mb.get("fresh", mb.get("online", False)))
@@ -539,108 +556,64 @@ class LFMEngine:
         recommended_actions: list[str] = []
         cited_pages: list[int] = []
         primary_page: int | None = None
+        open_manual = False
+        open_manual_lightbox = False
+        manual_section: dict[str, Any] | None = None
+        scene_info: dict[str, Any] | None = None
+        manual_res: dict[str, Any] | None = None
+        twin_action: dict[str, Any] | None = (
+            resolve_twin_action(
+                query,
+                zone_hint=zone_hint,
+                current_dip_address=dip_address,
+                vision_telemetry=tel,
+            )
+            if intent in ("sensor_diagnostics", "manual_lookup")
+            else None
+        )
 
-        if mode == "conversational":
+        # Map intent to legacy query_mode label for observability while keeping strict separation
+        mode = intent
+
+        if intent == "general_chat":
             messages: list[dict[str, Any]] = [
                 {
                     "role": "system",
                     "content": (
-                        "You are the FieldScan AI Engineer, a friendly, interactive offline industrial assistant "
-                        "speaking strictly in English. Answer the operator's exact message naturally and conversationally "
-                        "in 1 to 3 clear sentences. When greeted or told they have a question, greet them warmly and "
-                        "invite their question. Never dump sensor values or diagnostic templates unless explicitly asked."
+                        f"You are FieldScan AI, a natural, intelligent, offline conversational assistant. "
+                        f"Respond strictly in {lang_name} in 1 to 3 concise, natural sentences. "
+                        f"Maintain continuity with the conversation history. Answer ONLY what the user actually asked. "
+                        f"NEVER mention sensor status, Modbus readings, temperatures, or datasheet specs unless the user explicitly asks about them."
                     ),
                 },
-                *history_msgs,
+                *history_msgs[-8:],
                 {"role": "user", "content": query},
             ]
             temperature = 0.3
-            max_tokens = 110
-        elif mode == "technical_qa":
-            cited_pages = _infer_relevant_pages(query)
-            primary_page = cited_pages[0] if cited_pages else None
-            dip_note = f" UI DIP-8 Calculator currently set to Slave #{dip_address}." if dip_address is not None else ""
-            tech_ref = (
-                f"Live Workstation Context: {scada_note} Optical Camera: sensor_detected={tel.get('detected', True)}, "
-                f"pcb_open={tel.get('pcb_open_detected', False)}.{dip_note}\n"
-                "TZ THT-02 Manual V1.1 Reference: 140.0 mm x 16.0 mm OD housing (Page 9), SHT30 CMOSens probe "
-                "(-40..+125 C +/-0.3 C, 0..100 %RH +/-2 %RH, DC 5-24V, Pages 1 & 3); "
-                "4-wire cable: Red=V+, Black=GND, Yellow=RS-485 A+, Green=RS-485 B- (Page 4); "
-                "internal SW1 DIP-8 binary weights Pin 1..8 = [128, 64, 32, 16, 8, 4, 2, 1] (Slave #1 = Pin 8 ON & Pins 1..7 OFF; "
-                "Slave #2 = Pin 7 ON; Slave #3 = Pins 7 & 8 ON; Slave #176 = Pins 1,3,4 ON; all OFF = invalid Slave 0; "
-                "changing DIP-8 away from Slave #1 and power-cycling causes a Modbus Slave ID mismatch / NO RESPONSE bus fault, Page 5); "
-                "Modbus-RTU 9600 8N1 Function 0x03: Reg 0x0000=Temp, Reg 0x0001=Humidity, whereas 0x7FFF only indicates a physical SHT30 probe fault (Pages 6-8). "
-                "Digital Twin is generated 100% offline in Three.js from Manual V1.1 mechanical drawings (Pages 1, 4, 5, 9)."
-            )
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are the FieldScan AI Engineer, an interactive offline specialist for the TZ THT-02 RS-485 sensor. "
-                        "Always respond strictly in clear, natural English (2 to 4 concise sentences) answering the operator's "
-                        "exact question directly. Only include live sensor telemetry if relevant to their question."
-                    ),
-                },
-                *history_msgs[-4:],
-                {
-                    "role": "user",
-                    "content": (
-                        f"{tech_ref}\n\n"
-                        f"Operator question: {query}\n"
-                        "Answer the operator's exact question directly and naturally in English:"
-                    ),
-                },
-            ]
-            temperature = 0.2
-            max_tokens = 145
-        else:
-            zone_id, exp_bool = _infer_target_zone(query, zone_hint, scanner_telemetry)
-            explode_pcb = exp_bool
-            z_spec = _find_zone_spec(spec, zone_id)
-            zone_label = z_spec.get("label_en") or z_spec.get("label") or zone_id
-            probable_causes = list(z_spec.get("probable_faults_en") or z_spec.get("probable_faults") or [])
-            recommended_actions = list(z_spec.get("recommended_actions_en") or z_spec.get("recommended_actions") or [])
-            electrical_symptoms = list(z_spec.get("electrical_symptoms") or [])
-            cited_pages = list(z_spec.get("manual_pages", [1, 6, 9]))
-            primary_page = (
-                5 if explode_pcb else (6 if zone_id == "strainer_head" else (cited_pages[0] if cited_pages else 1))
-            )
+            max_tokens = 120
 
-            cv_summary = (
-                f"OpenCV Telemetry: detected={tel.get('detected', True)}, "
-                f"envelope={tel.get('est_length_mm', 140.0)}x{tel.get('est_diameter_mm', 16.0)} mm, "
-                f"anomaly={tel.get('anomaly_detected', False)} in zone={tel.get('anomaly_zone') or zone_id} "
-                f"(z={tel.get('anomaly_z_mm', 0.0)} mm), pcb_open={tel.get('pcb_open_detected', explode_pcb)}."
-            )
-            dip_note = f" Current DIP-8 Slave Address={dip_address}." if dip_address is not None else ""
-            manual_facts = (
-                f"Official TZ THT-02 Manual V1.1: rigid envelope 140.0 mm x 16.0 mm OD (Page 9); "
-                f"SHT30/SHT3X CMOSens element, DC 5~24V 5mA supply; "
-                f"4 leads: Red=V+, Black=public GND, Yellow=A+, Green=B- (Page 4); "
-                f"internal DIP-8 weights [128,64,32,16,8,4,2,1], e.g. Pins 1,3,4 ON = 176, 2-step unscrew opening (Page 5); "
-                f"Modbus holding registers 0x0000 Temp and 0x0001 Humidity return 7FFFH when sensor is abnormal (Page 6). "
-                f"Inspected zone: {zone_label}. Typical symptoms: {'; '.join(electrical_symptoms[:2])}."
-            )
-
-            user_content: list[dict[str, Any]] = []
-            if frame_jpeg:
-                compact_jpg = _downscale_jpeg_for_vlm(frame_jpeg, max_dim=384)
+        elif intent == "scene_vision":
+            scene_info = analyze_scene_environment(clean_scene_jpg, tel, lang=lang)
+            user_content_scene: list[dict[str, Any]] = []
+            if clean_scene_jpg:
+                compact_jpg = _downscale_jpeg_for_vlm(clean_scene_jpg, max_dim=512)
                 b64_img = base64.b64encode(compact_jpg).decode("ascii")
-                user_content.append(
+                user_content_scene.append(
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"},
                     }
                 )
-            user_content.append(
+            user_content_scene.append(
                 {
                     "type": "text",
                     "text": (
-                        f"{cv_summary}{dip_note} {scada_note}\n"
-                        f"Datasheet reference: {manual_facts}\n"
-                        f"Operator query: {query}\n"
-                        "Answer the operator's query directly in clear, concise Industrial English (2 to 4 sentences), "
-                        "citing the relevant TZ THT-02 Manual V1.1 details and corrective or verification step."
+                        f"Visual scene cues: surface_color={scene_info.get('surface_color')}, "
+                        f"surface_texture={scene_info.get('surface_texture')}, lighting={scene_info.get('lighting')}.\n"
+                        f"User question: {query}\n"
+                        f"Answer the user's exact visual question naturally in {lang_name} (1 to 3 sentences). "
+                        f"Describe the floor, carpet/rug, desk, background, colors, textures, or objects they asked about. "
+                        f"Do NOT recite Modbus telemetry or sensor specifications unless asked."
                     ),
                 }
             )
@@ -648,17 +621,180 @@ class LFMEngine:
                 {
                     "role": "system",
                     "content": (
-                        "You are FieldScan CAD, an interactive offline industrial diagnostic engineer for the TZ THT-02 RS-485 sensor. "
-                        "Respond strictly in clear technical English grounded in the camera frame and User's Manual V1.1."
+                        f"You are FieldScan AI with live camera vision. Respond strictly in natural {lang_name}. "
+                        f"Look directly at the attached image and answer ONLY what the user asked about the scene, floor, carpet, surface, or objects."
                     ),
                 },
-                {"role": "user", "content": user_content},
+                *history_msgs[-6:],
+                {"role": "user", "content": user_content_scene},
+            ]
+            temperature = 0.2
+            max_tokens = 140
+
+        elif intent == "manual_lookup":
+            manual_res = lookup_manual_for_query(query, lang=lang)
+            open_manual = bool(manual_res["open_manual"])
+            open_manual_lightbox = bool(manual_res["open_manual_lightbox"])
+            primary_page = manual_res["manual_page"]
+            cited_pages = list(manual_res["cited_pages"])
+            manual_section = manual_res["manual_section"]
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        f"You are FieldScan AI, an expert on the TZ THT-02 User's Manual V1.1. "
+                        f"Respond strictly in clear, natural {lang_name} (2 to 4 concise sentences). "
+                        f"Explicitly tell the user the exact Page number and Section number where the information is located, "
+                        f"confirm that you are opening the datasheet viewer to that page right now, and summarize the verified excerpt accurately. "
+                        f"Never invent registers or calibration claims beyond the verified manual excerpt."
+                    ),
+                },
+                *history_msgs[-6:],
+                {
+                    "role": "user",
+                    "content": (
+                        f"Verified Manual Lookup Result:\n{manual_res['answer']}\n\n"
+                        f"User question: {query}\n"
+                        f"Answer directly in {lang_name} citing the exact page and section:"
+                    ),
+                },
             ]
             temperature = 0.15
-            max_tokens = 135
+            max_tokens = 165
+
+        else:
+            # `sensor_diagnostics` — explicit sensor status, fault, DIP-8, wiring, or Modbus query
+            norm_q = query.lower()
+            is_visual_fault = bool(
+                zone_hint
+                or tel.get("anomaly_detected")
+                or any(
+                    k in norm_q
+                    for k in ("inspect", "patch", "parche", "fault", "falla", "broken", "roto", "failing", "frayed", "open", "a\u0062ierto", "camera", "camara")
+                )
+            )
+            mode = "visual_diagnosis" if is_visual_fault else "technical_qa"
+
+            manual_res = lookup_manual_for_query(query, lang=lang)
+            if is_visual_fault:
+                zone_id, exp_bool = _infer_target_zone(query, zone_hint, scanner_telemetry)
+                explode_pcb = exp_bool
+                z_spec = _find_zone_spec(spec, zone_id)
+                zone_label = z_spec.get("label_en") or z_spec.get("label") or zone_id
+                probable_causes = list(z_spec.get("probable_faults_en") or z_spec.get("probable_faults") or [])
+                recommended_actions = list(z_spec.get("recommended_actions_en") or z_spec.get("recommended_actions") or [])
+                electrical_symptoms = list(z_spec.get("electrical_symptoms") or [])
+                cited_pages = (
+                    list(manual_res["cited_pages"])
+                    if (manual_res and manual_res["matched"])
+                    else list(z_spec.get("manual_pages", [1, 6, 9]))
+                )
+                primary_page = (
+                    manual_res["manual_page"]
+                    if (manual_res and manual_res["matched"])
+                    else (5 if explode_pcb else (6 if zone_id == "strainer_head" else (cited_pages[0] if cited_pages else 1)))
+                )
+                manual_section = manual_res["manual_section"] if (manual_res and manual_res["matched"]) else None
+                open_manual = bool(manual_res and manual_res["open_manual"])
+
+                cv_summary = (
+                    f"OpenCV Telemetry: detected={tel.get('detected', True)}, "
+                    f"envelope={tel.get('est_length_mm', 140.0)}x{tel.get('est_diameter_mm', 16.0)} mm, "
+                    f"anomaly={tel.get('anomaly_detected', False)} in zone={tel.get('anomaly_zone') or zone_id} "
+                    f"(z={tel.get('anomaly_z_mm', 0.0)} mm), pcb_open={tel.get('pcb_open_detected', explode_pcb)}."
+                )
+                dip_note = f" Current DIP-8 Slave Address={dip_address}." if dip_address is not None else ""
+                manual_facts = (
+                    f"Official TZ THT-02 Manual V1.1: 140.0 mm x 16.0 mm OD (Page 9); "
+                    f"SHT30/SHT3X CMOSens element (+/-0.3 C, +/-2 %RH, Pages 2-3); "
+                    f"4 leads: Red=V+, Black=GND, Yellow=A+, Green=B- (Page 4); "
+                    f"SW1 DIP-8 weights [128,64,32,16,8,4,2,1], 2-step unscrew opening (Page 5); "
+                    f"Modbus registers 0x0000 Temp and 0x0001 Humidity return 7FFFH when probe is abnormal (Page 6). "
+                    f"Inspected zone: {zone_label}. Symptoms: {'; '.join(electrical_symptoms[:2])}."
+                )
+
+                user_content: list[dict[str, Any]] = []
+                if frame_jpeg:
+                    compact_jpg = _downscale_jpeg_for_vlm(frame_jpeg, max_dim=448)
+                    b64_img = base64.b64encode(compact_jpg).decode("ascii")
+                    user_content.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"},
+                        }
+                    )
+                user_content.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"{cv_summary}{dip_note} {scada_note}\n"
+                            f"Datasheet reference: {manual_facts}\n"
+                            f"Operator query: {query}\n"
+                            f"Answer the operator's exact query directly in {lang_name} (2 to 4 concise sentences), "
+                            f"grounded strictly in the live context and Manual V1.1."
+                        ),
+                    }
+                )
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            f"You are FieldScan AI, an offline industrial diagnostic engineer for the TZ THT-02 RS-485 sensor. "
+                            f"Respond strictly in clear, natural {lang_name} grounded in the camera frame, bus state, and Manual V1.1."
+                        ),
+                    },
+                    *history_msgs[-4:],
+                    {"role": "user", "content": user_content},
+                ]
+                temperature = 0.15
+                max_tokens = 150
+            else:
+                cited_pages = (
+                    list(manual_res["cited_pages"])
+                    if (manual_res and manual_res["matched"])
+                    else _infer_relevant_pages(query)
+                )
+                primary_page = (
+                    manual_res["manual_page"]
+                    if (manual_res and manual_res["matched"])
+                    else (cited_pages[0] if cited_pages else None)
+                )
+                manual_section = manual_res["manual_section"] if (manual_res and manual_res["matched"]) else None
+                open_manual = bool(manual_res and manual_res["open_manual"])
+                open_manual_lightbox = bool(manual_res and manual_res["open_manual_lightbox"])
+
+                dip_note = f" UI DIP-8 Calculator set to Slave #{dip_address}." if dip_address is not None else ""
+                twin_note = (
+                    f"\n3D Digital Twin Action Applied Now: {twin_action['callout_title']} — {twin_action['callout_body']}"
+                    if twin_action
+                    else ""
+                )
+                manual_hint = f"\nVerified Datasheet Excerpt: {manual_res['answer']}" if (manual_res and manual_res["matched"]) else ""
+                tech_ref = (
+                    f"Live Workstation Context: {scada_note} Optical Camera: sensor_detected={tel.get('detected', False)}, "
+                    f"pcb_open={tel.get('pcb_open_detected', False)}, hand_detected={tel.get('hand_or_tool_detected', False)}.{dip_note}{twin_note}{manual_hint}"
+                )
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are FieldScan AI, an interactive 3D Digital Twin & field specialist for the TZ THT-02 RS-485 sensor. "
+                            "Respond strictly in clear, natural English (2 to 4 concise sentences) answering ONLY what the operator asked. "
+                            "When a 3D Digital Twin Action is applied, briefly guide the operator through what you are showing on the 3D model "
+                            "so they can replicate it live in front of the camera."
+                        ),
+                    },
+                    *history_msgs[-6:],
+                    {
+                        "role": "user",
+                        "content": f"{tech_ref}\n\nOperator question: {query}\nAnswer directly in {lang_name}:",
+                    },
+                ]
+                temperature = 0.2
+                max_tokens = 155
 
         payload = {
-            "model": "LFM3-VL-2B",
+            "model": "Qwen3-VL-4B-Instruct",
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -667,41 +803,54 @@ class LFMEngine:
 
         vlm_text = ""
         tokens_per_s: float | None = None
-        model_used = "LiquidAI LFM3-VL-2B · Mac Mini"
+        model_used = "Local VLM · Mac Mini"
         provider_id = "mac_assisted_llm"
 
-        try:
-            with httpx.Client(trust_env=False, timeout=22.0) as client:
-                resp = client.post(f"{self.vl_url}/v1/chat/completions", json=payload)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    actual_model = str(data.get("model") or "").strip()
-                    if actual_model:
-                        model_used = f"{actual_model} · Mac Mini"
-                    msg = (data.get("choices") or [{}])[0].get("message", {})
-                    vlm_text = (msg.get("content") or "").strip()
-                    timings = data.get("timings") or {}
-                    pred_per_s = timings.get("predicted_per_second")
-                    if isinstance(pred_per_s, (int, float)) and pred_per_s > 0:
-                        tokens_per_s = round(float(pred_per_s), 1)
-        except Exception:
-            vlm_text = ""
+        # Fast-path deterministic arithmetic so voice feels instantaneous
+        fast_math = evaluate_simple_math(query) if intent == "general_chat" else None
+        if fast_math is not None:
+            vlm_text = build_natural_conversational_fallback(query, intent_info, history_msgs, scene_info)
+            provider_id = "local_rules_v2"
+            model_used = "FieldScan Conversational Core · On-Device"
+
+        if not vlm_text:
+            try:
+                with httpx.Client(trust_env=False, timeout=18.0) as client:
+                    resp = client.post(f"{self.vl_url}/v1/chat/completions", json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        actual_model = str(data.get("model") or "").strip()
+                        if actual_model:
+                            short_m = Path(actual_model).name
+                            model_used = f"{short_m} · Mac Mini"
+                        msg = (data.get("choices") or [{}])[0].get("message", {})
+                        vlm_text = (msg.get("content") or "").strip()
+                        timings = data.get("timings") or {}
+                        pred_per_s = timings.get("predicted_per_second")
+                        if isinstance(pred_per_s, (int, float)) and pred_per_s > 0:
+                            tokens_per_s = round(float(pred_per_s), 1)
+            except Exception:
+                vlm_text = ""
 
         elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
 
         if not vlm_text:
             provider_id = "local_rules_v2"
             model_used = "Local Deterministic Rules v2.1 · On-Device"
-            if mode == "conversational":
-                vlm_text = (
-                    "Hello! I am your offline FieldScan AI Engineer. Go ahead with your question—I can help with "
-                    "TZ THT-02 operation, SW1 DIP-8 switch setup, RS-485 Modbus wiring, or live optical diagnostics."
-                )
+            if intent in ("general_chat", "scene_vision"):
+                vlm_text = build_natural_conversational_fallback(query, intent_info, history_msgs, scene_info)
+            elif intent == "manual_lookup" and manual_res:
+                vlm_text = str(manual_res["answer"])
             elif mode == "technical_qa":
-                vlm_text = (
-                    f"Per TZ THT-02 Manual V1.1, the sensor uses 8 binary DIP switches [128, 64, 32, 16, 8, 4, 2, 1] "
-                    f"(Pin 8 ON = Slave #1) over RS-485 9600 8N1. Current bus status: {scada_note}"
-                )
+                if manual_res and manual_res["matched"]:
+                    vlm_text = str(manual_res["answer"])
+                elif twin_action:
+                    vlm_text = (
+                        f"I've updated the 3D Digital Twin ({twin_action['callout_title']}): "
+                        f"{twin_action['callout_body']} Replicate this step directly in front of the live camera."
+                    )
+                else:
+                    vlm_text = f"Current TZ THT-02 status: {scada_note}"
             else:
                 z_spec = _find_zone_spec(spec, zone_id or "strainer_head")
                 zone_label = z_spec.get("label_en") or z_spec.get("label") or (zone_id or "strainer_head")
@@ -713,9 +862,6 @@ class LFMEngine:
                     f"Field diagnosis on {zone_label} (TZ THT-02, 140.0x16.0 mm): {cause_0}. "
                     f"{sym_0}. Recommended action: {act_0} (Manual V1.1 Pages {', '.join(map(str, cited_pages[:3]))})."
                 )
-
-        from fieldscan.profiles_and_manual import resolve_device_profile, verify_and_resolve_citations
-        from fieldscan.session_engine import apply_deterministic_grounding_filter
 
         active_prof = resolve_device_profile("tzone_tht02")
         grounding = apply_deterministic_grounding_filter(
@@ -732,22 +878,33 @@ class LFMEngine:
             self.last_tokens_per_sec = tokens_per_s
         self.last_model_label = model_used
 
-        cit_check = verify_and_resolve_citations(active_prof, [int(p) for p in cited_pages])
-        citations = (
-            cit_check["citations"]
-            if cit_check["verified"]
-            else [
-                {"page": int(p), "label": MANUAL_PAGE_TITLES.get(int(p), f"Page {p} · Manual V1.1")}
-                for p in cited_pages
-                if 1 <= int(p) <= 9
-            ]
-        )
-        audio_b64 = self.synthesize_speech_b64(vlm_text)
+        citations: list[dict[str, Any]] = []
+        if cited_pages:
+            cit_check = verify_and_resolve_citations(active_prof, [int(p) for p in cited_pages])
+            citations = (
+                cit_check["citations"]
+                if cit_check["verified"]
+                else [
+                    {"page": int(p), "label": MANUAL_PAGE_TITLES.get(int(p), f"Page {p} · Manual V1.1")}
+                    for p in cited_pages
+                    if 1 <= int(p) <= 9
+                ]
+            )
+        audio_b64 = self.synthesize_speech_b64(vlm_text) if lang == "en" else None
+
+        if twin_action:
+            if explode_pcb is None and twin_action.get("explode_pcb") is not None:
+                explode_pcb = bool(twin_action["explode_pcb"])
+
+        dip_bits_out = twin_action.get("dip_bits") if twin_action else None
+        focus_dip_out = bool(explode_pcb) or bool(twin_action and twin_action.get("open_dip_pip"))
 
         return {
             "diagnosis": vlm_text,
             "assistant_message": vlm_text,
             "query_mode": mode,
+            "intent": intent,
+            "language": "en",
             "provider_id": provider_id,
             "grounding_corrected": grounding["grounding_corrected"],
             "grounding_reasons": grounding["reasons"],
@@ -756,8 +913,13 @@ class LFMEngine:
             "highlighted_zone": zone_id,
             "fault_zone": zone_id,
             "explode_pcb": explode_pcb,
-            "focus_dip": bool(explode_pcb),
+            "focus_dip": focus_dip_out,
+            "dip_bits": dip_bits_out,
+            "twin_action": twin_action,
+            "open_manual": open_manual,
+            "open_manual_lightbox": open_manual_lightbox,
             "manual_page": primary_page,
+            "manual_section": manual_section,
             "citations": citations,
             "manual_citations": citations,
             "inference_ms": elapsed_ms,

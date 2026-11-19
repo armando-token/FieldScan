@@ -17,6 +17,10 @@
 		A100000926B1000100000001 /* StandaloneFieldScanServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000B26B1000100000001 /* StandaloneFieldScanServer.swift */; };
 		A100000A26B1000100000001 /* ModbusTCPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000C26B1000100000001 /* ModbusTCPClient.swift */; };
 		A100000B26B1000100000001 /* FieldScanSessionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000D26B1000100000001 /* FieldScanSessionEngine.swift */; };
+		A100000C26B1000100000001 /* FieldScanManualNavigator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000E26B1000100000001 /* FieldScanManualNavigator.swift */; };
+		A100000D26B1000100000001 /* FieldScanVisionDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000F26B1000100000001 /* FieldScanVisionDetector.swift */; };
+		A100000E26B1000100000001 /* FieldScanConversationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200001B26B1000100000001 /* FieldScanConversationEngine.swift */; };
+		A100000F26B1000100000001 /* FieldScanTwinController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200001C26B1000100000001 /* FieldScanTwinController.swift */; };
 		A100001A26B1000100000001 /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A200001A26B1000100000001 /* libsqlite3.tbd */; };
 		A100000826B1000100000001 /* BundleResources in Resources */ = {isa = PBXBuildFile; fileRef = A200000826B1000100000001 /* BundleResources */; };
 		A100001026B1000100000001 /* libggml-base.0.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001026B1000100000001 /* libggml-base.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
@@ -66,6 +70,10 @@
 		A200000B26B1000100000001 /* StandaloneFieldScanServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandaloneFieldScanServer.swift; sourceTree = "<group>"; };
 		A200000C26B1000100000001 /* ModbusTCPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModbusTCPClient.swift; sourceTree = "<group>"; };
 		A200000D26B1000100000001 /* FieldScanSessionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldScanSessionEngine.swift; sourceTree = "<group>"; };
+		A200000E26B1000100000001 /* FieldScanManualNavigator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldScanManualNavigator.swift; sourceTree = "<group>"; };
+		A200000F26B1000100000001 /* FieldScanVisionDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldScanVisionDetector.swift; sourceTree = "<group>"; };
+		A200001B26B1000100000001 /* FieldScanConversationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldScanConversationEngine.swift; sourceTree = "<group>"; };
+		A200001C26B1000100000001 /* FieldScanTwinController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldScanTwinController.swift; sourceTree = "<group>"; };
 		A200001A26B1000100000001 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
 		A200000826B1000100000001 /* BundleResources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = BundleResources; sourceTree = "<group>"; };
 		A200000926B1000100000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -117,6 +125,10 @@
 				A200000B26B1000100000001 /* StandaloneFieldScanServer.swift */,
 				A200000C26B1000100000001 /* ModbusTCPClient.swift */,
 				A200000D26B1000100000001 /* FieldScanSessionEngine.swift */,
+				A200000E26B1000100000001 /* FieldScanManualNavigator.swift */,
+				A200000F26B1000100000001 /* FieldScanVisionDetector.swift */,
+				A200001B26B1000100000001 /* FieldScanConversationEngine.swift */,
+				A200001C26B1000100000001 /* FieldScanTwinController.swift */,
 				A200001A26B1000100000001 /* libsqlite3.tbd */,
 				A200000826B1000100000001 /* BundleResources */,
 				A200001026B1000100000001 /* libggml-base.0.dylib */,
@@ -221,6 +233,10 @@
 				A100000926B1000100000001 /* StandaloneFieldScanServer.swift in Sources */,
 				A100000A26B1000100000001 /* ModbusTCPClient.swift in Sources */,
 				A100000B26B1000100000001 /* FieldScanSessionEngine.swift in Sources */,
+				A100000C26B1000100000001 /* FieldScanManualNavigator.swift in Sources */,
+				A100000D26B1000100000001 /* FieldScanVisionDetector.swift in Sources */,
+				A100000E26B1000100000001 /* FieldScanConversationEngine.swift in Sources */,
+				A100000F26B1000100000001 /* FieldScanTwinController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

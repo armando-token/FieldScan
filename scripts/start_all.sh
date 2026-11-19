@@ -106,8 +106,13 @@ if [[ "${OS_NAME}" == "Darwin" ]]; then
 fi
 
 MODELS_DIR="${MODELS_DIR:-${VENDOR_ROOT}/models}"
-VL_MODEL="${MODELS_DIR}/LFM3-VL-2B-QAD-Q4_0.gguf"
-VL_MMPROJ="${MODELS_DIR}/mmproj-LFM3-VL-2B-Q8_0.gguf"
+if [[ -f "${MODELS_DIR}/Qwen3VL-4B-Instruct-Q4_K_M.gguf" && -f "${MODELS_DIR}/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf" ]]; then
+  VL_MODEL="${MODELS_DIR}/Qwen3VL-4B-Instruct-Q4_K_M.gguf"
+  VL_MMPROJ="${MODELS_DIR}/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+else
+  VL_MODEL="${MODELS_DIR}/LFM3-VL-2B-QAD-Q4_0.gguf"
+  VL_MMPROJ="${MODELS_DIR}/mmproj-LFM3-VL-2B-Q8_0.gguf"
+fi
 AUDIO_MODEL="${MODELS_DIR}/LFM3-Audio-2B-Q4_0.gguf"
 AUDIO_MMPROJ="${MODELS_DIR}/mmproj-LFM3-Audio-2B-Q4_0.gguf"
 export PIPER_VOICE_MODEL="${PIPER_VOICE_MODEL:-${VENDOR_ROOT}/piper/en/en_US/lessac/medium/en_US-lessac-medium.onnx}"

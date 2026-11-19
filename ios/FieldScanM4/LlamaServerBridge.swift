@@ -170,13 +170,36 @@ public final class LlamaServerBridge {
             guard let self = self else { return }
             FieldScanRuntimeConfig.shared.prepareSharedDirectories()
 
-            // Optional experimental in-process llama.cpp launch when smallest verified GGUF weights exist & RAM headroom >= 3.2 GB (`IA-05`)
+            // Optional experimental in-process llama.cpp launch when verified GGUF weights exist & RAM headroom >= 3.2 GB (`IA-05`)
             if enableExperimentalInProcessLlama {
                 self.launchExperimentalInProcessLlamaIfEligible()
             }
 
             self.refreshProviderHealth { vlOK, audioOK in
                 completion?(vlOK, audioOK)
+            }
+
+            // Poll health asynchronously during Metal GGUF warmup (up to 30s) so `vlServerRunning` activates automatically once loaded
+            if enableExperimentalInProcessLlama {
+                self.pollWarmupUntilReady(remainingAttempts: 30)
+            }
+        }
+    }
+
+    private func pollWarmupUntilReady(remainingAttempts: Int) {
+        guard remainingAttempts > 0 else { return }
+        stateLock.lock()
+        let launched = inProcessServerLaunched
+        let alreadyUp = vlServerRunning
+        stateLock.unlock()
+        guard launched && !alreadyUp else { return }
+
+        workerQueue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self else { return }
+            self.refreshProviderHealth { vlOK, _ in
+                if !vlOK {
+                    self.pollWarmupUntilReady(remainingAttempts: remainingAttempts - 1)
+                }
             }
         }
     }
@@ -198,10 +221,20 @@ public final class LlamaServerBridge {
         }
 
         let cfg = FieldScanRuntimeConfig.shared
-        guard let modelURL = locateModelFile(named: cfg.visionModelFilename) ?? locateModelFile(named: cfg.omniModelFilename) else {
+        // Prefer Qwen3VL-4B-Instruct on 12 GB iPad Air M4 (strong bilingual ES/EN + scene & document vision) when >= 4.2 GB free
+        let preferQwen = mem.availableMemoryGB >= 4.2
+        let modelURL: URL?
+        let mmprojURL: URL?
+        if preferQwen, let qModel = locateModelFile(named: cfg.qwenModelFilename) {
+            modelURL = qModel
+            mmprojURL = locateModelFile(named: cfg.qwenMmprojFilename)
+        } else {
+            modelURL = locateModelFile(named: cfg.visionModelFilename) ?? locateModelFile(named: cfg.omniModelFilename)
+            mmprojURL = locateModelFile(named: cfg.visionMmprojFilename) ?? locateModelFile(named: cfg.omniMmprojFilename)
+        }
+        guard let resolvedModelURL = modelURL else {
             return
         }
-        let mmprojURL = locateModelFile(named: cfg.visionMmprojFilename) ?? locateModelFile(named: cfg.omniMmprojFilename)
         let (mainFnOpt, termFnOpt) = resolveLlamaSymbols()
         guard let mainFn = mainFnOpt else { return }
 
@@ -213,10 +246,10 @@ public final class LlamaServerBridge {
         Thread.detachNewThread {
             var args: [String] = [
                 "llama-server",
-                "-m", modelURL.path,
+                "-m", resolvedModelURL.path,
                 "--host", "127.0.0.1",
                 "--port", "8091",
-                "-c", "1536",
+                "-c", "2048",
                 "-ngl", "99",
             ]
             if let mp = mmprojURL {

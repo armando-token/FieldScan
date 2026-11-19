@@ -209,11 +209,113 @@ func runSwiftContractSuite() throws {
     ])
     check((calTzone["status_code"] as? String) == "READONLY_COMPARISON_COMPLETE" && (calTzone["writes_emitted"] as? Int) == 0, "CAL-03: TZONE read-only comparison")
 
+    // 5. Shared Golden Fixture Corpus (`DAT-09`, `BUS-04..08`, `VOZ-01..10`)
+    let goldenURL = repoRoot.appendingPathComponent("knowledge/fixtures/golden_contracts_v2_1.json")
+    let goldenData = try Data(contentsOf: goldenURL)
+    let goldenRoot = try JSONSerialization.jsonObject(with: goldenData) as! [String: Any]
+    check((goldenRoot["contract_version"] as? String) == FieldScanSessionEngine.contractVersion, "DAT-09: Golden fixture contract_version match")
+
+    let mbapVectors = goldenRoot["mbap_vectors"] as! [[String: Any]]
+    var mbapPassed = 0
+    for vec in mbapVectors {
+        let hexStr = (vec["frame_hex"] as! String).replacingOccurrences(of: " ", with: "")
+        var rawBytes: [UInt8] = []
+        var idx = hexStr.startIndex
+        while idx < hexStr.endIndex {
+            let nextIdx = hexStr.index(idx, offsetBy: 2)
+            rawBytes.append(UInt8(hexStr[idx..<nextIdx], radix: 16)!)
+            idx = nextIdx
+        }
+        let vecParser = ModbusTCPStreamParser()
+        let frames = try vecParser.feed(Data(rawBytes))
+        check(frames.count == 1, "DAT-09 MBAP vector \(vec["id"] ?? "") frame count")
+        let exp = vec["expected"] as! [String: Any]
+        check(Int(frames[0].transactionId) == (exp["transaction_id"] as! Int), "DAT-09 MBAP TxID")
+        check(frames[0].isException == (exp["is_exception"] as! Bool), "DAT-09 MBAP exception flag")
+        if frames[0].isException {
+            check(Int(frames[0].exceptionCode ?? 0) == (exp["exception_code"] as! Int), "DAT-09 MBAP exception code")
+        } else {
+            let dec = try ModbusTCPStreamParser.decodeTHT02PDURegisters(unitId: frames[0].unitId, pduPayload: frames[0].pduPayload)
+            check((dec["temp_quality"] as? String) == (exp["temp_quality"] as? String), "DAT-09 MBAP temp_quality")
+            check((dec["humidity_quality"] as? String) == (exp["humidity_quality"] as? String), "DAT-09 MBAP humidity_quality")
+            if let expT = exp["temp_c"] as? Double {
+                check(abs(((dec["temp_c"] as? Double) ?? -999.0) - expT) < 0.001, "DAT-09 MBAP temp_c")
+            } else {
+                check((dec["temp_c"] is NSNull) || dec["temp_c"] == nil, "DAT-09 MBAP nil temp_c on 0x7FFF")
+            }
+            if let expH = exp["humidity_rh"] as? Double {
+                check(abs(((dec["humidity_rh"] as? Double) ?? -999.0) - expH) < 0.001, "DAT-09 MBAP humidity_rh")
+            }
+        }
+        mbapPassed += 1
+    }
+
+    var intentLatenciesMs: [Double] = []
+    func verifyCorpus(_ items: [[String: Any]], expectedLang: String) -> Int {
+        var passed = 0
+        for item in items {
+            let utt = item["utterance"] as! String
+            let t0 = CFAbsoluteTimeGetCurrent()
+            let parsed = FieldScanSessionEngine.classifyBilingualVoiceIntent(utt, currentLanguage: expectedLang == "es" ? "en" : "es")
+            let dtMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
+            intentLatenciesMs.append(dtMs)
+            let gotIntent = parsed["intent"] as? String
+            let expIntent = item["expected_intent"] as! String
+            let gotLang = parsed["detected_language"] as? String
+            check(gotIntent == expIntent, "VOZ golden intent mismatch for '\(utt)': got \(String(describing: gotIntent)), expected \(expIntent)")
+            check(gotLang == expectedLang, "VOZ golden language mismatch for '\(utt)': got \(String(describing: gotLang)), expected \(expectedLang)")
+            if let expPage = item["expected_page"] as? Int {
+                check((parsed["page"] as? Int) == expPage, "VOZ golden page mismatch for '\(utt)'")
+            }
+            if let expComp = item["expected_component"] as? String {
+                check((parsed["component_3d_id"] as? String) == expComp, "VOZ golden component mismatch for '\(utt)'")
+            }
+            if let expTarget = item["expected_target_language"] as? String {
+                check((parsed["target_language"] as? String) == expTarget, "VOZ golden target_language mismatch for '\(utt)'")
+            }
+            passed += 1
+        }
+        return passed
+    }
+
+    let enCorpus = goldenRoot["voice_corpus_en"] as! [[String: Any]]
+    let esCorpus = goldenRoot["voice_corpus_es"] as! [[String: Any]]
+    let advCorpus = goldenRoot["voice_adversarial"] as! [[String: Any]]
+    let enPassed = verifyCorpus(enCorpus, expectedLang: "en")
+    let esPassed = verifyCorpus(esCorpus, expectedLang: "es")
+
+    var advPassed = 0
+    for item in advCorpus {
+        let utt = item["utterance"] as! String
+        let parsed = FieldScanSessionEngine.classifyBilingualVoiceIntent(utt, currentLanguage: "en")
+        if let expAmb = item["expected_ambiguous"] as? Bool, expAmb {
+            check((parsed["ambiguous"] as? Bool) == true, "VOZ adversarial ambiguous expected for '\(utt)'")
+            check((parsed["clarification_reason"] as? String) == (item["expected_reason"] as? String), "VOZ adversarial reason mismatch for '\(utt)'")
+        }
+        if let expBypass = item["expected_bypass_blocked"] as? Bool, expBypass {
+            check((parsed["bypass_blocked"] as? Bool) == true, "VOZ adversarial bypass_blocked expected for '\(utt)'")
+            check((parsed["intent"] as? String) == (item["expected_intent"] as? String), "VOZ adversarial intent mismatch for '\(utt)'")
+        }
+        advPassed += 1
+    }
+
+    let sortedLat = intentLatenciesMs.sorted()
+    let medianMs = sortedLat[sortedLat.count / 2]
+    let p95Idx = min(sortedLat.count - 1, Int(Double(sortedLat.count) * 0.95))
+    let p95Ms = sortedLat[p95Idx]
+
     let summary: [String: Any] = [
         "swift_contract_suite": "PASS",
         "contract_version": FieldScanSessionEngine.contractVersion,
         "manifest_verified": true,
         "pilot_writes_blocked": true,
+        "golden_mbap_vectors_passed": mbapPassed,
+        "golden_voice_en_passed": enPassed,
+        "golden_voice_es_passed": esPassed,
+        "golden_voice_adversarial_passed": advPassed,
+        "swift_intent_n": sortedLat.count,
+        "swift_intent_median_ms": Double(round(medianMs * 10000) / 10000),
+        "swift_intent_p95_ms": Double(round(p95Ms * 10000) / 10000),
         "sample_export_sha256": expDemo["pdf_sha256"] ?? "",
     ]
     let outData = try JSONSerialization.data(withJSONObject: summary, options: [.sortedKeys])

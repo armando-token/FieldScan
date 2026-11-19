@@ -1812,7 +1812,7 @@ public final class StandaloneFieldScanServer: NSObject {
             "dip_focus_pt": sensorDetectedInFrame ? dipCenterPt : NSNull(),
             "dip_quad": sensorDetectedInFrame ? dipQuadPts : NSNull(),
             "anomaly_detected": anomalyDetected,
-            "anomaly_zone": anomalyZone as Any,
+            "anomaly_zone": anomalyZone ?? NSNull(),
             "anomaly_z_mm": anomalyZmm,
             "anomaly_confidence": anomalyDetected ? 0.96 : 0.0,
             "anomaly_label": anomalyLabel,

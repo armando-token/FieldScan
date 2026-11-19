@@ -410,10 +410,19 @@ public final class FieldScanSessionEngine {
     public static func classifyBilingualVoiceIntent(_ rawUtterance: String, currentLanguage: String = "en") -> [String: Any] {
         let norm = normalizeASCIILower(rawUtterance)
         var lang = currentLanguage
-        let esCues = ["que ", "debo", "revisar", "muestrame", "conector", "respondiendo", "lectura", "pagina", "repite", "captura", "cambiar a"]
+        let esCues = [
+            "que ", "cual es", "debo", "revisar", "muestrame", "mostrar", "resalt", "donde ",
+            "conector", "sonda", "brida", "soporte", "respondiendo", "esta ", "estado actual",
+            "humed", "lectura", "iniciar ", "probar ", "pagina", "repite", "repetir",
+            "captura", "tomar foto", "cambiar ", "saltar "
+        ]
+        let enCues = [
+            "what ", "show ", "open ", "go to ", "highlight ", "where is", "is the",
+            "read ", "start ", "page ", "repeat", "please ", "take photo", "i changed", "switch to"
+        ]
         if esCues.contains(where: { "\(norm) ".contains($0) }) {
             lang = "es"
-        } else if ["what ", "show me", "is the", "read ", "page ", "repeat", "switch to"].contains(where: { "\(norm) ".contains($0) }) {
+        } else if enCues.contains(where: { "\(norm) ".contains($0) }) {
             lang = "en"
         }
 

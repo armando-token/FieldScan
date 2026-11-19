@@ -170,14 +170,24 @@ def classify_bilingual_voice_intent(
     # Accent-normalized Spanish cue stems (kept strictly ASCII-clean)
     es_stems = (
         "que ",
+        "cual es",
         "debo",
         "revisar",
         "muestrame",
         "mostrar",
+        "resalt",
+        "donde ",
         "conector",
+        "sonda",
+        "brida",
+        "soporte",
         "respondiendo",
         "esta ",
+        "estado actual",
+        "humed",
         "lectura",
+        "iniciar ",
+        "probar ",
         "pagina",
         "repetir",
         "repite",
@@ -186,9 +196,27 @@ def classify_bilingual_voice_intent(
         "observacion",
         "idioma",
         "ingles",
-        "cambiar a",
+        "cambiar ",
+        "saltar ",
     )
-    en_stems = ("what ", "show me", "is the", "read ", "page ", "repeat", "capture", "switch to")
+    en_stems = (
+        "what ",
+        "show ",
+        "open ",
+        "go to ",
+        "highlight ",
+        "where is",
+        "is the",
+        "read ",
+        "start ",
+        "page ",
+        "repeat",
+        "please ",
+        "take photo",
+        "i changed",
+        "capture",
+        "switch to",
+    )
     if any(st in f"{norm} " for st in es_stems):
         detected_lang = "es"
     elif any(st in f"{norm} " for st in en_stems):

@@ -12,6 +12,7 @@ import json
 import plistlib
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import cv2
@@ -31,6 +32,7 @@ from fieldscan.modbus_tcp import (
     ModbusTCPStreamParser,
     PilotWriteBlockedError,
     build_mbap_read_holding_request,
+    decode_tht02_pdu_registers,
     start_mbap_test_gateway,
 )
 from fieldscan.offline_guard import OfflineSocketGuard
@@ -46,6 +48,7 @@ from fieldscan.session_engine import (
     apply_deterministic_grounding_filter,
     classify_bilingual_voice_intent,
 )
+from fieldscan.vision_scanner import VisionScanner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -810,3 +813,130 @@ def test_dat09_fastapi_endpoints_and_swift_engine_parity(tmp_path: Path) -> None
     swift_summary = json.loads(run_res.stdout.strip().splitlines()[-1])
     assert swift_summary["swift_contract_suite"] == "PASS"
     assert swift_summary["contract_version"] == "2.1.0"
+    assert swift_summary["golden_mbap_vectors_passed"] == 4
+    assert swift_summary["golden_voice_en_passed"] == 20
+    assert swift_summary["golden_voice_es_passed"] == 20
+    assert swift_summary["golden_voice_adversarial_passed"] == 6
+    assert swift_summary["swift_intent_n"] == 40
+    assert swift_summary["swift_intent_p95_ms"] < 50.0
+
+
+def test_section14_golden_fixtures_40_voice_corpus_latency_and_vis09_matrix(tmp_path: Path) -> None:
+    """Validate Section 14.2 & 14.4 quantitative criteria on shared golden vectors + 7-scenario VIS-09 matrix."""
+    golden = json.loads((REPO_ROOT / "knowledge" / "fixtures" / "golden_contracts_v2_1.json").read_text(encoding="utf-8"))
+    assert golden["contract_version"] == "2.1.0"
+
+    # 1. Shared MBAP vectors in Python (`DAT-09`, `BUS-04..08`)
+    for vec in golden["mbap_vectors"]:
+        parser = ModbusTCPStreamParser()
+        frames = parser.feed(bytes.fromhex(vec["frame_hex"]))
+        assert len(frames) == 1
+        exp = vec["expected"]
+        assert frames[0].transaction_id == exp["transaction_id"]
+        assert frames[0].is_exception is exp["is_exception"]
+        if frames[0].is_exception:
+            assert frames[0].exception_code == exp["exception_code"]
+        else:
+            dec = decode_tht02_pdu_registers(frames[0].unit_id, frames[0].pdu_payload)
+            assert dec["temp_c"] == exp["temp_c"]
+            assert dec["humidity_rh"] == exp["humidity_rh"]
+            assert dec["temp_quality"] == exp["temp_quality"]
+            assert dec["humidity_quality"] == exp["humidity_quality"]
+
+    # 2. 40-utterance EN + ES voice benchmark (`>=90%` threshold, asserting 100%) + latency p50/p95 (`n=40`)
+    latencies_ms: list[float] = []
+    for expected_lang, key in (("en", "voice_corpus_en"), ("es", "voice_corpus_es")):
+        items = golden[key]
+        assert len(items) == 20
+        correct = 0
+        for item in items:
+            opp_lang = "es" if expected_lang == "en" else "en"
+            t0 = time.perf_counter()
+            parsed = classify_bilingual_voice_intent(item["utterance"], current_language=opp_lang)
+            latencies_ms.append((time.perf_counter() - t0) * 1000.0)
+            ok = parsed["intent"] == item["expected_intent"] and parsed["detected_language"] == expected_lang
+            if "expected_page" in item:
+                ok = ok and parsed.get("page") == item["expected_page"]
+            if "expected_component" in item:
+                ok = ok and parsed.get("component_3d_id") == item["expected_component"]
+            if "expected_target_language" in item:
+                ok = ok and parsed.get("target_language") == item["expected_target_language"]
+            assert ok, f"Golden {expected_lang} voice failure on {item['utterance']!r}: {parsed}"
+            correct += 1
+        accuracy = correct / len(items)
+        assert accuracy >= 0.90 and correct == 20
+
+    sorted_lat = sorted(latencies_ms)
+    p50_ms = sorted_lat[len(sorted_lat) // 2]
+    p95_ms = sorted_lat[min(len(sorted_lat) - 1, int(len(sorted_lat) * 0.95))]
+    assert len(sorted_lat) == 40
+    assert p50_ms < 25.0 and p95_ms < 50.0
+
+    # 3. 6 adversarial utterances (`VOZ-04`, `VOZ-05`, `VOZ-10`)
+    for adv in golden["voice_adversarial"]:
+        parsed = classify_bilingual_voice_intent(adv["utterance"], current_language="en")
+        if adv.get("expected_ambiguous"):
+            assert parsed["ambiguous"] is True
+            assert parsed["clarification_reason"] == adv["expected_reason"]
+        if adv.get("expected_bypass_blocked"):
+            assert parsed["bypass_blocked"] is True
+            assert parsed["intent"] == adv["expected_intent"]
+
+    # 4. 7-scenario VIS-09 vision & auto-capture quality matrix
+    scanner = VisionScanner(initial_mode="sim_normal", auto_start=False)
+    eng = SessionEngine(db_path=tmp_path / "vis09.sqlite3", exports_dir=tmp_path / "exports")
+    sid = eng.create_session({"profile_id": "tzone_tht02", "serial_number": "VIS09-BENCH"})["session_id"]
+
+    # (a) sim_normal
+    scanner.set_mode("sim_normal")
+    t_norm = scanner.step_once()
+    assert t_norm["detected"] is True and t_norm["anomaly_detected"] is False
+
+    # (b) sim_open_dip
+    scanner.set_mode("sim_open_dip")
+    t_dip = scanner.step_once()
+    assert t_dip["detected"] is True and t_dip["pcb_open_detected"] is True and t_dip["anomaly_zone"] == "upper_barrel_dip"
+
+    # (c) sim_strainer_patch
+    scanner.set_mode("sim_strainer_patch")
+    t_strainer = scanner.step_once()
+    assert t_strainer["detected"] is True and t_strainer["anomaly_zone"] == "strainer_head"
+
+    # (d) sim_gland_fault
+    scanner.set_mode("sim_gland_fault")
+    t_gland = scanner.step_once()
+    assert t_gland["detected"] is True and t_gland["anomaly_zone"] == "waterproof_gland_leads"
+
+    # (e) sim_hand_screwdriver -> hand/tool occlusion flagged & rejected from auto-capture (`VIS-04`, `VIS-09`)
+    scanner.set_mode("sim_hand_screwdriver")
+    time.sleep(0.03)
+    t_occ = scanner.step_once()
+    assert t_occ["hand_detected"] is True and t_occ["tool_detected"] is True
+    r_occ = eng.ingest_camera_frame_for_session(
+        sid,
+        _make_sharp_probe_jpeg(seed=301),
+        vision_tel=t_occ,
+        camera_source="ipad:avfoundation:back",
+        manual_trigger=False,
+    )
+    assert r_occ["captured"] is False and r_occ["reason"] == "FRAME_REJECTED_OCCLUDED_OR_BLURRY"
+
+    # (f) white_sticker -> white occlusion rejected (`VIS-05`, `VIS-09`)
+    r_white = eng.ingest_camera_frame_for_session(
+        sid,
+        _make_sharp_probe_jpeg(seed=302, sticker=True),
+        vision_tel={"detected": True, "sharpness_score": 60.0, "exposure_ok": True, "white_sticker_occluded": True},
+        camera_source="ipad:avfoundation:back",
+        manual_trigger=False,
+    )
+    assert r_white["captured"] is False and r_white["reason"] == "FRAME_REJECTED_OCCLUDED_OR_BLURRY"
+
+    # (g) blur_dark -> low sharpness / underexposed rejected (`VIS-04`, `VIS-09`)
+    r_dark_blur = eng.ingest_camera_frame_for_session(
+        sid,
+        _make_sharp_probe_jpeg(seed=303, blur=True),
+        vision_tel={"detected": True, "sharpness_score": 6.0, "exposure_ok": False},
+        camera_source="ipad:avfoundation:back",
+        manual_trigger=False,
+    )
+    assert r_dark_blur["captured"] is False and r_dark_blur["reason"] == "FRAME_REJECTED_OCCLUDED_OR_BLURRY"

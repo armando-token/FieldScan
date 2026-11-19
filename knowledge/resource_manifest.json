@@ -1,6 +1,6 @@
 {
   "contract_version": "2.1.0",
-  "file_count": 25,
+  "file_count": 26,
   "files": {
     "assets/THT02_Users_Manual_v1.1.pdf": {
       "sha256": "fe5be7370ac42ad80d0e43c32c2b61d5f971a33ea9175c8405398d0fde4932cb",
@@ -49,6 +49,10 @@
     "knowledge/THT02_spec.json": {
       "sha256": "d1b34e86bc9e2b0887f5d67ff61869be83264513fb6a3782c7f39b841a7fc863",
       "size_bytes": 22304
+    },
+    "knowledge/fixtures/golden_contracts_v2_1.json": {
+      "sha256": "0b9ecafa37e4575b9e8300a0f414c70dc1b84fb0a98e20427a2c3215ec7c09d5",
+      "size_bytes": 6829
     },
     "knowledge/manual_index.json": {
       "sha256": "2fd05fbce244f184a402f40f3e3b0432d778bd67b82c060242c56f400043129f",
@@ -104,5 +108,5 @@
     }
   },
   "schema_version": 1,
-  "tree_sha256": "252ca78071a7440ed55a33cecda2a792a96794a4bf79083a02e0af670b5fdc1f"
+  "tree_sha256": "90a2dd53a4b67b8d06126c43c31533f4bea8dec495402c9145e1e5c1a40864f9"
 }

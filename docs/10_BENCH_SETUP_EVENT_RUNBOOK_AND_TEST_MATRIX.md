@@ -156,7 +156,7 @@ Status legend (per Section 14.1):
 | `OFF-05` | **PASS** | `FieldScanWebViewController.swift` (`isTrustedHMIHost`) + `Info.plist` audit in `test_off01_*` | `NSAllowsArbitraryLoadsInWebContent` removed; untrusted origins denied WebView nav & JS bridge. |
 | `OFF-06` | **PASS** | `FieldScanWebViewController.swift` (`pinnedTLSFingerprintSHA256`) | Self-signed TLS leaf cert pinned via SHA-256 DER digest; cert change requires operator re-pin. |
 | `OFF-07` | **PASS** | `test_airplane_mode_guard_blocks_external_sockets` + `test_off01_*` | Public WAN (`8.8.8.8:443`) blocked & counted separately from loopback/tether/bench-gateway traffic. |
-| `OFF-08` | **PASS** | `scripts/sync_manifest.py --sync-bundle --verify` + Swift `verifyResourceManifest()` | 25/25 tracked bundle files verified 100% SHA-256 identical (`tree_sha256 = 252ca78071a7...`). |
+| `OFF-08` | **PASS** | `scripts/sync_manifest.py --sync-bundle --verify` + Swift `verifyResourceManifest()` | 26/26 tracked bundle files verified 100% SHA-256 identical (`tree_sha256 = 90a2dd53a4b6...`). |
 
 ### 4.6 Planned Metrology Extension (`CAL-00` .. `CAL-09`)
 

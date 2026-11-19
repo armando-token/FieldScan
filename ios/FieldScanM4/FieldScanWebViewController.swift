@@ -1,20 +1,19 @@
 import Foundation
+import CryptoKit
+import Security
 #if canImport(UIKit)
 import UIKit
 import WebKit
 
-/// Fullscreen Landscape Widescreen HMI Controller for FieldScan CAD v2.0 on iPad Air M4 (12 GB RAM).
+/// Fullscreen Landscape Widescreen HMI Controller for FieldScan CAD v2.1 on iPad Air M4 (12 GB RAM).
 ///
-/// Features:
-///   - 60 FPS Metal-accelerated `WKWebView` for `Three.js v0.170` 3D Digital Twin & `uPlot` SCADA telemetry
-///   - Automatic camera & microphone media capture permission grant (`WKUIDelegate`)
-///   - `WKScriptMessageHandler` (`fieldscanNative`) supporting:
-///       * `startNativeCamera`
-///       * `stopNativeCamera`
-///       * `switchEndpoint`
-///       * `shareExportedFile`
-///       * `getDeviceMemoryInfo`
-///   - Collapsible floating operator mini-pill (`M4 12GB · Local / USB-C Tether · Share CAD`)
+/// Security & Field Reliability Guarantees:
+/// - **WebView & JS Bridge Origin Allowlist (`OFF-05`)**: Blocks navigation to unknown external hosts
+///   and verifies `message.frameInfo.securityOrigin` before granting camera, mic, endpoint, or share access.
+/// - **Certificate Fingerprint Pinning (`OFF-06`)**: Evaluates self-signed TLS certificates on assisted
+///   Mac tether by pinning the SHA-256 DER digest; rejects silent certificate replacement until operator reconfirms.
+/// - **Canonical Share Sheet Allowlist (`EXP-05`)**: Only shares verified files inside `Documents/exports/`
+///   and preserves all session records if Share Sheet is cancelled.
 public final class FieldScanWebViewController: UIViewController, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
 
     private var webView: WKWebView!
@@ -85,7 +84,7 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         let userScript = WKUserScript(
             source: bootstrapJS,
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: false
+            forMainFrameOnly: true
         )
         userContentController.addUserScript(userScript)
 
@@ -93,7 +92,7 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         config.userContentController = userContentController
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
-        config.preferences.javaScriptCanOpenWindowsAutomatically = true
+        config.preferences.javaScriptCanOpenWindowsAutomatically = false
 
         webView = WKWebView(frame: view.bounds, configuration: config)
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -114,7 +113,7 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         floatingPill.layer.borderColor = UIColor(red: 0.0, green: 0.78, blue: 0.96, alpha: 0.55).cgColor
 
         pillButton.translatesAutoresizingMaskIntoConstraints = false
-        pillButton.setTitle("M4 12GB · Local / USB-C Tether · Share CAD", for: .normal)
+        pillButton.setTitle("M4 12GB · iPad Local · Bench Setup", for: .normal)
         pillButton.setTitleColor(.white, for: .normal)
         pillButton.titleLabel?.font = UIFont.monospacedSystemFont(ofSize: 11.5, weight: .semibold)
         pillButton.contentEdgeInsets = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
@@ -138,17 +137,18 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         let shortMode: String
         switch mode {
         case .embeddedLocal:
-            shortMode = "Local :8088"
+            let gw = FieldScanRuntimeConfig.shared.pusrGatewayHost
+            shortMode = gw.isEmpty ? "iPad Local" : "iPad · PUSR \(gw)"
         case .usbTetherSecure, .usbTetherHTTP:
-            shortMode = "USB-C Tether 169.254.37.69"
+            shortMode = "Mac USB-C Assisted"
         case .lanWorkstation:
-            shortMode = "LAN 10.0.0.15"
+            shortMode = "Mac LAN Assisted"
         case .bundledOfflineStudio:
-            shortMode = "Offline 3D Twin"
+            shortMode = "Offline Bundle"
         case .customEndpoint:
-            shortMode = "Custom Host"
+            shortMode = "Assisted Host"
         }
-        let label = String(format: "M4 %.0fGB · %@ · Share CAD", mem.physicalMemoryGB, shortMode)
+        let label = String(format: "M4 %.0fGB · %@ · Share", mem.physicalMemoryGB, shortMode)
         pillButton.setTitle(label, for: .normal)
     }
 
@@ -170,49 +170,48 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         }
     }
 
-    // MARK: - Operator Control Sheet (Endpoint Switcher + Native Share Sheet)
+    // MARK: - Operator Control Sheet
 
     @objc private func presentOperatorControlSheet() {
-        let mem = FieldScanRuntimeConfig.shared.sampleMemoryTelemetry()
+        let cfg = FieldScanRuntimeConfig.shared
+        let mem = cfg.sampleMemoryTelemetry()
+        let gwDesc = cfg.pusrGatewayHost.isEmpty ? "Not configured" : "\(cfg.pusrGatewayHost):\(cfg.pusrGatewayPort)"
         let message = String(
-            format: "Physical RAM: %.2f GB | Available: %.2f GB\nActive Mode: %@",
+            format: "RAM: %.2f GB (%.2f GB Avail) | Provider: %@\nTopology: %@\nPUSR Gateway: %@",
             mem.physicalMemoryGB,
             mem.availableMemoryGB,
-            FieldScanRuntimeConfig.shared.currentMode.displayTitle
+            LlamaServerBridge.shared.activeModelName,
+            cfg.currentMode.displayTitle,
+            gwDesc
         )
 
         let sheet = UIAlertController(
-            title: "FieldScan CAD v2.0 — iPad Air M4 (12 GB)",
+            title: "FieldScan CAD v2.1 — iPad Air M4 Bench Control",
             message: message,
             preferredStyle: .actionSheet
         )
 
-        sheet.addAction(UIAlertAction(title: "Embedded Local Mode (127.0.0.1:8088)", style: .default) { [weak self] _ in
-            self?.switchEndpoint(to: FieldScanRuntimeConfig.shared.localBackendURL, mode: .embeddedLocal)
+        sheet.addAction(UIAlertAction(title: "iPad Autonomous Mode (127.0.0.1:8088 · No Mac)", style: .default) { [weak self] _ in
+            self?.switchEndpoint(to: cfg.localBackendURL, mode: .embeddedLocal)
         })
 
-        sheet.addAction(UIAlertAction(title: "USB-C Mac Mini Tether HTTPS (169.254.37.69:8443)", style: .default) { [weak self] _ in
-            self?.switchEndpoint(to: FieldScanRuntimeConfig.shared.usbTetherHTTPSURL, mode: .usbTetherSecure)
+        sheet.addAction(UIAlertAction(title: "Configure PUSR USR-DR164 Modbus TCP Gateway...", style: .default) { [weak self] _ in
+            self?.promptForPusrGateway()
         })
 
-        sheet.addAction(UIAlertAction(title: "USB-C Mac Mini Tether HTTP (169.254.37.69:8088)", style: .default) { [weak self] _ in
-            self?.switchEndpoint(to: FieldScanRuntimeConfig.shared.usbTetherHTTPURL, mode: .usbTetherHTTP)
+        sheet.addAction(UIAlertAction(title: "Mac Mini Assisted · USB-C HTTPS (\(cfg.macTetherHost):\(cfg.macHTTPSPort))", style: .default) { [weak self] _ in
+            self?.switchEndpoint(to: cfg.usbTetherHTTPSURL, mode: .usbTetherSecure)
         })
 
-        sheet.addAction(UIAlertAction(title: "Bundled Offline 3D Twin & SCADA Studio", style: .default) { [weak self] _ in
-            let bundled = PythonRuntimeBridge.shared.locateBundledOfflineStudioURL()
-            self?.switchEndpoint(to: bundled, mode: .bundledOfflineStudio)
+        sheet.addAction(UIAlertAction(title: "Configure Assisted Mac Host / Reset TLS Pin...", style: .default) { [weak self] _ in
+            self?.promptForAssistedMacEndpoint()
         })
 
-        sheet.addAction(UIAlertAction(title: "Custom IP / Host Endpoint...", style: .default) { [weak self] _ in
-            self?.promptForCustomEndpoint()
-        })
-
-        sheet.addAction(UIAlertAction(title: "Share Exported CAD / Warranty Dossier (.DXF / .STL / .ZIP)", style: .default) { [weak self] _ in
+        sheet.addAction(UIAlertAction(title: "Share Verified Dossier Files (Documents/exports)", style: .default) { [weak self] _ in
             self?.presentExportDirectoryShareSheet()
         })
 
-        sheet.addAction(UIAlertAction(title: "Start Native 30 FPS Camera Bridge", style: .default) { _ in
+        sheet.addAction(UIAlertAction(title: "Start Native Camera Bridge (UVC / Built-In)", style: .default) { _ in
             NativeCameraBridge.shared.startCapture(preferredSource: "auto", completion: nil)
         })
 
@@ -226,26 +225,62 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
     }
 
     private func switchEndpoint(to url: URL, mode: FieldScanEndpointMode) {
+        // Switching topology pauses active session & closes prior physical Modbus polling (`Phase 4.1`, `DAT-06`)
+        StandaloneFieldScanServer.shared.handleTopologySwitch()
+        FieldScanSessionEngine.shared.invalidateLiveConnection(reason: "topology_mode_switched")
         FieldScanRuntimeConfig.shared.currentMode = mode
         FieldScanRuntimeConfig.shared.activeEndpointURL = url
+        LlamaServerBridge.shared.refreshProviderHealth { _, _ in }
         updatePillStatusLabel(mode: mode)
         loadResolvedEndpoint(mode: mode, url: url)
     }
 
-    private func promptForCustomEndpoint() {
+    private func promptForPusrGateway() {
+        let cfg = FieldScanRuntimeConfig.shared
         let alert = UIAlertController(
-            title: "Custom FieldScan Endpoint",
-            message: "Enter URL (e.g. https://169.254.37.69:8443 or http://10.0.0.15:8088)",
+            title: "PUSR USR-DR164 Modbus TCP Gateway",
+            message: "Enter isolated bench gateway IP and MBAP port (default 502; never 5502):",
             preferredStyle: .alert
         )
         alert.addTextField { tf in
-            tf.placeholder = "https://169.254.37.69:8443"
-            tf.text = FieldScanRuntimeConfig.shared.activeEndpointURL.absoluteString
+            tf.placeholder = "192.168.0.7"
+            tf.text = cfg.pusrGatewayHost
+            tf.keyboardType = .numbersAndPunctuation
+        }
+        alert.addTextField { tf in
+            tf.placeholder = "502"
+            tf.text = String(cfg.pusrGatewayPort)
+            tf.keyboardType = .numberPad
+        }
+        alert.addAction(UIAlertAction(title: "Save & Select PUSR", style: .default) { [weak self] _ in
+            let host = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let port = Int(alert.textFields?.last?.text ?? "502") ?? 502
+            StandaloneFieldScanServer.shared.configurePusrGateway(host: host, port: port, activate: true)
+            if let self = self {
+                self.updatePillStatusLabel(mode: cfg.currentMode)
+            }
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(alert, animated: true)
+    }
+
+    private func promptForAssistedMacEndpoint() {
+        let cfg = FieldScanRuntimeConfig.shared
+        let alert = UIAlertController(
+            title: "Assisted Mac Bench Host",
+            message: "Configure USB-C link-local IP or mDNS host (resets pinned TLS certificate):",
+            preferredStyle: .alert
+        )
+        alert.addTextField { tf in
+            tf.placeholder = "armandos-mac-mini.local or 169.254.x.x"
+            tf.text = cfg.macTetherHost
             tf.keyboardType = .URL
         }
-        alert.addAction(UIAlertAction(title: "Connect", style: .default) { [weak self] _ in
-            if let text = alert.textFields?.first?.text, let url = URL(string: text) {
-                self?.switchEndpoint(to: url, mode: .customEndpoint)
+        alert.addAction(UIAlertAction(title: "Save & Connect HTTPS", style: .default) { [weak self] _ in
+            if let host = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty {
+                cfg.macTetherHost = host
+                cfg.pinnedTLSFingerprintSHA256 = nil
+                self?.switchEndpoint(to: cfg.usbTetherHTTPSURL, mode: .usbTetherSecure)
             }
         })
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
@@ -253,11 +288,21 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
     }
 
     private func presentExportDirectoryShareSheet() {
-        let exportsDir = FieldScanRuntimeConfig.shared.documentsDirectory.appendingPathComponent("exports", isDirectory: true)
-        let files = (try? FileManager.default.contentsOfDirectory(at: exportsDir, includingPropertiesForKeys: nil)) ?? []
-        let itemsToShare: [Any] = files.isEmpty ? [exportsDir] : files
+        let exportsDir = FieldScanSessionEngine.shared.exportsDirectoryURL
+        let files = ((try? FileManager.default.contentsOfDirectory(at: exportsDir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension != "tmp" && !$0.hasDirectoryPath }
+        guard !files.isEmpty else {
+            let emptyAlert = UIAlertController(
+                title: "No Exported Files Yet",
+                message: "Generate a Session PDF/JSON or 3D CAD Dossier first.",
+                preferredStyle: .alert
+            )
+            emptyAlert.addAction(UIAlertAction(title: "OK", style: .default))
+            present(emptyAlert, animated: true)
+            return
+        }
 
-        let activityVC = UIActivityViewController(activityItems: itemsToShare, applicationActivities: nil)
+        let activityVC = UIActivityViewController(activityItems: files, applicationActivities: nil)
         if let popover = activityVC.popoverPresentationController {
             popover.sourceView = floatingPill
             popover.sourceRect = floatingPill.bounds
@@ -265,7 +310,7 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         present(activityVC, animated: true)
     }
 
-    // MARK: - WKUIDelegate (Auto-Grant Camera & Microphone inside WebView)
+    // MARK: - WKUIDelegate (Grant Camera/Mic ONLY to Trusted Local HMI Origin, `OFF-05`)
 
     @available(iOS 15.0, *)
     public func webView(
@@ -275,35 +320,51 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         type: WKMediaCaptureType,
         decisionHandler: @escaping (WKPermissionDecision) -> Void
     ) {
-        // Automatically grant camera and microphone permissions to FieldScan HMI
-        decisionHandler(.grant)
+        if FieldScanRuntimeConfig.shared.isTrustedHMIHost(origin.host) {
+            decisionHandler(.grant)
+        } else {
+            decisionHandler(.deny)
+        }
     }
 
-    // MARK: - WKNavigationDelegate (Local TLS Trust + Automatic Retry & Offline Fallback)
+    // MARK: - WKNavigationDelegate (Strict Origin Policy + TLS Pinning, `OFF-05`, `OFF-06`)
+
+    public func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.cancel)
+            return
+        }
+        if url.isFileURL || url.scheme == "about" || url.scheme == "blob" || url.scheme == "data" {
+            decisionHandler(.allow)
+            return
+        }
+        if FieldScanRuntimeConfig.shared.isTrustedHMIHost(url.host) {
+            decisionHandler(.allow)
+        } else {
+            // Block untrusted external destinations (`OFF-05`)
+            decisionHandler(.cancel)
+        }
+    }
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         navigationRetryCount = 0
     }
 
-    public func webView(
-        _ webView: WKWebView,
-        didFailProvisionalNavigation navigation: WKNavigation!,
-        withError error: Error
-    ) {
+    public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         retryOrFallbackNavigation()
     }
 
-    public func webView(
-        _ webView: WKWebView,
-        didFail navigation: WKNavigation!,
-        withError error: Error
-    ) {
+    public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         retryOrFallbackNavigation()
     }
 
     private func retryOrFallbackNavigation() {
         navigationRetryCount += 1
-        if navigationRetryCount <= 8 {
+        if navigationRetryCount <= 6 {
             StandaloneFieldScanServer.shared.start()
             let targetURL = FieldScanRuntimeConfig.shared.localBackendURL
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
@@ -311,38 +372,57 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
                 let req = URLRequest(url: targetURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10.0)
                 self.webView.load(req)
             }
-        } else {
-            let fm = FileManager.default
-            if let resURL = Bundle.main.resourceURL {
-                let bundledHTML = resURL.appendingPathComponent("BundleResources/static/index.html")
-                if fm.fileExists(atPath: bundledHTML.path) {
-                    let readAccessDir = bundledHTML.deletingLastPathComponent().deletingLastPathComponent()
-                    webView.loadFileURL(bundledHTML, allowingReadAccessTo: readAccessDir)
-                }
-            }
         }
     }
 
+    /// Evaluates local TLS server trust with certificate SHA-256 pinning (`OFF-06`, `[A7]`).
     public func webView(
         _ webView: WKWebView,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
+        let cfg = FieldScanRuntimeConfig.shared
         let host = challenge.protectionSpace.host
-        if (host == "127.0.0.1" || host == "localhost" || host.hasPrefix("169.254.") || host.hasPrefix("10.0.")),
-           let serverTrust = challenge.protectionSpace.serverTrust {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+        guard cfg.isTrustedHMIHost(host),
+              let serverTrust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
-        completionHandler(.performDefaultHandling, nil)
+
+        // Compute SHA-256 fingerprint of leaf DER certificate (`OFF-06`)
+        guard let certChain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],
+              let leafCert = certChain.first else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        let derData = SecCertificateCopyData(leafCert) as Data
+        let certFingerprint = SHA256.hash(data: derData).map { String(format: "%02x", $0) }.joined()
+
+        if let pinned = cfg.pinnedTLSFingerprintSHA256, !pinned.isEmpty {
+            if pinned == certFingerprint {
+                completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            } else {
+                // Certificate changed unexpectedly: reject until operator explicitly resets trust (`OFF-06`)
+                completionHandler(.cancelAuthenticationChallenge, nil)
+            }
+            return
+        }
+
+        // First connection to explicitly configured bench host: pin leaf SHA-256
+        cfg.pinnedTLSFingerprintSHA256 = certFingerprint
+        completionHandler(.useCredential, URLCredential(trust: serverTrust))
     }
 
-    // MARK: - WKScriptMessageHandler (`fieldscanNative`)
+    // MARK: - WKScriptMessageHandler (`fieldscanNative` Origin-Checked & Canonicalized)
 
     public func userContentController(
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
+        // Block native bridge access from any untrusted frame origin (`OFF-05`)
+        guard FieldScanRuntimeConfig.shared.isTrustedHMIHost(message.frameInfo.securityOrigin.host) else {
+            return
+        }
         guard message.name == "fieldscanNative",
               let body = message.body as? [String: Any],
               let command = body["command"] as? String else {
@@ -363,21 +443,23 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
             webView.evaluateJavaScript(js, completionHandler: nil)
 
         case "switchEndpoint":
-            if let target = body["target"] as? String, let url = URL(string: target) {
+            if let target = body["target"] as? String,
+               let url = URL(string: target),
+               FieldScanRuntimeConfig.shared.isTrustedHMIHost(url.host) {
                 switchEndpoint(to: url, mode: .customEndpoint)
             }
 
         case "shareExportedFile":
-            let filename = (body["filename"] as? String) ?? "THT02_Export.zip"
+            let rawFilename = (body["filename"] as? String) ?? ""
             let base64Data = (body["base64Data"] as? String) ?? ""
-            shareBase64ExportedFile(filename: filename, base64Data: base64Data)
+            shareAuthorizedExportFile(rawFilename: rawFilename, base64Data: base64Data)
 
         case "getDeviceMemoryInfo":
             let snapshot = LlamaServerBridge.shared.currentTelemetrySnapshot()
             if let jsonData = try? JSONSerialization.data(withJSONObject: snapshot, options: []),
                let jsonStr = String(data: jsonData, encoding: .utf8) {
                 let js = "window.dispatchEvent(new CustomEvent('fieldscan:deviceMemoryInfo', { detail: \(jsonStr) }));"
-                webView.evaluateJavaScript(js, completionHandler: nil)
+                self.webView.evaluateJavaScript(js, completionHandler: nil)
             }
 
         default:
@@ -385,23 +467,32 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         }
     }
 
-    private func shareBase64ExportedFile(filename: String, base64Data: String) {
-        FieldScanRuntimeConfig.shared.prepareSharedDirectories()
-        let exportsDir = FieldScanRuntimeConfig.shared.documentsDirectory.appendingPathComponent("exports", isDirectory: true)
-        let targetURL = exportsDir.appendingPathComponent(filename)
-
-        let cleanBase64: String
-        if let commaIndex = base64Data.firstIndex(of: ",") {
-            cleanBase64 = String(base64Data[base64Data.index(after: commaIndex)...])
-        } else {
-            cleanBase64 = base64Data
+    private func shareAuthorizedExportFile(rawFilename: String, base64Data: String) {
+        let cleanName = URL(fileURLWithPath: rawFilename).lastPathComponent
+        guard !cleanName.isEmpty, !rawFilename.contains(".."), !rawFilename.contains("/") else {
+            return // Reject arbitrary or traversal paths (`EXP-05`)
         }
 
-        if let data = Data(base64Encoded: cleanBase64) {
-            try? data.write(to: targetURL, options: .atomic)
+        // Only write client-generated DXF/STL blobs if non-empty; otherwise share existing verified server export
+        if !base64Data.isEmpty {
+            let exportsDir = FieldScanSessionEngine.shared.exportsDirectoryURL
+            let targetURL = exportsDir.appendingPathComponent(cleanName)
+            let cleanB64: String
+            if let commaIdx = base64Data.firstIndex(of: ",") {
+                cleanB64 = String(base64Data[base64Data.index(after: commaIdx)...])
+            } else {
+                cleanB64 = base64Data
+            }
+            if let decoded = Data(base64Encoded: cleanB64), !decoded.isEmpty {
+                try? decoded.write(to: targetURL, options: .atomic)
+            }
         }
 
-        let activityVC = UIActivityViewController(activityItems: [targetURL], applicationActivities: nil)
+        guard let verifiedURL = FieldScanSessionEngine.shared.resolveAuthorizedExportFile(named: cleanName) else {
+            return
+        }
+
+        let activityVC = UIActivityViewController(activityItems: [verifiedURL], applicationActivities: nil)
         if let popover = activityVC.popoverPresentationController {
             popover.sourceView = floatingPill
             popover.sourceRect = floatingPill.bounds

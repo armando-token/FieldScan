@@ -11,12 +11,16 @@ from typing import Any
 
 import cv2
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import numpy as np
 import psutil
 
 from fieldscan.cad_exporter import build_escalation_package
+from fieldscan.calibration_planned import (
+    evaluate_calibration_comparison_contract,
+    get_planned_calibration_card,
+)
 from fieldscan.lfm_engine import MANUAL_PAGE_TITLES, get_lfm_engine
 from fieldscan.live_repair import LiveRepairCoordinator
 from fieldscan.modbus_rtu import ModbusRTUScanner, discover_serial_ports
@@ -26,6 +30,16 @@ from fieldscan.pdf_ingest import (
     inspect_pdf_document,
     load_tht02_spec,
     match_and_load_sensor,
+)
+from fieldscan.profiles_and_manual import (
+    load_all_profiles,
+    resolve_device_profile,
+    verify_resource_manifest,
+)
+from fieldscan.session_engine import (
+    CONTRACT_VERSION,
+    FieldScanSessionEngine,
+    SessionDomainError,
 )
 from fieldscan.vision_scanner import VisionScanner
 
@@ -44,6 +58,7 @@ INITIAL_MODBUS_MODE = os.environ.get("FIELDSCAN_MODBUS_MODE", "auto")
 _SCANNER = VisionScanner(initial_mode=INITIAL_CAM_MODE, auto_start=False)
 _MODBUS = ModbusRTUScanner(initial_mode=INITIAL_MODBUS_MODE, target_slave_id=1, auto_start=False)
 _REPAIR = LiveRepairCoordinator()
+_SESSIONS = FieldScanSessionEngine(exports_dir=EXPORTS_DIR, project_root=PROJECT_ROOT)
 
 
 def _jpeg_to_png_bytes(jpeg_bytes: bytes) -> bytes | None:
@@ -162,6 +177,7 @@ def _build_unified_status(run_socket_test: bool = False) -> dict[str, Any]:
 
     return {
         "status": "ok",
+        "contract_version": CONTRACT_VERSION,
         "sensor_id": "TZ-THT-02",
         "offline_verified": bool(offline_info["offline_verified"]),
         "blocked_external_attempts": offline_info["blocked_external_attempts"],
@@ -171,6 +187,80 @@ def _build_unified_status(run_socket_test: bool = False) -> dict[str, Any]:
         "repair": repair_state,
         "system": sys_info,
         "offline": offline_info,
+        "calibration_extension": {"status": "planned", "pilot_writes_enabled": False},
+    }
+
+
+def _build_capabilities_payload() -> dict[str, Any]:
+    engine = get_lfm_engine()
+    ai_health = engine.check_health()
+    ports = discover_serial_ports()
+    gw_cfg = _MODBUS.get_gateway_config()
+    mb_tel = _MODBUS.get_telemetry()
+    manifest_check = verify_resource_manifest()
+    profiles = load_all_profiles()
+
+    mb_mode = str(mb_tel.get("mode", "auto"))
+    if mb_mode.startswith("sim"):
+        topology_mode = "explicit_simulation"
+    elif mb_mode == "pusr_tcp":
+        topology_mode = "mac_local_bench_pusr"
+    elif os.environ.get("FIELDSCAN_ALLOW_USB_TETHER", "1") == "1":
+        topology_mode = "mac_usb_tether"
+    else:
+        topology_mode = "mac_local_bench"
+
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "backend_runtime": "python_fastapi",
+        "topology_mode": topology_mode,
+        "pilot_readonly_enforced": True,
+        "pilot_writes_enabled": False,
+        "andon_hardware_writes_enabled": False,
+        "providers": {
+            "ai": {
+                "active_provider_id": ai_health["provider_id"],
+                "active_provider_label": ai_health["provider_label"],
+                "vl_online": ai_health["vl_online"],
+                "effective_vl_model_id": ai_health["effective_vl_model_id"],
+                "local_rules_available": True,
+            },
+            "voice": {
+                "audio_asr_online": ai_health["audio_online"],
+                "effective_audio_model_id": ai_health["effective_audio_model_id"],
+                "tts_ready": ai_health["tts_ready"],
+                "piper_voice": ai_health["piper_voice"],
+                "supported_intent_languages": ["en", "es"],
+            },
+        },
+        "modbus": {
+            "active_mode": mb_mode,
+            "serial_ports_detected": ports,
+            "pusr_gateway": gw_cfg,
+            "legacy_bridge_port_5502_framing": "rtu_over_tcp_bridge",
+            "pusr_gateway_framing": "modbus_tcp_mbap",
+            "tx_audit_count": len(_MODBUS.tx_audit_log),
+        },
+        "camera": {
+            "active_mode": _SCANNER.get_telemetry().get("mode"),
+            "available_modes": _SCANNER.list_modes(),
+        },
+        "profiles": {
+            pid: {
+                "model": p.get("model"),
+                "validation_status": p.get("validation_status"),
+                "tested_revision": p.get("tested_profile_revision"),
+                "profile_sha256": p.get("_profile_sha256"),
+            }
+            for pid, p in profiles.items()
+        },
+        "resource_manifest": manifest_check,
+        "exports": {
+            "formats": ["pdf", "json", "dxf", "stl", "png", "eml", "zip"],
+            "profiles": ["intervention", "simulated_demo"],
+        },
+        "calibration_extension": get_planned_calibration_card(),
+        "planned_calibration": get_planned_calibration_card(),
     }
 
 
@@ -187,10 +277,15 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="FieldScan CAD — TZ THT-02 Closed-Loop Offline Twin & SCADA Repair Studio",
-    version="2.0.0",
+    title="FieldScan CAD — TZ THT-02 Closed-Loop Offline Twin & Bench Maintenance Studio",
+    version="2.1.0",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(SessionDomainError)
+async def _handle_session_domain_error(_request: Request, exc: SessionDomainError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
@@ -333,6 +428,7 @@ async def api_video_stream(request: Request, raw: bool = False) -> StreamingResp
 @app.post("/api/scanner/mode")
 async def api_set_camera_mode(payload: dict[str, Any]) -> dict[str, Any]:
     mode = str(payload.get("mode") or "sim_normal").strip()
+    _SESSIONS.notify_camera_source_changed(mode)
     await asyncio.to_thread(_SCANNER.set_mode, mode)
     return await asyncio.to_thread(_build_unified_status, False)
 
@@ -402,6 +498,11 @@ async def api_modbus_mode(payload: dict[str, Any]) -> dict[str, Any]:
     mode = str(payload.get("mode") or "auto").strip()
     slave_id = payload.get("target_slave_id") or payload.get("slave_id")
     baud_bps = payload.get("baud_bps")
+    pusr_host = payload.get("pusr_host") or payload.get("gateway_host")
+    pusr_port = payload.get("pusr_port") or payload.get("gateway_port")
+    if pusr_host is not None:
+        _MODBUS.set_pusr_gateway(str(pusr_host), int(pusr_port or 502))
+    _SESSIONS.invalidate_live_connection("modbus_mode_changed")
     try:
         await asyncio.to_thread(
             _MODBUS.set_mode,
@@ -721,3 +822,142 @@ async def api_escalate(payload: dict[str, Any]) -> dict[str, Any]:
     pkg["snapshot_url"] = pkg["png_url"]
     pkg["email"] = pkg["email_preview"]
     return pkg
+
+
+# ==========================================================================
+# CONTRACT v2.1 ENDPOINTS: CAPABILITIES, SESSIONS, GATEWAY & PLANNED EXT.
+# ==========================================================================
+@app.get("/api/capabilities")
+async def api_capabilities() -> dict[str, Any]:
+    return await asyncio.to_thread(_build_capabilities_payload)
+
+
+@app.get("/api/profiles")
+async def api_profiles() -> dict[str, Any]:
+    by_id = load_all_profiles()
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "profiles": list(by_id.values()),
+        "profiles_by_id": by_id,
+    }
+
+
+@app.post("/api/modbus/gateway", response_model=None)
+async def api_modbus_gateway(payload: dict[str, Any]) -> Response | dict[str, Any]:
+    host = str(payload.get("host") or payload.get("pusr_host") or "").strip()
+    port = int(payload.get("port") or payload.get("pusr_port") or 502)
+    if port == 5502:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "error_code": "PROTOCOL_MISMATCH",
+                "message": "Port 5502 is reserved for raw RTU-over-TCP framing; configure PUSR USR-DR164 as Modbus TCP (MBAP) on port 502.",
+            },
+        )
+    _SESSIONS.invalidate_live_connection("gateway_endpoint_changed")
+    cfg = _MODBUS.set_pusr_gateway(host, port)
+    if payload.get("activate_mode") or payload.get("activate"):
+        await asyncio.to_thread(_MODBUS.set_mode, "pusr_tcp")
+    return {
+        "ok": True,
+        "gateway": cfg,
+        "modbus": _MODBUS.get_telemetry(),
+    }
+
+
+@app.post("/api/modbus/poll")
+async def api_modbus_poll(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    body = payload or {}
+    tel = await asyncio.to_thread(_MODBUS.step_once)
+    session_id = str(body.get("session_id") or "").strip()
+    session_snap = None
+    if session_id:
+        session_snap = await asyncio.to_thread(_SESSIONS.record_modbus_observation, session_id, tel)
+    return {
+        "ok": True,
+        "modbus": tel,
+        "session": session_snap,
+    }
+
+
+@app.post("/api/sessions")
+async def api_create_session(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    body = dict(payload or {})
+    if "transport_mode" not in body:
+        body["transport_mode"] = _MODBUS.get_telemetry().get("mode", "auto")
+    return await asyncio.to_thread(_SESSIONS.create_session, body)
+
+
+@app.get("/api/sessions")
+async def api_list_sessions(limit: int = 20) -> dict[str, Any]:
+    items = await asyncio.to_thread(_SESSIONS.list_sessions, limit)
+    return {"contract_version": CONTRACT_VERSION, "sessions": items}
+
+
+@app.get("/api/sessions/{session_id}")
+async def api_get_session(session_id: str) -> dict[str, Any]:
+    return await asyncio.to_thread(_SESSIONS.get_session, session_id)
+
+
+@app.post("/api/sessions/{session_id}/actions")
+async def api_session_action(session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    res = await asyncio.to_thread(_SESSIONS.apply_action, session_id, payload)
+    # If voice/HMI requested a read-only check or photo capture, execute against live backend
+    applied = res.get("action_applied") or (res.get("parsed_intent") or {}).get("intent")
+    if applied == "start_readonly_check":
+        tel = await asyncio.to_thread(_MODBUS.step_once)
+        snap = await asyncio.to_thread(_SESSIONS.record_modbus_observation, session_id, tel, actor="operator_poll")
+        res["modbus"] = tel
+        res["session"] = snap
+    elif applied == "request_capture":
+        raw_jpg = await asyncio.to_thread(_SCANNER.get_raw_jpeg)
+        ann_jpg = await asyncio.to_thread(_SCANNER.get_latest_jpeg)
+        vtel = _SCANNER.get_telemetry()
+        cap_res = await asyncio.to_thread(
+            _SESSIONS.ingest_camera_frame_for_session,
+            session_id,
+            raw_jpg,
+            annotated_jpeg=ann_jpg,
+            vision_tel=vtel,
+            camera_source=str(vtel.get("camera_source") or vtel.get("mode") or "usb"),
+            manual_trigger=True,
+        )
+        res["capture"] = cap_res
+        res["session"] = await asyncio.to_thread(_SESSIONS.get_session, session_id)
+    return res
+
+
+@app.post("/api/sessions/{session_id}/capture")
+async def api_session_capture(session_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    body = payload or {}
+    manual = bool(body.get("manual", True))
+    raw_jpg = await asyncio.to_thread(_SCANNER.get_raw_jpeg)
+    ann_jpg = await asyncio.to_thread(_SCANNER.get_latest_jpeg)
+    vtel = _SCANNER.get_telemetry()
+    cap_res = await asyncio.to_thread(
+        _SESSIONS.ingest_camera_frame_for_session,
+        session_id,
+        raw_jpg,
+        annotated_jpeg=ann_jpg,
+        vision_tel=vtel,
+        camera_source=str(body.get("camera_source") or vtel.get("camera_source") or vtel.get("mode") or "usb"),
+        manual_trigger=manual,
+    )
+    snap = await asyncio.to_thread(_SESSIONS.get_session, session_id)
+    return {"ok": True, "capture": cap_res, "session": snap}
+
+
+@app.post("/api/sessions/{session_id}/exports")
+async def api_session_exports(session_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    return await asyncio.to_thread(_SESSIONS.export_session_dossier, session_id, payload or {})
+
+
+@app.get("/api/calibration/planned")
+async def api_calibration_planned() -> dict[str, Any]:
+    return get_planned_calibration_card()
+
+
+@app.post("/api/calibration/compare")
+async def api_calibration_compare(payload: dict[str, Any]) -> dict[str, Any]:
+    return evaluate_calibration_comparison_contract(payload)

@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-/// Central runtime configuration and memory telemetry for FieldScan CAD v2.0 on iPad Air M4 (12 GB RAM).
+/// Central runtime configuration, configurable bench endpoints, and memory telemetry for FieldScan CAD v2.1 on iPad Air M4 (12 GB RAM).
 public enum FieldScanEndpointMode: String, CaseIterable {
     case embeddedLocal = "embedded_local"
     case usbTetherSecure = "usb_tether_https"
@@ -13,17 +13,26 @@ public enum FieldScanEndpointMode: String, CaseIterable {
     public var displayTitle: String {
         switch self {
         case .embeddedLocal:
-            return "Embedded Local (127.0.0.1:8088)"
+            return "iPad Local · Autonomous Bench (127.0.0.1:8088)"
         case .usbTetherSecure:
-            return "USB-C Tether HTTPS (169.254.37.69:8443)"
+            return "Mac Mini Assisted · USB-C HTTPS"
         case .usbTetherHTTP:
-            return "USB-C Tether HTTP (169.254.37.69:8088)"
+            return "Mac Mini Assisted · USB-C HTTP"
         case .lanWorkstation:
-            return "LAN Workstation (10.0.0.15:8088)"
+            return "Mac Mini Assisted · LAN Bench"
         case .bundledOfflineStudio:
-            return "Bundled Offline 3D Twin & SCADA"
+            return "Bundled Offline 3D & Manual"
         case .customEndpoint:
-            return "Custom Endpoint"
+            return "Configured Assisted Endpoint"
+        }
+    }
+
+    public var isMacAssisted: Bool {
+        switch self {
+        case .usbTetherSecure, .usbTetherHTTP, .lanWorkstation, .customEndpoint:
+            return true
+        case .embeddedLocal, .bundledOfflineStudio:
+            return false
         }
     }
 }
@@ -53,16 +62,73 @@ public struct FieldScanMemoryTelemetry: Codable {
 public final class FieldScanRuntimeConfig {
     public static let shared = FieldScanRuntimeConfig()
 
+    private let defaults = UserDefaults.standard
+    private let kPusrHost = "fieldscan.pusr.host"
+    private let kPusrPort = "fieldscan.pusr.port"
+    private let kMacTetherHost = "fieldscan.mac.tether_host"
+    private let kMacTetherHTTPSPort = "fieldscan.mac.https_port"
+    private let kMacTetherHTTPPort = "fieldscan.mac.http_port"
+    private let kPinnedTLSFingerprint = "fieldscan.tls.pinned_sha256"
+
     public let bundleIdentifier = "com.fieldscan.tht02.ipadm4"
     public let localBackendURL = URL(string: "http://127.0.0.1:8088")!
     public let localVisionLlamaURL = URL(string: "http://127.0.0.1:8091")!
     public let localAudioLlamaURL = URL(string: "http://127.0.0.1:8092")!
 
-    public let usbTetherHTTPSURL = URL(string: "https://169.254.37.69:8443")!
-    public let usbTetherHTTPURL = URL(string: "http://169.254.37.69:8088")!
-    public let usbModbusBridgeHost = "169.254.37.69"
+    // Configurable bench endpoints (never treated as hardcoded Mac identity; `Phase 6.2`)
+    public var pusrGatewayHost: String {
+        get { defaults.string(forKey: kPusrHost) ?? "" }
+        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: kPusrHost) }
+    }
+
+    public var pusrGatewayPort: Int {
+        get {
+            let p = defaults.integer(forKey: kPusrPort)
+            return p > 0 ? p : 502
+        }
+        set { defaults.set(newValue, forKey: kPusrPort) }
+    }
+
+    public var macTetherHost: String {
+        get { defaults.string(forKey: kMacTetherHost) ?? "armandos-mac-mini.local" }
+        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: kMacTetherHost) }
+    }
+
+    public var macHTTPSPort: Int {
+        get {
+            let p = defaults.integer(forKey: kMacTetherHTTPSPort)
+            return p > 0 ? p : 8443
+        }
+        set { defaults.set(newValue, forKey: kMacTetherHTTPSPort) }
+    }
+
+    public var macHTTPPort: Int {
+        get {
+            let p = defaults.integer(forKey: kMacTetherHTTPPort)
+            return p > 0 ? p : 8088
+        }
+        set { defaults.set(newValue, forKey: kMacTetherHTTPPort) }
+    }
+
+    public var pinnedTLSFingerprintSHA256: String? {
+        get { defaults.string(forKey: kPinnedTLSFingerprint) }
+        set { defaults.set(newValue, forKey: kPinnedTLSFingerprint) }
+    }
+
+    public var usbTetherHTTPSURL: URL {
+        return URL(string: "https://\(macTetherHost):\(macHTTPSPort)") ?? localBackendURL
+    }
+
+    public var usbTetherHTTPURL: URL {
+        return URL(string: "http://\(macTetherHost):\(macHTTPPort)") ?? localBackendURL
+    }
+
+    public var usbModbusBridgeHost: String {
+        return macTetherHost
+    }
+
     public let usbModbusBridgePort = 5502
-    public let lanWorkstationURL = URL(string: "http://10.0.0.15:8088")!
+    public let lanWorkstationURL = URL(string: "http://armandos-mac-mini.local:8088")!
 
     public let qwenModelFilename = "Qwen3VL-4B-Instruct-Q4_K_M.gguf"
     public let qwenMmprojFilename = "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
@@ -81,6 +147,24 @@ public final class FieldScanRuntimeConfig {
 
     private init() {}
 
+    /// Returns trusted WebView hosts strictly allowed to access native bridges (`OFF-05`).
+    public func isTrustedHMIHost(_ rawHost: String?) -> Bool {
+        guard let h = rawHost?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !h.isEmpty else {
+            return true // local `file://` bundle URLs have empty host
+        }
+        if h == "127.0.0.1" || h == "localhost" || h == "::1" {
+            return true
+        }
+        if currentMode.isMacAssisted {
+            let configuredMac = macTetherHost.lowercased()
+            let activeHost = activeEndpointURL.host?.lowercased() ?? ""
+            if h == configuredMac || (!activeHost.isEmpty && h == activeHost) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Queries physical RAM (12 GB on iPad Air M4) and current process head-room via `os_proc_available_memory()`.
     public func sampleMemoryTelemetry() -> FieldScanMemoryTelemetry {
         let physicalBytes = ProcessInfo.processInfo.physicalMemory
@@ -91,14 +175,11 @@ public final class FieldScanRuntimeConfig {
         availBytes = UInt64(os_proc_available_memory())
         #endif
         if availBytes == 0 {
-            // Fallback estimation when running on simulator or desktop host
             availBytes = UInt64(Double(physicalBytes) * 0.72)
         }
 
         let availGB = Double(availBytes) / 1_073_741_824.0
         let usedGB = max(0.0, physicalGB - availGB)
-        // With com.apple.developer.kernel.increased-memory-limit on 12 GB iPad Air M4,
-        // available process memory exceeds the standard 3-4 GB sandbox cap (> 5.5 GB).
         let increasedLimit = availGB > 4.5 || physicalGB >= 11.0
 
         return FieldScanMemoryTelemetry(
@@ -112,12 +193,10 @@ public final class FieldScanRuntimeConfig {
         )
     }
 
-    /// Returns the Documents directory where large .gguf weights and CAD exports are shared via Files/Finder.
     public var documentsDirectory: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
     }
 
-    /// Ensures `Documents/vendor/models` and `Documents/exports` exist so the user can drop models via USB Finder.
     public func prepareSharedDirectories() {
         let fm = FileManager.default
         let modelsDir = documentsDirectory.appendingPathComponent("vendor/models", isDirectory: true)

@@ -22,6 +22,7 @@ BIND_HOST="${FIELDSCAN_BIND_HOST:-0.0.0.0}"
 BIND_PORT="${FIELDSCAN_BIND_PORT:-8088}"
 HTTPS_PORT="${FIELDSCAN_HTTPS_PORT:-8443}"
 FORCE_HTTPS=0
+NO_LLM=0
 
 for arg in "$@"; do
   case "${arg}" in
@@ -32,16 +33,22 @@ for arg in "$@"; do
       BIND_HOST="0.0.0.0"
       export FIELDSCAN_ALLOW_USB_TETHER=1
       ;;
+    --no-llm)
+      NO_LLM=1
+      ;;
   esac
 done
 
+DETECTED_USB_IP="$(ifconfig 2>/dev/null | awk '/inet 169\.254\./ {print $2; exit}' || true)"
+TETHER_HOST="${DETECTED_USB_IP:-armandos-mac-mini.local}"
+
 echo "=================================================================="
-echo " FIELDSCAN CAD v2.0 — TZ THT-02 Closed-Loop Repair & SCADA Twin"
+echo " FIELDSCAN CAD v2.1 — TZ THT-02 Bench Inspection & Read-Only Twin"
 echo " Host Platform     : ${OS_NAME} (${ARCH})"
 echo " Vendor Root       : ${VENDOR_ROOT}"
-echo " Airplane Policy   : 127.0.0.1 Loopback + USB-C Tether (169.254.37.69)"
-echo " HTTP Studio URL   : http://127.0.0.1:${BIND_PORT} | http://169.254.37.69:${BIND_PORT}"
-echo " HTTPS iPad M4 URL : https://169.254.37.69:${HTTPS_PORT}"
+echo " Airplane Policy   : 127.0.0.1 Loopback + USB-C Tether (${TETHER_HOST})"
+echo " HTTP Studio URL   : http://127.0.0.1:${BIND_PORT} | http://${TETHER_HOST}:${BIND_PORT}"
+echo " HTTPS iPad M4 URL : https://${TETHER_HOST}:${HTTPS_PORT}"
 echo "=================================================================="
 
 # Hardware pre-check (RS-485 FT2232HL + USB Camera)
@@ -65,16 +72,19 @@ if [[ -z "${LLAMA_SERVER_BIN}" ]] && command -v llama-server >/dev/null 2>&1; th
   LLAMA_SERVER_BIN="$(command -v llama-server)"
 fi
 
-if [[ -z "${LLAMA_SERVER_BIN}" ]]; then
-  echo "[ERROR] llama-server binary not found in ${VENDOR_ROOT}/llama_cpp."
-  echo "        Run ./scripts/download_assets.sh while online first."
-  exit 1
+if [[ "${NO_LLM}" == "1" ]]; then
+  echo "[LLM] --no-llm specified: running in deterministic Local Rules v2.1 mode (OFF-03)."
+  LLAMA_SERVER_BIN=""
+elif [[ -z "${LLAMA_SERVER_BIN}" ]]; then
+  echo "[WARN] llama-server binary not found in ${VENDOR_ROOT}/llama_cpp — degrading cleanly to Local Rules v2.1 mode."
 fi
 
-chmod +x "${LLAMA_SERVER_BIN}" || true
-LLAMA_LIB_DIR="$(dirname "${LLAMA_SERVER_BIN}")"
-export LD_LIBRARY_PATH="${LLAMA_LIB_DIR}:${LD_LIBRARY_PATH:-}"
-export DYLD_LIBRARY_PATH="${LLAMA_LIB_DIR}:${DYLD_LIBRARY_PATH:-}"
+if [[ -n "${LLAMA_SERVER_BIN}" ]]; then
+  chmod +x "${LLAMA_SERVER_BIN}" || true
+  LLAMA_LIB_DIR="$(dirname "${LLAMA_SERVER_BIN}")"
+  export LD_LIBRARY_PATH="${LLAMA_LIB_DIR}:${LD_LIBRARY_PATH:-}"
+  export DYLD_LIBRARY_PATH="${LLAMA_LIB_DIR}:${DYLD_LIBRARY_PATH:-}"
+fi
 export NO_PROXY="127.0.0.1,localhost,::1"
 export no_proxy="127.0.0.1,localhost,::1"
 
@@ -107,7 +117,7 @@ export FIELDSCAN_CAMERA_MODE="${FIELDSCAN_CAMERA_MODE:-usb}"
 mkdir -p "${PROJECT_ROOT}/logs"
 
 # 1. Start LiquidAI LFM3-VL-2B (Vision + 2D Blueprint + Live Repair) on 127.0.0.1:8091
-if ! curl --noproxy '*' -sf http://127.0.0.1:8091/health >/dev/null 2>&1; then
+if [[ -n "${LLAMA_SERVER_BIN}" && -f "${VL_MODEL}" ]] && ! curl --noproxy '*' -sf http://127.0.0.1:8091/health >/dev/null 2>&1; then
   echo "[1/3] Starting LiquidAI/LFM3-VL-2B on 127.0.0.1:8091 (${THREADS} threads)..."
   nohup "${LLAMA_SERVER_BIN}" \
     -m "${VL_MODEL}" \
@@ -125,11 +135,11 @@ if ! curl --noproxy '*' -sf http://127.0.0.1:8091/health >/dev/null 2>&1; then
     --no-reasoning-preserve \
     > "${PROJECT_ROOT}/logs/lfm3_vl_8091.log" 2>&1 &
 else
-  echo "[1/3] LiquidAI/LFM3-VL-2B already active on 127.0.0.1:8091"
+  echo "[1/3] VLM :8091 skipped or already active"
 fi
 
-# 2. Start LiquidAI LFM3-Audio-2B (Offline English Speech ASR) on 127.0.0.1:8092
-if [[ -f "${AUDIO_MODEL}" ]] && ! curl --noproxy '*' -sf http://127.0.0.1:8092/health >/dev/null 2>&1; then
+# 2. Start LiquidAI LFM3-Audio-2B (Offline Speech ASR) on 127.0.0.1:8092
+if [[ -n "${LLAMA_SERVER_BIN}" && -f "${AUDIO_MODEL}" ]] && ! curl --noproxy '*' -sf http://127.0.0.1:8092/health >/dev/null 2>&1; then
   echo "[2/3] Starting LiquidAI/LFM3-Audio-2B on 127.0.0.1:8092 (${THREADS} threads)..."
   nohup "${LLAMA_SERVER_BIN}" \
     -m "${AUDIO_MODEL}" \
@@ -146,29 +156,35 @@ if [[ -f "${AUDIO_MODEL}" ]] && ! curl --noproxy '*' -sf http://127.0.0.1:8092/h
     --no-reasoning-preserve \
     > "${PROJECT_ROOT}/logs/lfm3_audio_8092.log" 2>&1 &
 else
-  echo "[2/3] LiquidAI/LFM3-Audio-2B already active on 127.0.0.1:8092"
+  echo "[2/3] Audio ASR :8092 skipped or already active"
 fi
 
-# Wait for VLM health
-for _ in $(seq 1 40); do
-  if curl --noproxy '*' -sf http://127.0.0.1:8091/health >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.5
-done
+# Wait for VLM health only if launched
+if [[ -n "${LLAMA_SERVER_BIN}" && -f "${VL_MODEL}" ]]; then
+  for _ in $(seq 1 40); do
+    if curl --noproxy '*' -sf http://127.0.0.1:8091/health >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
+fi
 
 # Auto-generate self-signed TLS certificate for iPad Air M4 WebKit Secure Context (getUserMedia camera + mic)
 TLS_CRT="${PROJECT_ROOT}/logs/ipad_tls.crt"
 TLS_KEY="${PROJECT_ROOT}/logs/ipad_tls.key"
+SAN_LIST="IP:127.0.0.1,DNS:localhost,DNS:armandos-mac-mini.local"
+if [[ -n "${DETECTED_USB_IP}" ]]; then
+  SAN_LIST="${SAN_LIST},IP:${DETECTED_USB_IP}"
+fi
 if [[ ! -f "${TLS_CRT}" || ! -f "${TLS_KEY}" ]]; then
   if command -v openssl >/dev/null 2>&1; then
-    echo "[TLS] Generating local self-signed certificate for iPad Air M4 USB-C tether (169.254.37.69)..."
+    echo "[TLS] Generating local self-signed certificate (${SAN_LIST})..."
     openssl req -x509 -newkey rsa:2048 -nodes \
       -keyout "${TLS_KEY}" \
       -out "${TLS_CRT}" \
       -days 825 \
-      -subj "/CN=FieldScan-M4-Local/O=FieldScan CAD v2.0" \
-      -addext "subjectAltName=IP:127.0.0.1,IP:169.254.37.69,IP:10.0.0.15,DNS:localhost,DNS:armandos-mac-mini.local" \
+      -subj "/CN=FieldScan-M4-Local/O=FieldScan CAD v2.1" \
+      -addext "subjectAltName=${SAN_LIST}" \
       >/dev/null 2>&1 || true
   fi
 fi

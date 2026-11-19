@@ -114,10 +114,15 @@ def _render_server_cad_quad_sheet(
     # Top title banner
     draw.rectangle([0, 0, W, 54], fill=(16, 24, 38))
     draw.line([(0, 54), (W, 54)], fill=(56, 189, 248), width=2)
+    is_sim_sheet = bool(modbus_tel.get("simulation") or str(modbus_tel.get("source", "")).startswith("simulator"))
     scada_str = (
-        f"MODBUS VALIDATED: {modbus_tel.get('temp_c')} C | {modbus_tel.get('humidity_rh')} %RH (SLAVE #{slave_id})"
-        if modbus_tel.get("healthy")
-        else f"TARGET MODBUS SLAVE #{slave_id} | 9600 8N1"
+        f"SIMULATION: {modbus_tel.get('temp_c')} C | {modbus_tel.get('humidity_rh')} %RH (SLAVE #{slave_id})"
+        if (modbus_tel.get("healthy") and is_sim_sheet)
+        else (
+            f"SENSOR COMM OK: {modbus_tel.get('temp_c')} C | {modbus_tel.get('humidity_rh')} %RH (SLAVE #{slave_id})"
+            if modbus_tel.get("healthy")
+            else f"TARGET MODBUS SLAVE #{slave_id} | 9600 8N1"
+        )
     )
     draw.text(
         (18, 18),
@@ -264,7 +269,9 @@ def _render_evidence_strip(snapshots: list[dict[str, Any]], modbus_tel: dict[str
             draw.text((x0 + 8, y0 + 7), snap.get("title", f"STEP {idx + 1}")[:48], fill=(125, 211, 252), font=_FONT)
             draw.text((x0 + 8, H - 40), snap.get("caption", "")[:56], fill=(203, 213, 225), font=_FONT)
         else:
-            stage_lbl = ["1. BEFORE (OPEN FAULT)", "2. DURING (DIP-8 SETUP)", "3. AFTER (SCADA ONLINE)"][idx]
+            is_sim = bool(modbus_tel.get("simulation") or str(modbus_tel.get("source", "")).startswith("simulator"))
+            after_lbl = "3. AFTER (SIMULATED RESPONSE)" if is_sim else "3. AFTER (SENSOR COMM OK)"
+            stage_lbl = ["1. BEFORE (INITIAL OBSERVATION)", "2. DURING (DIP-8 INSPECTION)", after_lbl][idx]
             draw.rectangle([x0, y0, x0 + slot_w, y0 + 26], fill=(26, 40, 58))
             draw.text((x0 + 8, y0 + 7), stage_lbl, fill=(148, 163, 184), font=_FONT)
             info = (
@@ -528,36 +535,60 @@ class LiveRepairCoordinator:
             hum_rh = modbus_tel.get("humidity_rh")
             sid = modbus_tel.get("slave_id", self.target_slave_id)
             baud = modbus_tel.get("baud_bps", 9600)
+            is_sim = bool(modbus_tel.get("simulation") or str(modbus_tel.get("source", "")).startswith("simulator"))
 
             self.record_snapshot(
                 key="after_online",
-                title=f"3. AFTER: VERIFIED {temp_c}C / {hum_rh}%RH",
-                caption=f"Slave #{sid} @ {baud} 8N1 | Temp={temp_c} C | RH={hum_rh}% | CRC-16 OK",
+                title=(
+                    f"3. AFTER [SIMULATION]: {temp_c}C / {hum_rh}%RH"
+                    if is_sim
+                    else f"3. AFTER [SENSOR COMM OK]: {temp_c}C / {hum_rh}%RH"
+                ),
+                caption=(
+                    f"SIMULATION Slave #{sid} | Synthetic Temp={temp_c} C | RH={hum_rh}%"
+                    if is_sim
+                    else f"Slave #{sid} @ {baud} 8N1 | Observed Temp={temp_c} C | RH={hum_rh}%"
+                ),
                 jpeg_bytes=frame_jpeg,
             )
 
-            spoken_msg = (
-                f"Modbus-RTU link online and verified! Live RS-485 telemetry received from TZ THT-02 "
-                f"at Slave Address {sid}. Current calibrated values are {temp_c} degrees Celsius "
-                f"temperature and {hum_rh} percent relative humidity. Field repair successfully verified."
-            )
+            if is_sim:
+                spoken_msg = (
+                    f"Simulation mode active: synthetic Modbus response generated for TZ THT-02 at Slave Address {sid}. "
+                    f"Simulated readings are {temp_c} degrees Celsius temperature and {hum_rh} percent relative humidity. "
+                    "Simulation mode does not verify physical sensor hardware."
+                )
+                ev_title = "SIMULATION · SYNTHETIC MODBUS RESPONSE"
+                log_step = "Simulated Modbus Response (Bench Rehearsal)"
+            else:
+                spoken_msg = (
+                    f"Modbus response received from TZ THT-02 at Slave Address {sid}. "
+                    f"Observed sensor values are {temp_c} degrees Celsius temperature and {hum_rh} percent relative humidity. "
+                    "Sensor communication OK on local bench; PLC, SCADA, and reference calibration are outside bench scope."
+                )
+                ev_title = "SENSOR RESPONDED · MODBUS COMM OK"
+                log_step = "Physical Bench Modbus Communication Check"
+
             audio_b64 = tts_fn(spoken_msg) if callable(tts_fn) else None
             citations = [
-                {"page": 7, "label": "Page 7 · Validated Function 0x03 Frame"},
-                {"page": 6, "label": "Page 6 · Registers 0000H/0001H Verified"},
+                {"page": 7, "label": "Page 7 · Function 0x03 Read Frame"},
+                {"page": 6, "label": "Page 6 · Registers 0000H/0001H Observed"},
             ]
 
             with self._lock:
                 self._event_seq += 1
                 self._append_log(
-                    "Live Electrical Modbus-RTU / SCADA Verification",
-                    f"Valid CRC-16 response on Slave #{sid} ({baud} bps 8N1): Temp={temp_c} deg C, RH={hum_rh} %RH (RX: {modbus_tel.get('last_rx_hex')}).",
+                    log_step,
+                    f"Source={modbus_tel.get('source')} Slave #{sid} ({baud} bps 8N1): Temp={temp_c} deg C, RH={hum_rh} %RH (RX: {modbus_tel.get('last_rx_hex')}).",
                 )
                 ev = {
                     "event_id": self._event_seq,
                     "type": trigger_type,
                     "stage": self.stage,
-                    "title": "LIVE MODBUS SIGNAL VERIFIED ONLINE",
+                    "canonical_stage": "STEP3_SIMULATION_ACTIVE" if is_sim else "STEP3_SENSOR_COMMUNICATION_OK",
+                    "simulation": is_sim,
+                    "scope": "simulation" if is_sim else "sensor_communication",
+                    "title": ev_title,
                     "diagnosis": spoken_msg,
                     "assistant_message": spoken_msg,
                     "temp_c": temp_c,
@@ -716,13 +747,16 @@ class LiveRepairCoordinator:
         now_utc = datetime.now(timezone.utc)
         ts_compact = now_utc.strftime("%Y%m%d_%H%M%S")
         ts_human = now_utc.strftime("%Y-%m-%d %H:%M:%S UTC")
-        package_id = f"SIGNOFF-THT02-{ts_compact}"
+        is_sim = bool(modbus_tel.get("simulation") or str(modbus_tel.get("source", "")).startswith("simulator"))
+        sim_prefix = "SIMULATION-" if is_sim else ""
+        package_id = f"{sim_prefix}SIGNOFF-THT02-{ts_compact}"
         stem = package_id.lower().replace("-", "_")
 
         slave_id = int(modbus_tel.get("slave_id") or self.target_slave_id or 1)
         dip_bits = modbus_tel.get("dip_bits") or address_to_dip_bits(slave_id)
         pin_info = describe_dip_pins(slave_id)
         healthy = bool(modbus_tel.get("healthy"))
+        fresh = bool(modbus_tel.get("fresh", healthy))
         temp_c = modbus_tel.get("temp_c")
         hum_rh = modbus_tel.get("humidity_rh")
         baud_bps = modbus_tel.get("baud_bps", 9600)
@@ -736,11 +770,12 @@ class LiveRepairCoordinator:
         eml_path = outbox_dir / f"{stem}.eml"
 
         # 1. AutoCAD .DXF & Parametric 3D .STL
-        summary_line = (
-            f"REPAIR VERIFIED: Slave #{slave_id} ({baud_bps} 8N1) | Temp={temp_c}C RH={hum_rh}%"
-            if healthy
-            else f"CONFIGURATION AUDIT: Slave #{slave_id} ({baud_bps} 8N1)"
-        )
+        if is_sim:
+            summary_line = f"SIMULATION ONLY: Slave #{slave_id} | Synthetic Temp={temp_c}C RH={hum_rh}%"
+        elif healthy and fresh:
+            summary_line = f"SENSOR COMM OBSERVED: Slave #{slave_id} ({baud_bps} 8N1) | Temp={temp_c}C RH={hum_rh}%"
+        else:
+            summary_line = f"PARTIAL INSPECTION AUDIT: Slave #{slave_id} ({baud_bps} 8N1)"
         export_autocad_dxf(spec, dxf_path, fault_zone="upper_barrel_dip", diagnosis_summary=summary_line)
         export_parametric_stl(spec, stl_path)
 
@@ -768,18 +803,16 @@ class LiveRepairCoordinator:
             p_jpg.write_bytes(snap["jpeg_bytes"])
             individual_photo_paths.append(p_jpg)
 
-        # 3. AI Manual Compliance Pre-Audit + Procedure Log
+        # 3. Procedure Log (never fabricates unconfirmed physical changes)
         if not logs_copy:
             logs_copy = [
                 {
                     "timestamp": ts_human,
-                    "step": "DIP-8 Inspection and Pin Configuration",
-                    "detail": f"Configured DIP-8 switch block to {pin_info['dip_binary']} (Slave #{slave_id}).",
-                },
-                {
-                    "timestamp": ts_human,
-                    "step": "RS-485 Modbus-RTU Live Bus Verification",
-                    "detail": f"Status: {modbus_tel.get('status_label')} | Temp={temp_c} deg C | RH={hum_rh} %RH.",
+                    "step": "Session Inspection Observation",
+                    "detail": (
+                        f"Source={modbus_tel.get('source', 'unknown')} | Status={modbus_tel.get('status_label')} | "
+                        f"Temp={temp_c} deg C | RH={hum_rh} %RH (Zero confirmed physical modifications)."
+                    ),
                 },
             ]
 
@@ -788,78 +821,69 @@ class LiveRepairCoordinator:
             for i, entry in enumerate(logs_copy, start=1)
         )
 
-        compliance_verdict = (
-            "LOCALLY VERIFIED COMPLIANT PER MANUAL V1.1 (PAGES 4, 5, 6, 7 & 9)"
-            if healthy
-            else "PENDING FINAL LIVE ELECTRICAL BUS VERIFICATION"
-        )
+        if is_sim:
+            compliance_verdict = "SIMULATION DEMO WALKTHROUGH ONLY — SYNTHETIC DATA (DOES NOT VERIFY HARDWARE)"
+        elif healthy and fresh:
+            compliance_verdict = "BENCH SENSOR COMMUNICATION OBSERVED PER MANUAL V1.1 (READ-ONLY SCOPE; PLC/SCADA NOT VERIFIED)"
+        else:
+            compliance_verdict = "PARTIAL INSPECTION DOSSIER — PENDING FRESH MODBUS RESPONSE"
 
-        report_md = f"""# Post-Repair Engineering Dossier & OEM Sign-Off Request (`TZ THT-02`)
+        report_md = f"""# Engineering Inspection Dossier & Sign-Off Package (`TZ THT-02`)
 
 - **Dossier ID**: `{package_id}`
 - **UTC Timestamp**: `{ts_human}`
+- **Provenance Mode**: `{"SIMULATION (SYNTHETIC)" if is_sim else "PHYSICAL BENCH"}`
 - **Serviced Asset**: `{spec.get("name", "TZ THT-02")}` (`140.0 mm x DIA 16.0 mm`)
-- **Local Edge AI Compliance Verdict (Manual V1.1)**: **{compliance_verdict}**
+- **Bench Scope Verdict (Manual V1.1)**: **{compliance_verdict}**
 
-## 1. Real-Time Modbus-RTU / SCADA Bus Certification
-| Parameter | Measured / Configured Value | Manual V1.1 Reference |
+## 1. Bench Modbus Observation Summary
+| Parameter | Observed / Configured Value | Manual V1.1 Reference |
 | :--- | :--- | :--- |
-| **RS-485 Port / Transceiver** | `{modbus_tel.get("port") or "FT2232HL Isolated USB-RS485"}` | Page 4 (A+/B-/GND) |
+| **Transport / Source** | `{modbus_tel.get("source")} ({modbus_tel.get("port") or "none"})` | Page 4 (A+/B-/GND) |
 | **Slave Address (Reg `0x0004`)** | **`{slave_id}` (`{pin_info["hex_id"]}`)** — ON Pins: `{pin_info["on_pins"]}` (`{pin_info["dip_binary"]}`) | Page 5 (Weights `128..1`) |
-| **Serial Frame Format** | `{baud_bps} bps`, `8N1` (8 data bits, no parity, 1 stop bit) | Page 5 & Page 6 |
-| **Measured Temperature (Reg `0x0000`)** | **`{f"{temp_c} deg C" if temp_c is not None else "N/A"}`** (`{modbus_tel.get("raw_temp_hex") or "--"}`) | Page 6 (`!= 0x7FFF`) |
-| **Measured Relative Humidity (Reg `0x0001`)** | **`{f"{hum_rh} %RH" if hum_rh is not None else "N/A"}`** (`{modbus_tel.get("raw_humidity_hex") or "--"}`) | Page 6 (`!= 0x7FFF`) |
-| **Master TX Poll Frame (`0x03`)** | `{modbus_tel.get("last_tx_hex") or "N/A"}` | Page 7 |
-| **Sensor RX Frame + `CRC-16`** | `{modbus_tel.get("last_rx_hex") or "N/A"}` (`CRC OK = {modbus_tel.get("crc_valid")}`) | Page 7 & Page 9 (`0xA001`) |
+| **Protocol & Framing** | `{modbus_tel.get("protocol", "modbus_rtu")}`, `{baud_bps} bps`, `8N1` | Page 5 & Page 6 |
+| **Observed Temperature (Reg `0x0000`)** | **`{f"{temp_c} deg C" if temp_c is not None else "N/A"}`** (`{modbus_tel.get("raw_temp_hex") or "--"}`) | Page 6 (`!= 0x7FFF`) |
+| **Observed Relative Humidity (Reg `0x0001`)** | **`{f"{hum_rh} %RH" if hum_rh is not None else "N/A"}`** (`{modbus_tel.get("raw_humidity_hex") or "--"}`) | Page 6 (`!= 0x7FFF`) |
+| **Master TX Frame (`0x03`)** | `{modbus_tel.get("last_tx_hex") or "N/A"}` | Page 7 |
+| **Sensor RX Frame** | `{modbus_tel.get("last_rx_hex") or "N/A"}` (`CRC Checked = {modbus_tel.get("crc_checked_by_client", False)}`) | Page 7 & Page 9 (`0xA001`) |
+| **Scope Limitations** | `PLC Verified = False`, `SCADA Verified = False`, `Calibration = Planned` | Bench Read-Only Scope |
 
-## 2. Step-by-Step Field Repair Procedure Log
+## 2. Recorded Session Log
 {steps_md}
 
-## 3. Datasheet Compliance Audit & OEM Engineering Sign-Off Notes
-1. **2-Step Housing Opening & Re-Assembly (Page 5)**: Executed by loosening the rear cable gland nut first before rotating the middle housing barrel, and re-threading the middle barrel before torquing the gland nut to prevent twisting the 4 internal conductors.
-2. **4-Wire Color Code Verification (Page 4)**: Red = `DC 5~24V (+)`, Black = `Common GND`, Yellow = `RS-485 A+`, Green = `RS-485 B-`.
-3. **Edge AI Grounding Recommendation**: Maintain equipotential `GND` and cable shield bonding at the isolated `FT2232HL` converter `Gnd` terminal to suppress common-mode noise across industrial RS-485 runs up to `1200 m` (Page 4).
-4. **Technician Notes**: {operator_notes.strip() or "Requesting OEM engineering sign-off confirming field reconfiguration and IP65 seal integrity."}
+## 3. Datasheet Reference & Operator Notes
+1. **2-Step Housing Reference (Page 5)**: Loosen rear cable gland nut first before rotating middle barrel; re-thread middle barrel before torquing gland nut.
+2. **4-Wire Color Code Reference (Page 4)**: Red = `DC 5~24V (+)`, Black = `Common GND`, Yellow = `RS-485 A+`, Green = `RS-485 B-`.
+3. **Technician Notes**: {operator_notes.strip() or "No additional technician notes entered."}
 
 ## 4. Multi-Angle 3D CAD Views & Photographic Evidence Attached
-- `{quad_3d_path.name}` — 4-angle 3D CAD engineering sheet (Isometric, Dimensioned Front `140x16 mm`, Exploded `DIP-8` PCB, Waterproof Gland Harness).
-- `{strip_path.name}` — Chronological Before / During / After camera inspection strip.
+- `{quad_3d_path.name}` — 4-angle parametric 3D CAD sheet (`140x16 mm`).
+- `{strip_path.name}` — Chronological camera inspection strip.
 - `{dxf_path.name}` — 1:1 mm scale AutoCAD R2010 `.DXF` drawing.
 - `{stl_path.name}` — Solid parametric `.STL` 3D mesh.
 """
         md_path.write_text(report_md, encoding="utf-8")
 
-        # 4. Store-and-Forward OEM Sign-Off Request Email (.eml)
-        sender = "fieldscan-scada@edge-node.local"
+        # 4. Store-and-Forward Local Draft Email (.eml)
+        sender = "fieldscan-bench@edge-node.local"
         recipient = "support-eng@tzonedigital.com"
+        subject_tag = "[SIMULATION DEMO]" if is_sim else "[BENCH DOSSIER]"
         subject = (
-            f"[REPAIR SIGN-OFF] TZ THT-02 Verified on Modbus (Slave #{slave_id}: "
+            f"{subject_tag} TZ THT-02 Observation (Slave #{slave_id}: "
             f"{temp_c}C / {hum_rh}%RH) + 4-Angle 3D CAD ({package_id})"
         )
         email_body = (
-            f"POST-REPAIR OEM ENGINEERING SIGN-OFF REQUEST (STORE-AND-FORWARD)\n"
-            f"================================================================\n"
-            f"To Tzone Digital Technology Support Engineering:\n\n"
-            f"Attached is the complete field diagnostic, DIP-8 switch reconfiguration,\n"
-            f"and live RS-485 Modbus-RTU commissioning dossier for the TZ THT-02 transmitter.\n\n"
-            f"REAL-TIME ELECTRICAL VERIFICATION SUMMARY:\n"
-            f"  - Edge AI Verdict (Manual V1.1) : {compliance_verdict}\n"
-            f"  - DIP-8 Slave Address           : {slave_id} (Binary {pin_info['dip_binary']}, ON Pins: {pin_info['on_pins']})\n"
-            f"  - RS-485 Serial Link            : {baud_bps} bps, 8N1, CRC-16 0xA001 Verified\n"
-            f"  - Live Temperature Reading      : {temp_c} C (Reg 0x0000 = {modbus_tel.get('raw_temp_hex')})\n"
-            f"  - Live Relative Humidity        : {hum_rh} %RH (Reg 0x0001 = {modbus_tel.get('raw_humidity_hex')})\n\n"
-            f"EXECUTED PROCEDURE LOG:\n"
+            f"LOCAL DRAFT BENCH INSPECTION DOSSIER (STORE-AND-FORWARD)\n"
+            f"========================================================\n"
+            f"Provenance Mode : {'SIMULATION (SYNTHETIC)' if is_sim else 'PHYSICAL BENCH'}\n"
+            f"Verdict         : {compliance_verdict}\n"
+            f"Slave Address   : {slave_id} (Binary {pin_info['dip_binary']}, ON Pins: {pin_info['on_pins']})\n"
+            f"Observed Temp   : {temp_c} C (Reg 0x0000 = {modbus_tel.get('raw_temp_hex')})\n"
+            f"Observed RH     : {hum_rh} %RH (Reg 0x0001 = {modbus_tel.get('raw_humidity_hex')})\n"
+            f"Scope Notice    : PLC, SCADA, and reference calibration are outside bench scope.\n\n"
+            f"RECORDED LOG:\n"
             + "\n".join(f"  {i}. {e['step']}: {e['detail']}" for i, e in enumerate(logs_copy, start=1))
-            + f"\n\nOEM SIGN-OFF REQUEST:\n"
-            f"  Please confirm engineering sign-off that the DIP-8 pin configuration,\n"
-            f"  2-step IP65 housing re-torque, and live Modbus-RTU parameters comply with\n"
-            f"  factory specifications, or advise if reserved register calibration is required.\n\n"
-            f"ATTACHED ENGINEERING ARTIFACTS:\n"
-            f"  1. {quad_3d_path.name} (4-Angle 3D Digital Twin: Isometric, Front, Exploded DIP-8, Gland Harness)\n"
-            f"  2. {strip_path.name} (Chronological Before / During / After Camera Strip)\n"
-            f"  3. {dxf_path.name} (AutoCAD .DXF 140x16 mm Blueprint)\n"
-            f"  4. {stl_path.name} (Parametric 3D .STL Mesh)\n"
-            f"  5. {md_path.name} (Complete Markdown Sign-Off Report)\n"
+            + "\n"
         )
 
         msg = EmailMessage()
@@ -871,6 +895,7 @@ class LiveRepairCoordinator:
         msg["X-FieldScan-Package-ID"] = package_id
         msg["X-FieldScan-Outbox-Mode"] = "STORE_AND_FORWARD_OFFLINE"
         msg["X-FieldScan-SignOff-Request"] = "TRUE"
+        msg["X-FieldScan-Simulation"] = "TRUE" if is_sim else "FALSE"
         msg.set_content(email_body)
 
         attachments = [
@@ -894,15 +919,23 @@ class LiveRepairCoordinator:
 
         elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
 
-        spoken_summary = (
-            f"Per TZ THT-02 Manual Version 1.1, your field repair is verified compliant: Slave Address {slave_id} "
-            f"is properly configured with stable readings of {temp_c} degrees Celsius and {hum_rh} percent relative "
-            f"humidity. Remember to bond the cable shield to common ground on long RS-485 runs. I have compiled "
-            f"the complete sign-off dossier with Before, During, and After photos, 4-angle 3D CAD views, and "
-            f"AutoCAD drawings queued in the offline outbox for OEM approval."
-            if healthy
-            else "I have compiled the engineering sign-off dossier with 4-angle 3D CAD views, chronological camera strip, and AutoCAD drawings queued in the offline outbox for OEM review."
-        )
+        if is_sim:
+            spoken_summary = (
+                f"Simulation dossier compiled for TZ THT-02 Slave Address {slave_id} with synthetic readings "
+                f"of {temp_c} degrees Celsius and {hum_rh} percent relative humidity. All exported files are "
+                "labeled Simulation and stored locally."
+            )
+        elif healthy and fresh:
+            spoken_summary = (
+                f"Bench inspection dossier compiled per TZ THT-02 Manual Version 1.1: Slave Address {slave_id} "
+                f"responded on Modbus with observed values of {temp_c} degrees Celsius and {hum_rh} percent "
+                "relative humidity. Photos, 4-angle parametric CAD views, and AutoCAD drawings are saved locally."
+            )
+        else:
+            spoken_summary = (
+                "Partial inspection dossier compiled locally with 4-angle parametric CAD views, camera strip, "
+                "and AutoCAD drawings; live Modbus response remains pending."
+            )
         audio_b64 = tts_fn(spoken_summary) if callable(tts_fn) else None
 
         with self._lock:
@@ -915,6 +948,9 @@ class LiveRepairCoordinator:
             "stage": "STEP4_SIGNOFF_PACKAGE_READY",
             "status": "queued_offline",
             "signoff_mode": True,
+            "simulation": is_sim,
+            "partial_report": not (healthy and fresh) and not is_sim,
+            "scope": "simulation" if is_sim else ("sensor_communication" if (healthy and fresh) else "partial_observation"),
             "explode_pcb": False,
             "focus_dip": False,
             "andon_state": andon_now,

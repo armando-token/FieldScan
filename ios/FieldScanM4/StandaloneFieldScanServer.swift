@@ -159,7 +159,7 @@ public final class StandaloneFieldScanServer: NSObject {
     private var cachedEsdMatImage: UIImage?
     #endif
 
-    // MARK: - Modbus-RTU & RS-485 Engine State
+    // MARK: - Modbus-RTU / Modbus-TCP & RS-485 Engine State
 
     private var activeModbusMode: String = "auto"
     private var targetSlaveId: Int = 1
@@ -168,6 +168,10 @@ public final class StandaloneFieldScanServer: NSObject {
     private var breathTestStartTime: TimeInterval = 0
     private var modbusHistory: [[String: Any]] = []
     private var latestModbusTelemetry: [String: Any] = [:]
+    private var pusrTCPClient: ModbusTCPClient?
+    private var lastValidHistoricalSample: [String: Any]?
+    private var lastValidSampleUptime: TimeInterval = -999.0
+    private var lastSampleInvalidatedReason: String?
 
     // MARK: - 4-Stage Guided Repair & Dossier State
 
@@ -234,14 +238,68 @@ public final class StandaloneFieldScanServer: NSObject {
     public func stop() {
         stateLock.lock()
         isRunning = false
+        let client = pusrTCPClient
         stateLock.unlock()
 
+        client?.close()
         renderTimer?.cancel()
         renderTimer = nil
         modbusTimer?.cancel()
         modbusTimer = nil
         listener?.cancel()
         listener = nil
+    }
+
+    public func configurePusrGateway(host: String, port: Int = 502, activate: Bool = true) {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cfg = FieldScanRuntimeConfig.shared
+        cfg.pusrGatewayHost = trimmed
+        cfg.pusrGatewayPort = port
+
+        stateLock.lock()
+        pusrTCPClient?.close()
+        if !trimmed.isEmpty {
+            pusrTCPClient = ModbusTCPClient(host: trimmed, port: port, timeoutS: 1.0, pilotReadonly: true)
+            if activate {
+                activeModbusMode = "pusr_tcp"
+            }
+        } else {
+            pusrTCPClient = nil
+        }
+        lastSampleInvalidatedReason = "GATEWAY_RECONFIGURED"
+        stateLock.unlock()
+
+        FieldScanSessionEngine.shared.invalidateLiveConnection(reason: "gateway_reconfigured")
+        if activate && !trimmed.isEmpty {
+            stepModbusTelemetryOnce(forceImmediateTCPPoll: true)
+        }
+    }
+
+    public func handleTopologySwitch() {
+        stateLock.lock()
+        let client = pusrTCPClient
+        lastSampleInvalidatedReason = "TOPOLOGY_SWITCHED"
+        stateLock.unlock()
+
+        client?.close()
+        FieldScanSessionEngine.shared.pauseActiveSession(reason: "topology_switched")
+    }
+
+    public func handleAppSuspend() {
+        stateLock.lock()
+        let client = pusrTCPClient
+        lastSampleInvalidatedReason = "APP_SUSPENDED"
+        if !latestModbusTelemetry.isEmpty {
+            latestModbusTelemetry["fresh"] = false
+            latestModbusTelemetry["online"] = false
+            if let hist = lastValidHistoricalSample {
+                latestModbusTelemetry["historical_sample"] = hist
+            }
+        }
+        stateLock.unlock()
+
+        client?.close()
+        FieldScanSessionEngine.shared.invalidateLiveConnection(reason: "app_suspended")
     }
 
     private func configureAudioSessionForOfflineVoice(force: Bool = false) {
@@ -585,6 +643,150 @@ public final class StandaloneFieldScanServer: NSObject {
             return
         }
 
+        if req.method == "POST" && path == "/api/modbus/gateway" {
+            let bodyJSON = parseJSONBody(req.body)
+            let host = ((bodyJSON["host"] as? String) ?? FieldScanRuntimeConfig.shared.pusrGatewayHost).trimmingCharacters(in: .whitespacesAndNewlines)
+            let port = intFromAny(bodyJSON["port"]) ?? 502
+            let activate = boolFromAny(bodyJSON["activate"], defaultValue: true)
+            if port == ModbusTCPClient.legacyRTUBridgePort {
+                sendJSONResponse(on: connection, statusCode: 400, payload: [
+                    "ok": false,
+                    "error_code": "PROTOCOL_MISMATCH",
+                    "message": "Port 5502 is reserved for raw RTU-over-TCP framing; configure PUSR USR-DR164 as Modbus TCP (MBAP) on port 502.",
+                ])
+                return
+            }
+            configurePusrGateway(host: host, port: port, activate: activate)
+            sendJSONResponse(on: connection, statusCode: 200, payload: [
+                "ok": true,
+                "gateway": ["host": host, "port": port, "protocol": "modbus_tcp_mbap"],
+                "modbus": getModbusTelemetry(),
+            ])
+            return
+        }
+
+        if req.method == "POST" && path == "/api/modbus/poll" {
+            let bodyJSON = parseJSONBody(req.body)
+            if let sid = intFromAny(bodyJSON["slave_id"] ?? bodyJSON["unit_id"]), (1...247).contains(sid) {
+                stateLock.lock()
+                targetSlaveId = sid
+                stateLock.unlock()
+            }
+            if let modeReq = bodyJSON["mode"] as? String, !modeReq.isEmpty {
+                setModbusMode(mode: modeReq, slaveId: nil, baudBps: nil)
+            }
+            stepModbusTelemetryOnce(forceImmediateTCPPoll: true)
+            let tel = getModbusTelemetry()
+            var sessionSnap: Any = NSNull()
+            if let sessId = (bodyJSON["session_id"] as? String) ?? FieldScanSessionEngine.shared.currentActiveSessionId {
+                if let rec = try? FieldScanSessionEngine.shared.recordModbusObservation(sessionId: sessId, modbusTel: tel, actor: "operator_poll") {
+                    sessionSnap = rec
+                }
+            }
+            sendJSONResponse(on: connection, statusCode: 200, payload: [
+                "ok": (tel["online"] as? Bool) ?? false,
+                "modbus": tel,
+                "session": sessionSnap,
+            ])
+            return
+        }
+
+        // 11b. Capabilities, Device Profiles, Authoritative Sessions & Planned Calibration (`Contract v2.1.0`)
+        if req.method == "GET" && path == "/api/capabilities" {
+            sendJSONResponse(on: connection, statusCode: 200, payload: buildCapabilitiesPayload())
+            return
+        }
+
+        if req.method == "GET" && path == "/api/profiles" {
+            let profs = FieldScanSessionEngine.shared.loadAllProfiles()
+            sendJSONResponse(on: connection, statusCode: 200, payload: [
+                "contract_version": FieldScanSessionEngine.contractVersion,
+                "profiles": Array(profs.values),
+                "manifest": FieldScanSessionEngine.shared.verifyResourceManifest(),
+            ])
+            return
+        }
+
+        if req.method == "GET" && path == "/api/calibration/planned" {
+            sendJSONResponse(on: connection, statusCode: 200, payload: FieldScanSessionEngine.plannedCalibrationCard())
+            return
+        }
+
+        if req.method == "POST" && path == "/api/calibration/compare" {
+            let bodyJSON = parseJSONBody(req.body)
+            let res = FieldScanSessionEngine.evaluateCalibrationComparisonContract(payload: bodyJSON)
+            sendJSONResponse(on: connection, statusCode: 200, payload: res)
+            return
+        }
+
+        if path == "/api/sessions" {
+            if req.method == "GET" {
+                let items = FieldScanSessionEngine.shared.listSessions(limit: 20)
+                sendJSONResponse(on: connection, statusCode: 200, payload: ["sessions": items])
+                return
+            }
+            if req.method == "POST" {
+                let bodyJSON = parseJSONBody(req.body)
+                do {
+                    let snap = try FieldScanSessionEngine.shared.createSession(payload: bodyJSON)
+                    sendJSONResponse(on: connection, statusCode: 200, payload: snap)
+                } catch let domErr as FieldScanDomainError {
+                    sendJSONResponse(on: connection, statusCode: domErr.statusCode, payload: domErr.toDictionary())
+                } catch {
+                    sendJSONResponse(on: connection, statusCode: 500, payload: ["error_code": "INTERNAL_ERROR", "message": error.localizedDescription])
+                }
+                return
+            }
+        }
+
+        if path.hasPrefix("/api/sessions/") {
+            let rest = String(path.dropFirst("/api/sessions/".count))
+            let comps = rest.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            if let sessionId = comps.first {
+                do {
+                    if comps.count == 1 && req.method == "GET" {
+                        let snap = try FieldScanSessionEngine.shared.getSession(sessionId: sessionId)
+                        sendJSONResponse(on: connection, statusCode: 200, payload: snap)
+                        return
+                    }
+                    if comps.count == 2 && comps[1] == "actions" && req.method == "POST" {
+                        let bodyJSON = parseJSONBody(req.body)
+                        let out = try FieldScanSessionEngine.shared.applyAction(sessionId: sessionId, payload: bodyJSON)
+                        sendJSONResponse(on: connection, statusCode: 200, payload: out)
+                        return
+                    }
+                    if comps.count == 2 && comps[1] == "capture" && req.method == "POST" {
+                        let bodyJSON = parseJSONBody(req.body)
+                        let manual = boolFromAny(bodyJSON["manual"], defaultValue: true)
+                        let rawJpg = getRawJpeg()
+                        let vTel = getVideoTelemetry()
+                        let camSrc = (vTel["camera_source"] as? String) ?? cameraSourceLabel
+                        let out = try FieldScanSessionEngine.shared.ingestCameraFrameForSession(
+                            sessionId: sessionId,
+                            rawJPEG: rawJpg,
+                            visionTel: vTel,
+                            cameraSource: camSrc,
+                            manualTrigger: manual
+                        )
+                        sendJSONResponse(on: connection, statusCode: 200, payload: out)
+                        return
+                    }
+                    if comps.count == 2 && comps[1] == "exports" && req.method == "POST" {
+                        let bodyJSON = parseJSONBody(req.body)
+                        let out = try FieldScanSessionEngine.shared.exportSessionDossier(sessionId: sessionId, payload: bodyJSON)
+                        sendJSONResponse(on: connection, statusCode: 200, payload: out)
+                        return
+                    }
+                } catch let domErr as FieldScanDomainError {
+                    sendJSONResponse(on: connection, statusCode: domErr.statusCode, payload: domErr.toDictionary())
+                    return
+                } catch {
+                    sendJSONResponse(on: connection, statusCode: 500, payload: ["error_code": "INTERNAL_ERROR", "message": error.localizedDescription])
+                    return
+                }
+            }
+        }
+
         // 12. Proactive Repair Event Poll (`GET /api/repair/event/{id}`)
         if req.method == "GET" && path.hasPrefix("/api/repair/event/") {
             let idStr = String(path.dropFirst("/api/repair/event/".count))
@@ -706,6 +908,9 @@ public final class StandaloneFieldScanServer: NSObject {
         case 204: statusText = "No Content"
         case 400: statusText = "Bad Request"
         case 404: statusText = "Not Found"
+        case 409: statusText = "Conflict"
+        case 500: statusText = "Internal Server Error"
+        case 507: statusText = "Insufficient Storage"
         default: statusText = "OK"
         }
 
@@ -915,6 +1120,7 @@ public final class StandaloneFieldScanServer: NSObject {
         }
         stateLock.unlock()
 
+        FieldScanSessionEngine.shared.notifyCameraSourceChanged(cameraSourceLabel)
         if mode == "ipad_camera" || mode == "usb" || mode == "uvc" {
             NativeCameraBridge.shared.startCapture(preferredSource: "back", targetFPS: 24, completion: nil)
         }
@@ -931,6 +1137,7 @@ public final class StandaloneFieldScanServer: NSObject {
         activeCameraMode = "custom"
         cameraSourceLabel = "custom:upload"
         stateLock.unlock()
+        FieldScanSessionEngine.shared.notifyCameraSourceChanged("custom:upload")
         renderQueue.async { [weak self] in
             self?.renderWorkbenchOrCameraStep()
         }
@@ -945,6 +1152,17 @@ public final class StandaloneFieldScanServer: NSObject {
         liveCameraHeight = max(240, height)
         cameraSourceLabel = sourceLabel
         stateLock.unlock()
+
+        if let activeSid = FieldScanSessionEngine.shared.currentActiveSessionId {
+            let vTel = getVideoTelemetry()
+            _ = try? FieldScanSessionEngine.shared.ingestCameraFrameForSession(
+                sessionId: activeSid,
+                rawJPEG: jpegData,
+                visionTel: vTel,
+                cameraSource: sourceLabel,
+                manualTrigger: false
+            )
+        }
     }
 
     public func getRawJpeg() -> Data {
@@ -1611,6 +1829,9 @@ public final class StandaloneFieldScanServer: NSObject {
                 ? ["tip": toolTipPt, "base": toolBasePt]
                 : NSNull(),
             "mean_brightness": liveAnalysis?.meanBrightness ?? 128.4,
+            "sharpness_score": liveAnalysis?.sharpnessScore ?? 48.0,
+            "exposure_ok": liveAnalysis?.exposureOk ?? true,
+            "white_sticker_occluded": liveAnalysis?.whiteStickerOccluded ?? false,
         ]
         if anomalyZone == nil {
             visionTel["anomaly_zone"] = NSNull()
@@ -1629,6 +1850,9 @@ public final class StandaloneFieldScanServer: NSObject {
     private struct LiveFramePixelTelemetry {
         let sensorDetected: Bool
         let meanBrightness: Double
+        let sharpnessScore: Double
+        let exposureOk: Bool
+        let whiteStickerOccluded: Bool
         let centerX: Double
         let centerY: Double
         let angleDeg: Double
@@ -1713,6 +1937,10 @@ public final class StandaloneFieldScanServer: NSObject {
         var redPatchRightCount = 0
         var redPatchLeftCount = 0
         var skinPixelCount = 0
+        var edgeStrengthSum: Double = 0.0
+        var edgeSampleCount: Int = 0
+        var clippedBrightPixels: Int = 0
+        var centralWhiteStickerPixels: Int = 0
 
         var fgPoints: [(Double, Double, Double)] = []
         fgPoints.reserveCapacity(1200)
@@ -1725,6 +1953,9 @@ public final class StandaloneFieldScanServer: NSObject {
                 let b = Double(rawPixels[idx + 2])
                 let luma = 0.299 * r + 0.587 * g + 0.114 * b
                 lumaSum += luma
+                if luma >= 248.0 {
+                    clippedBrightPixels += 1
+                }
 
                 // YCrCb human skin locus (Cr in 135..178, Cb in 80..126)
                 let cb = 128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b
@@ -1737,6 +1968,15 @@ public final class StandaloneFieldScanServer: NSObject {
                 // Blue/teal internal DIP-8 PCB detection
                 if b > 105.0 && b > r * 1.30 && g > r * 1.08 {
                     bluePcbCount += 1
+                }
+
+                // Low-saturation bright white sticker/label occlusion check in DIP zone (`VIS-05`)
+                let maxCh = max(r, max(g, b))
+                let minCh = min(r, min(g, b))
+                if x >= sampleW / 3 && x <= (sampleW * 2) / 3 && y >= sampleH / 3 && y <= (sampleH * 2) / 3 {
+                    if luma >= 218.0 && (maxCh - minCh) <= 22.0 {
+                        centralWhiteStickerPixels += 1
+                    }
                 }
 
                 // Bright red/orange fault patch detection (excluding human skin)
@@ -1771,6 +2011,8 @@ public final class StandaloneFieldScanServer: NSObject {
                     let score = max(lumaDiff, colorDist * 0.68) + edgeStrength * 0.45
                     if score > 22.0 {
                         contrastPixels += 1
+                        edgeStrengthSum += edgeStrength
+                        edgeSampleCount += 1
                         let w = min(120.0, score)
                         weightSum += w
                         let dx = Double(x)
@@ -1788,6 +2030,10 @@ public final class StandaloneFieldScanServer: NSObject {
 
         let totalPx = Double(sampleW * sampleH)
         let meanLuma = ((lumaSum / totalPx) * 10).rounded() / 10
+        let rawSharpness = edgeSampleCount > 0 ? (edgeStrengthSum / Double(edgeSampleCount)) * 1.8 : 0.0
+        let sharpnessScore = ((min(100.0, rawSharpness)) * 10).rounded() / 10
+        let exposureOk = (meanLuma >= 22.0 && meanLuma <= 238.0) && (Double(clippedBrightPixels) / totalPx) < 0.35
+        let whiteStickerOccluded = (centralWhiteStickerPixels >= 95 && bluePcbCount < 18)
 
         // 3. Fast Pure-CPU Center-Weighted 2D PCA (< 0.8 ms, zero Vision/Metal/ANE stalls on renderQueue)
         let cxMean = weightSum > 10.0 ? (sumX / weightSum) : Double(sampleW) * 0.5
@@ -1910,6 +2156,9 @@ public final class StandaloneFieldScanServer: NSObject {
         return LiveFramePixelTelemetry(
             sensorDetected: finalDetected,
             meanBrightness: meanLuma,
+            sharpnessScore: sharpnessScore,
+            exposureOk: exposureOk,
+            whiteStickerOccluded: whiteStickerOccluded,
             centerX: outCx,
             centerY: outCy,
             angleDeg: outAngle,
@@ -2067,9 +2316,19 @@ public final class StandaloneFieldScanServer: NSObject {
 
     public func setModbusMode(mode: String, slaveId: Int?, baudBps: Int?) {
         let clean = mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let validModes = ["auto", "hardware", "sim_disconnected", "sim_abnormal_7fff", "sim_online", "sim_breath_test"]
+        let validModes = ["auto", "hardware", "pusr_tcp", "sim_disconnected", "sim_abnormal_7fff", "sim_online", "sim_breath_test"]
         stateLock.lock()
+        let prevMode = activeModbusMode
         activeModbusMode = validModes.contains(clean) ? clean : "auto"
+        if activeModbusMode != prevMode {
+            lastSampleInvalidatedReason = "MODE_SWITCHED"
+        }
+        if activeModbusMode == "pusr_tcp" && pusrTCPClient == nil {
+            let cfg = FieldScanRuntimeConfig.shared
+            if !cfg.pusrGatewayHost.isEmpty {
+                pusrTCPClient = ModbusTCPClient(host: cfg.pusrGatewayHost, port: cfg.pusrGatewayPort, timeoutS: 1.0, pilotReadonly: true)
+            }
+        }
         if activeModbusMode == "sim_breath_test" {
             breathTestStartTime = ProcessInfo.processInfo.systemUptime
         }
@@ -2080,14 +2339,27 @@ public final class StandaloneFieldScanServer: NSObject {
             activeBaudBps = baud
         }
         stateLock.unlock()
-        stepModbusTelemetryOnce()
+
+        if clean != prevMode {
+            FieldScanSessionEngine.shared.invalidateLiveConnection(reason: "modbus_mode_\(clean)")
+        }
+        stepModbusTelemetryOnce(forceImmediateTCPPoll: clean == "pusr_tcp")
     }
 
     public func getModbusTelemetry() -> [String: Any] {
         stateLock.lock()
-        let cached = latestModbusTelemetry
+        var cached = latestModbusTelemetry
+        let lastUp = lastValidSampleUptime
+        let histSample = lastValidHistoricalSample
         stateLock.unlock()
         if !cached.isEmpty {
+            let ageS = max(0.0, ProcessInfo.processInfo.systemUptime - lastUp)
+            if (cached["simulation"] as? Bool) != true && ageS > 3.0 {
+                cached["fresh"] = false
+                if let hist = histSample {
+                    cached["historical_sample"] = hist
+                }
+            }
             return cached
         }
         stepModbusTelemetryOnce()
@@ -2097,6 +2369,14 @@ public final class StandaloneFieldScanServer: NSObject {
     }
 
     private func discoverSerialPorts() -> [[String: Any]] {
+        let cfg = FieldScanRuntimeConfig.shared
+        if !cfg.pusrGatewayHost.isEmpty {
+            return [[
+                "device": "tcp://\(cfg.pusrGatewayHost):\(cfg.pusrGatewayPort)",
+                "description": "PUSR USR-DR164 Modbus TCP (MBAP)",
+                "is_rs485_candidate": true,
+            ]]
+        }
         return []
     }
 
@@ -2107,12 +2387,33 @@ public final class StandaloneFieldScanServer: NSObject {
         let baud = activeBaudBps
         stateLock.unlock()
 
+        if mode == "pusr_tcp" || !FieldScanRuntimeConfig.shared.pusrGatewayHost.isEmpty {
+            stepModbusTelemetryOnce(forceImmediateTCPPoll: true)
+            let tel = getModbusTelemetry()
+            let ok = (tel["online"] as? Bool) ?? false
+            return [
+                "found": ok,
+                "port": tel["port"] ?? "tcp://\(FieldScanRuntimeConfig.shared.pusrGatewayHost):\(FieldScanRuntimeConfig.shared.pusrGatewayPort)",
+                "adapter": "PUSR USR-DR164 Modbus TCP Gateway (MBAP)",
+                "baud_bps": tel["baud_bps"] ?? baud,
+                "slave_id": tel["slave_id"] ?? sid,
+                "dip_bits": tel["dip_bits"] ?? Self.addressToDipBits(sid),
+                "temp_c": tel["temp_c"] ?? NSNull(),
+                "humidity_rh": tel["humidity_rh"] ?? NSNull(),
+                "tx_hex": tel["last_tx_hex"] ?? "",
+                "rx_hex": tel["last_rx_hex"] ?? "",
+                "roundtrip_ms": tel["roundtrip_ms"] ?? 0.0,
+                "ports_checked": [tel["port"] ?? ""],
+            ]
+        }
+
         if mode == "sim_online" || mode == "sim_breath_test" {
             let tel = getModbusTelemetry()
             return [
                 "found": true,
                 "port": "sim://ft2232hl-ch1",
-                "adapter": "In-App FT2232HL RS-485 Bus Engine",
+                "adapter": "In-App Synthetic Modbus Simulator",
+                "simulation": true,
                 "baud_bps": baud,
                 "slave_id": sid,
                 "dip_bits": Self.addressToDipBits(sid),
@@ -2128,34 +2429,184 @@ public final class StandaloneFieldScanServer: NSObject {
         return [
             "found": false,
             "ports_checked": [],
-            "reason": "Standalone iPad Air M4 mode active (no external USB-RS485 adapter attached).",
+            "reason": "Standalone iPad Air M4 mode: configure PUSR USR-DR164 Modbus TCP gateway IP to poll physical RS-485 sensors without Mac.",
         ]
     }
 
-    private func stepModbusTelemetryOnce() {
+    private func stepModbusTelemetryOnce(forceImmediateTCPPoll: Bool = false) {
         let nowUptime = ProcessInfo.processInfo.systemUptime
         stateLock.lock()
         modbusPollSequence += 1
         let pollSeq = modbusPollSequence
-        let mode = activeModbusMode
+        var mode = activeModbusMode
         let sid = targetSlaveId
         let baud = activeBaudBps
         let breathT0 = breathTestStartTime
+        var tcpClient = pusrTCPClient
+        if (mode == "pusr_tcp" || (mode == "auto" && !FieldScanRuntimeConfig.shared.pusrGatewayHost.isEmpty)) && tcpClient == nil {
+            let cfg = FieldScanRuntimeConfig.shared
+            if !cfg.pusrGatewayHost.isEmpty {
+                let c = ModbusTCPClient(host: cfg.pusrGatewayHost, port: cfg.pusrGatewayPort, timeoutS: 1.0, pilotReadonly: true)
+                pusrTCPClient = c
+                tcpClient = c
+                if mode == "auto" {
+                    mode = "pusr_tcp"
+                }
+            }
+        }
+        let histSnap = lastValidHistoricalSample
         stateLock.unlock()
+
+        if mode == "pusr_tcp", let client = tcpClient {
+            let res = client.readTHT02Holding(
+                unitId: UInt8(clamping: sid),
+                startReg: 0x0000,
+                count: 8,
+                respectBackoff: !forceImmediateTCPPoll
+            )
+            let ok = (res["ok"] as? Bool) ?? false
+            if ok, let dec = res["decoded"] as? [String: Any] {
+                let abn = (dec["sensor_abnormal_7fff"] as? Bool) ?? false
+                let tempQ = (dec["temp_quality"] as? String) ?? "unavailable"
+                let humQ = (dec["humidity_quality"] as? String) ?? "unavailable"
+                let healthy = !abn && tempQ == "valid" && humQ == "valid"
+                let sampleDict: [String: Any] = [
+                    "ts": (Date().timeIntervalSince1970 * 100).rounded() / 100,
+                    "captured_at_utc": FieldScanSessionEngine.utcNowISO(),
+                    "temp_c": dec["temp_c"] ?? NSNull(),
+                    "humidity_rh": dec["humidity_rh"] ?? NSNull(),
+                    "slave_id": dec["slave_id"] ?? sid,
+                    "protocol": "modbus_tcp_mbap",
+                ]
+
+                stateLock.lock()
+                if let t = dec["temp_c"] as? Double, let h = dec["humidity_rh"] as? Double {
+                    modbusHistory.append(["ts": sampleDict["ts"]!, "temp_c": t, "humidity_rh": h])
+                    if modbusHistory.count > 36 {
+                        modbusHistory.removeFirst(modbusHistory.count - 36)
+                    }
+                }
+                lastValidHistoricalSample = sampleDict
+                lastValidSampleUptime = ProcessInfo.processInfo.systemUptime
+                lastSampleInvalidatedReason = nil
+                let histCopy = modbusHistory
+                let payload: [String: Any] = [
+                    "online": true,
+                    "healthy": healthy,
+                    "fresh": true,
+                    "simulation": false,
+                    "scope": "sensor_communication",
+                    "protocol": "modbus_tcp_mbap",
+                    "andon_light": healthy ? "GREEN" : "RED",
+                    "sensor_abnormal_7fff": abn,
+                    "temp_quality": tempQ,
+                    "humidity_quality": humQ,
+                    "mode": "pusr_tcp",
+                    "source": "hardware:pusr_tcp:\(client.host):\(client.port)",
+                    "port": "tcp://\(client.host):\(client.port)",
+                    "adapter_present": true,
+                    "baud_bps": dec["baud_bps"] ?? baud,
+                    "frame_format": "MBAP/TCP -> 8N1",
+                    "slave_id": dec["slave_id"] ?? sid,
+                    "target_slave_id": sid,
+                    "dip_bits": dec["dip_bits"] ?? Self.addressToDipBits(sid),
+                    "temp_c": dec["temp_c"] ?? NSNull(),
+                    "humidity_rh": dec["humidity_rh"] ?? NSNull(),
+                    "raw_temp_hex": dec["raw_temp_hex"] ?? NSNull(),
+                    "raw_humidity_hex": dec["raw_humidity_hex"] ?? NSNull(),
+                    "hw_version": dec["hw_version"] ?? NSNull(),
+                    "sw_version": dec["sw_version"] ?? NSNull(),
+                    "last_tx_hex": res["tx_hex"] ?? "",
+                    "last_rx_hex": res["rx_hex"] ?? "",
+                    "crc_checked_by_client": false,
+                    "crc_valid": NSNull(),
+                    "mbap_valid": true,
+                    "roundtrip_ms": res["roundtrip_ms"] ?? 0.0,
+                    "status_label": abn ? "ALARM 7FFFH · SHT30 PROBE ABNORMAL" : "SENSOR RESPONDED · COMM OK (MODBUS TCP)",
+                    "poll_seq": pollSeq,
+                    "history": histCopy,
+                    "tx_audit_count": client.txAuditLog.count,
+                ]
+                latestModbusTelemetry = payload
+                stateLock.unlock()
+                return
+            } else {
+                let errCode = (res["error_code"] as? String) ?? "SOURCE_UNAVAILABLE"
+                if errCode == "BACKOFF_ACTIVE" {
+                    stateLock.lock()
+                    if !latestModbusTelemetry.isEmpty && (latestModbusTelemetry["mode"] as? String) == "pusr_tcp" {
+                        latestModbusTelemetry["fresh"] = false
+                        latestModbusTelemetry["poll_seq"] = pollSeq
+                        stateLock.unlock()
+                        return
+                    }
+                    stateLock.unlock()
+                }
+                let dipBits = Self.addressToDipBits(sid)
+                let payload: [String: Any] = [
+                    "online": false,
+                    "healthy": false,
+                    "fresh": false,
+                    "simulation": false,
+                    "scope": "no_response",
+                    "protocol": "modbus_tcp_mbap",
+                    "error_code": errCode,
+                    "error_detail": res["error_detail"] ?? "",
+                    "andon_light": "RED",
+                    "sensor_abnormal_7fff": false,
+                    "mode": "pusr_tcp",
+                    "source": "hardware:pusr_tcp:\(client.host):\(client.port)",
+                    "port": "tcp://\(client.host):\(client.port)",
+                    "adapter_present": false,
+                    "baud_bps": baud,
+                    "frame_format": "MBAP/TCP -> 8N1",
+                    "slave_id": sid,
+                    "target_slave_id": sid,
+                    "dip_bits": dipBits,
+                    "temp_c": NSNull(),
+                    "humidity_rh": NSNull(),
+                    "raw_temp_hex": NSNull(),
+                    "raw_humidity_hex": NSNull(),
+                    "hw_version": NSNull(),
+                    "sw_version": NSNull(),
+                    "last_tx_hex": res["tx_hex"] ?? "",
+                    "last_rx_hex": res["rx_hex"] ?? "",
+                    "crc_checked_by_client": false,
+                    "crc_valid": NSNull(),
+                    "mbap_valid": res["mbap_valid"] ?? false,
+                    "roundtrip_ms": res["roundtrip_ms"] ?? 0.0,
+                    "status_label": errCode == "MODBUS_EXCEPTION" ? "MODBUS EXCEPTION (\(res["exception_name"] ?? "ERR"))" : "NO MODBUS TCP RESPONSE (\(errCode))",
+                    "historical_sample": histSnap ?? NSNull(),
+                    "poll_seq": pollSeq,
+                    "history": modbusHistory,
+                    "tx_audit_count": client.txAuditLog.count,
+                ]
+                stateLock.lock()
+                latestModbusTelemetry = payload
+                stateLock.unlock()
+                return
+            }
+        }
 
         let txBytes = Self.buildReadRegistersRequest(slaveId: sid, startReg: 0x0000, count: 8)
         let txHex = Self.formatHex(txBytes)
         let dipBits = Self.addressToDipBits(sid)
 
-        if mode == "auto" || mode == "hardware" || mode == "sim_disconnected" {
+        if mode == "auto" || mode == "hardware" || mode == "pusr_tcp" || mode == "sim_disconnected" {
+            let isSimDisc = (mode == "sim_disconnected")
             let payload: [String: Any] = [
                 "online": false,
                 "healthy": false,
+                "fresh": false,
+                "simulation": isSimDisc,
+                "scope": isSimDisc ? "simulation" : "no_response",
+                "protocol": isSimDisc ? "simulation" : "modbus_tcp_mbap",
+                "error_code": isSimDisc ? "SIM_DISCONNECTED" : "SOURCE_UNAVAILABLE",
                 "andon_light": "RED",
                 "sensor_abnormal_7fff": false,
                 "mode": mode,
-                "source": "simulator:rs485_disconnected",
-                "port": "sim://ft2232hl-ch1",
+                "source": isSimDisc ? "simulator:rs485_disconnected" : "hardware:unconfigured",
+                "port": isSimDisc ? "sim://ft2232hl-ch1" : "tcp://unconfigured:502",
                 "adapter_present": false,
                 "baud_bps": baud,
                 "frame_format": "8N1",
@@ -2170,9 +2621,12 @@ public final class StandaloneFieldScanServer: NSObject {
                 "sw_version": NSNull(),
                 "last_tx_hex": txHex,
                 "last_rx_hex": "",
+                "crc_checked_by_client": isSimDisc,
                 "crc_valid": false,
+                "mbap_valid": NSNull(),
                 "roundtrip_ms": 52.0,
-                "status_label": "NO MODBUS SIGNAL (TIMEOUT)",
+                "status_label": isSimDisc ? "SIMULATION · DISCONNECTED" : "NO PHYSICAL GATEWAY CONFIGURED (OFFLINE)",
+                "historical_sample": histSnap ?? NSNull(),
                 "poll_seq": pollSeq,
                 "history": modbusHistory,
             ]
@@ -2193,8 +2647,14 @@ public final class StandaloneFieldScanServer: NSObject {
             let payload: [String: Any] = [
                 "online": true,
                 "healthy": false,
+                "fresh": true,
+                "simulation": true,
+                "scope": "simulation",
+                "protocol": "simulation",
                 "andon_light": "RED",
                 "sensor_abnormal_7fff": true,
+                "temp_quality": "invalid_sentinel_7fff",
+                "humidity_quality": "invalid_sentinel_7fff",
                 "mode": mode,
                 "source": "simulator:rs485_7fff",
                 "port": "sim://ft2232hl-ch1",
@@ -2212,9 +2672,11 @@ public final class StandaloneFieldScanServer: NSObject {
                 "sw_version": "V1.1",
                 "last_tx_hex": txHex,
                 "last_rx_hex": Self.formatHex(rxBytes),
+                "crc_checked_by_client": true,
                 "crc_valid": true,
+                "mbap_valid": NSNull(),
                 "roundtrip_ms": 11.4,
-                "status_label": "ALARM 7FFFH · SHT30 PROBE ABNORMAL",
+                "status_label": "SIMULATION · ALARM 7FFFH (PROBE ABNORMAL)",
                 "poll_seq": pollSeq,
                 "history": modbusHistory,
             ]
@@ -2263,6 +2725,12 @@ public final class StandaloneFieldScanServer: NSObject {
         let payload: [String: Any] = [
             "online": true,
             "healthy": true,
+            "fresh": true,
+            "simulation": true,
+            "scope": "simulation",
+            "protocol": "simulation",
+            "temp_quality": "valid",
+            "humidity_quality": "valid",
             "andon_light": "GREEN",
             "sensor_abnormal_7fff": false,
             "mode": mode,
@@ -2282,14 +2750,44 @@ public final class StandaloneFieldScanServer: NSObject {
             "sw_version": "V1.1",
             "last_tx_hex": txHex,
             "last_rx_hex": Self.formatHex(rxBytes),
+            "crc_checked_by_client": true,
             "crc_valid": true,
+            "mbap_valid": NSNull(),
             "roundtrip_ms": 11.8,
-            "status_label": "SCADA ONLINE · SIGNAL VERIFIED",
+            "status_label": "SIMULATION · SYNTHETIC MODBUS RESPONSE",
             "poll_seq": pollSeq,
             "history": histCopy,
         ]
         latestModbusTelemetry = payload
         stateLock.unlock()
+    }
+
+    private func buildCapabilitiesPayload() -> [String: Any] {
+        let cfg = FieldScanRuntimeConfig.shared
+        let bridge = LlamaServerBridge.shared
+        let modbusTel = getModbusTelemetry()
+        let isSim = (modbusTel["simulation"] as? Bool) ?? false
+        return [
+            "contract_version": FieldScanSessionEngine.contractVersion,
+            "runtime_role": (!cfg.currentMode.isMacAssisted) ? "ipad_autonomous" : "ipad_assisted_client",
+            "pilot_writes_enabled": false,
+            "simulation_active": isSim,
+            "transports": [
+                "modbus_rtu_ft2232hl": false,
+                "modbus_tcp_pusr_mbap": true,
+                "pusr_gateway_host": cfg.pusrGatewayHost,
+                "pusr_gateway_port": cfg.pusrGatewayPort,
+            ],
+            "ai_provider": [
+                "provider_id": bridge.activeProviderId,
+                "active_label": bridge.activeModelName,
+                "vl_server_online": bridge.vlServerRunning,
+                "mac_probing_suppressed": bridge.macProbingSuppressedInAutonomousMode,
+                "deterministic_fallback_available": true,
+            ],
+            "manifest": FieldScanSessionEngine.shared.verifyResourceManifest(),
+            "planned_calibration": FieldScanSessionEngine.plannedCalibrationCard(),
+        ]
     }
 
     // MARK: - Unified Status & Reactive Repair Coordinator
@@ -2327,6 +2825,7 @@ public final class StandaloneFieldScanServer: NSObject {
 
         return [
             "status": "ok",
+            "contract_version": FieldScanSessionEngine.contractVersion,
             "sensor_id": "TZ-THT-02",
             "offline_verified": true,
             "blocked_external_attempts": 0,
@@ -2336,6 +2835,7 @@ public final class StandaloneFieldScanServer: NSObject {
             "repair": repairState,
             "system": sysInfo,
             "offline": offlineInfo,
+            "capabilities": buildCapabilitiesPayload(),
         ]
     }
 
@@ -2429,7 +2929,6 @@ public final class StandaloneFieldScanServer: NSObject {
         let healthy = (modbusTel["healthy"] as? Bool) ?? false
         let abn7fff = ((modbusTel["online"] as? Bool) ?? false) && ((modbusTel["sensor_abnormal_7fff"] as? Bool) ?? false)
         let pcbOpen = (visionTel["pcb_open_detected"] as? Bool) ?? false
-        let nowUptime = ProcessInfo.processInfo.systemUptime
 
         var triggerType: String?
         stateLock.lock()
@@ -2467,38 +2966,48 @@ public final class StandaloneFieldScanServer: NSObject {
             let humRH = (modbusTel["humidity_rh"] as? Double) ?? 52.8
             let sid = (modbusTel["slave_id"] as? Int) ?? 1
             let baud = (modbusTel["baud_bps"] as? Int) ?? 9600
+            let isSim = (modbusTel["simulation"] as? Bool) ?? false
 
             recordEvidenceSnapshot(
                 key: "after_online",
-                title: String(format: "3. AFTER: VERIFIED %.1fC / %.1f%%RH", tempC, humRH),
-                caption: String(format: "Slave #%d @ %d 8N1 | Temp=%.1f C | RH=%.1f%% | CRC-16 OK", sid, baud, tempC, humRH),
+                title: String(format: isSim ? "3. AFTER: SIMULATED %.1fC / %.1f%%RH" : "3. AFTER: COMM OBSERVED %.1fC / %.1f%%RH", tempC, humRH),
+                caption: String(format: "%@Slave #%d @ %d 8N1 | Temp=%.1f C | RH=%.1f%%", isSim ? "[SIM] " : "", sid, baud, tempC, humRH),
                 jpegData: frameJpeg
             )
 
-            let spokenMsg = String(
-                format: "Modbus-RTU link online and verified! Live RS-485 telemetry received from TZ THT-02 at Slave Address %d. Current calibrated values are %.1f degrees Celsius temperature and %.1f percent relative humidity. Field repair successfully verified.",
-                sid,
-                tempC,
-                humRH
-            )
+            let spokenMsg = isSim
+                ? String(
+                    format: "Simulation active: synthetic Modbus response generated for TZ THT-02 Slave Address %d showing %.1f degrees Celsius and %.1f percent relative humidity. Synthetic mode does not verify physical sensor hardware.",
+                    sid,
+                    tempC,
+                    humRH
+                )
+                : String(
+                    format: "Sensor communication observed on Modbus at Slave Address %d. Reported register values are %.1f degrees Celsius temperature and %.1f percent relative humidity. Note: PLC or SCADA state and metrological calibration are not verified.",
+                    sid,
+                    tempC,
+                    humRH
+                )
             let audioB64 = synthesizeSpeechB64(spokenMsg)
             let citations: [[String: Any]] = [
-                ["page": 7, "label": "Page 7 · Validated Function 0x03 Frame"],
-                ["page": 6, "label": "Page 6 · Registers 0000H/0001H Verified"],
+                ["page": 7, "label": "Page 7 · Function 0x03 Read Holding Frame"],
+                ["page": 6, "label": "Page 6 · Registers 0000H/0001H"],
             ]
 
             stateLock.lock()
             repairEventSequence += 1
             let evId = repairEventSequence
             appendRepairLogUnlocked(
-                step: "Live Electrical Modbus-RTU / SCADA Verification",
-                detail: String(format: "Valid CRC-16 response on Slave #%d (%d bps 8N1): Temp=%.1f deg C, RH=%.1f %%RH.", sid, baud, tempC, humRH)
+                step: isSim ? "Synthetic Modbus Simulation Step" : "Read-Only Sensor Modbus Communication Check",
+                detail: String(format: "%@Response on Slave #%d (%d bps 8N1): Temp=%.1f deg C, RH=%.1f %%RH.", isSim ? "[SIMULATION] " : "", sid, baud, tempC, humRH)
             )
             let ev: [String: Any] = [
                 "event_id": evId,
                 "type": trigger,
                 "stage": repairStage,
-                "title": "LIVE MODBUS SIGNAL VERIFIED ONLINE",
+                "canonical_stage": isSim ? "SIMULATION_ACTIVE" : "STEP3_MODBUS_RESPONDING",
+                "simulation": isSim,
+                "title": isSim ? "SIMULATION · SYNTHETIC MODBUS RESPONSE" : "SENSOR RESPONDED · MODBUS COMM OK",
                 "diagnosis": spokenMsg,
                 "assistant_message": spokenMsg,
                 "temp_c": tempC,
@@ -2641,11 +3150,20 @@ public final class StandaloneFieldScanServer: NSObject {
 
         if step == "connect_modbus" {
             let sid = intFromAny(payload["slave_id"]) ?? targetSlaveId
-            let camMode = currentCameraMode()
-            if camMode.hasPrefix("sim_") {
-                setCameraMode("sim_normal")
+            let forceSim = boolFromAny(payload["force_sim"], defaultValue: false)
+            let curMbMode = activeModbusMode
+            if forceSim || curMbMode.hasPrefix("sim_") {
+                let camMode = currentCameraMode()
+                if camMode.hasPrefix("sim_") {
+                    setCameraMode("sim_normal")
+                }
+                setModbusMode(mode: "sim_online", slaveId: sid, baudBps: 9600)
+            } else {
+                stateLock.lock()
+                targetSlaveId = sid
+                stateLock.unlock()
+                stepModbusTelemetryOnce(forceImmediateTCPPoll: true)
             }
-            setModbusMode(mode: "sim_online", slaveId: sid, baudBps: 9600)
             evaluateLiveReactiveWatch()
             let status = buildUnifiedStatus()
             if let rep = status["repair"] as? [String: Any],
@@ -2658,7 +3176,12 @@ public final class StandaloneFieldScanServer: NSObject {
 
         if step == "breath_test" {
             let sid = intFromAny(payload["slave_id"]) ?? targetSlaveId
-            setModbusMode(mode: "sim_breath_test", slaveId: sid, baudBps: 9600)
+            let forceSim = boolFromAny(payload["force_sim"], defaultValue: false)
+            if forceSim || activeModbusMode.hasPrefix("sim_") {
+                setModbusMode(mode: "sim_breath_test", slaveId: sid, baudBps: 9600)
+            } else {
+                stepModbusTelemetryOnce(forceImmediateTCPPoll: true)
+            }
             evaluateLiveReactiveWatch()
             return buildUnifiedStatus()
         }
@@ -2885,48 +3408,54 @@ public final class StandaloneFieldScanServer: NSObject {
             ]
         }
 
-        let complianceVerdict = healthy
-            ? "LOCALLY VERIFIED COMPLIANT PER MANUAL V1.1 (PAGES 4, 5, 6, 7 & 9)"
-            : "PENDING FINAL LIVE ELECTRICAL BUS VERIFICATION"
+        let isSimDossier = (modbusTel["simulation"] as? Bool) ?? false
+        let complianceVerdict = isSimDossier
+            ? "SIMULATION MODE · SYNTHETIC DATA ONLY (PHYSICAL HARDWARE NOT VERIFIED)"
+            : (healthy
+                ? "SENSOR RESPONDED ON MODBUS (PLC/SCADA & CALIBRATION NOT VERIFIED)"
+                : "PARTIAL INSPECTION · PENDING PHYSICAL MODBUS RESPONSE")
 
         let stepsMarkdown = logsCopy.enumerated().map { idx, entry in
             "\(idx + 1). **`[\(entry["timestamp"] ?? tsHuman)]` \(entry["step"] ?? "Step")** — \(entry["detail"] ?? "")"
         }.joined(separator: "\n")
 
         let reportMarkdown = """
-        # Post-Repair Engineering Dossier & OEM Sign-Off Request (`TZ THT-02`)
+        # FieldScan Bench Maintenance Dossier (`TZ THT-02`) \(isSimDossier ? "[SIMULATION]" : "")
 
         - **Dossier ID**: `\(packageId)`
         - **UTC Timestamp**: `\(tsHuman)`
         - **Serviced Asset**: `TZ THT-02 Industrial RS-485 Temperature & Humidity Sensor` (`140.0 mm x DIA 16.0 mm`)
-        - **Local Edge AI Compliance Verdict (Manual V1.1)**: **\(complianceVerdict)**
+        - **Simulation Mode**: `\(isSimDossier)`
+        - **Bench Scope Verdict (Manual V1.1)**: **\(complianceVerdict)**
 
-        ## 1. Real-Time Modbus-RTU / SCADA Bus Certification
-        | Parameter | Measured / Configured Value | Manual V1.1 Reference |
+        ## 1. Read-Only Modbus Communication Observation (PLC/SCADA & Calibration Not Verified)
+        | Parameter | Observed / Configured Value | Manual V1.1 Reference |
         | :--- | :--- | :--- |
-        | **RS-485 Port / Transceiver** | `FT2232HL Isolated USB-RS485` | Page 4 (A+/B-/GND) |
+        | **Modbus Source** | `\(modbusTel["source"] ?? "bench")` | Page 4 (A+/B-/GND) |
         | **Slave Address (Reg `0x0004`)** | **`\(sid)` (`\(pinInfo["hex_id"] ?? "0x01")`)** — Binary `\(pinInfo["dip_binary"] ?? "00000001")` | Page 5 (Weights `128..1`) |
         | **Serial Frame Format** | `\(baudBps) bps`, `8N1` | Page 5 & Page 6 |
-        | **Measured Temperature (Reg `0x0000`)** | **`\(String(format: "%.1f deg C", tempC))`** | Page 6 (`!= 0x7FFF`) |
-        | **Measured Relative Humidity (Reg `0x0001`)** | **`\(String(format: "%.1f %%RH", humRH))`** | Page 6 (`!= 0x7FFF`) |
+        | **Reported Temperature (Reg `0x0000`)** | **`\(String(format: "%.1f deg C", tempC))`** | Page 6 (`!= 0x7FFF`) |
+        | **Reported Relative Humidity (Reg `0x0001`)** | **`\(String(format: "%.1f %%RH", humRH))`** | Page 6 (`!= 0x7FFF`) |
         | **Master TX Poll Frame (`0x03`)** | `\(modbusTel["last_tx_hex"] ?? "01 03 00 00 00 08 44 0C")` | Page 7 |
-        | **Sensor RX Frame + `CRC-16`** | `\(modbusTel["last_rx_hex"] ?? "N/A")` (`CRC OK = true`) | Page 7 & Page 9 (`0xA001`) |
+        | **Sensor RX Frame** | `\(modbusTel["last_rx_hex"] ?? "N/A")` (`protocol = \(modbusTel["protocol"] ?? "modbus")`) | Page 7 & Page 9 (`0xA001`) |
 
-        ## 2. Step-by-Step Field Repair Procedure Log
+        ## 2. Step-by-Step Field Inspection Procedure Log
         \(stepsMarkdown)
 
-        ## 3. Datasheet Compliance Audit & OEM Engineering Sign-Off Notes
-        - **2-Step Housing Opening & Re-Assembly (Page 5)**: Executed by loosening the rear cable gland nut first before rotating the middle housing barrel.
-        - **4-Wire Color Code Verification (Page 4)**: Red = `DC 5~24V (+)`, Black = `Common GND`, Yellow = `RS-485 A+`, Green = `RS-485 B-`.
+        ## 3. Datasheet Reference & Scope Boundaries
+        - **2-Step Housing Opening & Re-Assembly (Page 5)**: Loosen rear cable gland nut first before rotating the middle housing barrel.
+        - **4-Wire Color Code Reference (Page 4)**: Red = `DC 5~24V (+)`, Black = `Common GND`, Yellow = `RS-485 A+`, Green = `RS-485 B-`.
+        - **Scope Note**: Read-only Modbus communication check only; PLC/SCADA state and reference standard calibration are not verified.
         - **Technician Notes**: \(operatorNotes)
         """
         let mdData = Data(reportMarkdown.utf8)
         try? mdData.write(to: mdURL, options: .atomic)
 
-        let sender = "fieldscan-scada@ipad-air-m4.local"
+        let sender = "fieldscan-bench@ipad-air-m4.local"
         let recipient = "support-eng@tzonedigital.com"
         let subject = String(
-            format: "[REPAIR SIGN-OFF] TZ THT-02 Verified on Modbus (Slave #%d: %.1fC / %.1f%%RH) + 4-Angle 3D CAD (%@)",
+            format: "%@[INSPECTION DOSSIER] TZ THT-02 Modbus Obs (Slave #%d: %.1fC / %.1f%%RH) + 4-Angle 3D CAD (%@)",
+            isSimDossier ? "[SIMULATION] " : "",
             sid,
             tempC,
             humRH,
@@ -2982,14 +3511,24 @@ public final class StandaloneFieldScanServer: NSObject {
         try? zipData.write(to: zipURL, options: .atomic)
 
         let elapsedMs = ((ProcessInfo.processInfo.systemUptime - t0) * 1000.0 * 10).rounded() / 10
-        let spokenSummary = healthy
-            ? String(
-                format: "Per TZ THT-02 Manual Version 1.1, your field repair is verified compliant: Slave Address %d is properly configured with stable readings of %.1f degrees Celsius and %.1f percent relative humidity. I have compiled the complete sign-off dossier with Before, During, and After photos, 4-angle 3D CAD views, and AutoCAD drawings queued in the offline outbox for OEM approval.",
+        let spokenSummary: String
+        if isSimDossier {
+            spokenSummary = String(
+                format: "Simulation dossier compiled for TZ THT-02 Slave Address %d (synthetic %.1f degrees Celsius and %.1f percent relative humidity). Synthetic data does not verify physical sensor hardware.",
                 sid,
                 tempC,
                 humRH
             )
-            : "I have compiled the engineering sign-off dossier with 4-angle 3D CAD views, chronological camera strip, and AutoCAD drawings queued in the offline outbox for OEM review."
+        } else if healthy {
+            spokenSummary = String(
+                format: "Bench inspection dossier compiled for TZ THT-02: Modbus response observed on Slave Address %d at %.1f degrees Celsius and %.1f percent relative humidity, with 4-angle 3D CAD views and camera evidence queued locally.",
+                sid,
+                tempC,
+                humRH
+            )
+        } else {
+            spokenSummary = "Partial bench inspection dossier compiled with 4-angle 3D CAD views, chronological camera strip, and AutoCAD drawings queued in the local outbox."
+        }
 
         let audioB64 = synthesizeSpeechB64(spokenSummary)
 
@@ -3340,7 +3879,12 @@ public final class StandaloneFieldScanServer: NSObject {
 
             let recent = Array(snapshots.suffix(3))
             let slotW: CGFloat = 396
-            let defaultTitles = ["1. BEFORE (OPEN FAULT)", "2. DURING (DIP-8 SETUP)", "3. AFTER (SCADA ONLINE)"]
+            let isSimStrip = (modbusTel["simulation"] as? Bool) ?? false
+            let defaultTitles = [
+                "1. BEFORE (AS FOUND)",
+                "2. DURING (INSPECTION)",
+                isSimStrip ? "3. AFTER (SIMULATION)" : "3. AFTER (SENSOR COMM OBS)",
+            ]
 
             for idx in 0..<3 {
                 let x0 = CGFloat(18 + idx * Int(slotW + 18))
@@ -3519,6 +4063,15 @@ public final class StandaloneFieldScanServer: NSObject {
     // MARK: - On-Device Premium English Voice TTS (`AVSpeechSynthesizer` -> Speaker Playback)
 
     private func selectBestSpeechVoice(for text: String) -> AVSpeechSynthesisVoice? {
+        let langPref = FieldScanSessionEngine.shared.preferredLanguage
+        if langPref == "es" {
+            let esVoices = AVSpeechSynthesisVoice.speechVoices().filter {
+                $0.language.lowercased().hasPrefix("es")
+            }.sorted { $0.quality.rawValue > $1.quality.rawValue }
+            return esVoices.first
+                ?? AVSpeechSynthesisVoice(language: "es-MX")
+                ?? AVSpeechSynthesisVoice(language: "es-ES")
+        }
         if let cached = cachedPreferredVoice {
             return cached
         }
@@ -3527,7 +4080,7 @@ public final class StandaloneFieldScanServer: NSObject {
             $0.language.lowercased().hasPrefix("en")
         }
 
-        // Prefer .premium first, then .enhanced, strictly in US English (en-US)
+        // Prefer .premium first, then .enhanced, in US English (en-US)
         let sortedVoices = allVoices.sorted { a, b in
             if a.quality.rawValue != b.quality.rawValue {
                 return a.quality.rawValue > b.quality.rawValue
@@ -3555,6 +4108,9 @@ public final class StandaloneFieldScanServer: NSObject {
         guard !cleaned.isEmpty else {
             return buildFallbackConfirmationWav(durationSeconds: 0.08).base64EncodedString()
         }
+
+        let estDur = max(0.8, Double(cleaned.count) * 0.055)
+        FieldScanSessionEngine.shared.registerTTSPlayback(cleaned, estimatedDurationS: speakOnDevice ? estDur : 0.0)
 
         // Speak aloud immediately through the iPad Air M4 native audio output with natural premium/enhanced voice
         if speakOnDevice {
@@ -3849,6 +4405,18 @@ public final class StandaloneFieldScanServer: NSObject {
             recommendedActions = fallback.actions
         }
 
+        // Apply deterministic grounding filter (`IA-04`) so LLM output can never claim SCADA/PLC/calibration or cite pages > 9
+        let activeProf = FieldScanSessionEngine.shared.resolveDeviceProfile((payload["profile_id"] as? String) ?? "tzone_tht02")
+        let grounded = FieldScanSessionEngine.shared.applyDeterministicGroundingFilter(
+            candidateText: diagnosisText,
+            profile: activeProf,
+            verifiedTelemetry: modbusTel
+        )
+        if let cleanTxt = grounded["text"] as? String, !cleanTxt.isEmpty {
+            diagnosisText = cleanTxt
+        }
+        let groundingCorrected = (grounded["grounding_corrected"] as? Bool) ?? false
+
         recordConversationTurn(userQuery: query, assistantReply: diagnosisText)
 
         let elapsedMs = max(12.0, ((ProcessInfo.processInfo.systemUptime - t0) * 1000.0 * 10).rounded() / 10)
@@ -3858,7 +4426,7 @@ public final class StandaloneFieldScanServer: NSObject {
         let andonNow = mbHealthy ? "GREEN" : (explodePcb ? "YELLOW" : "RED")
         stateLock.unlock()
 
-        let citations: [[String: Any]] = citedPages.map { p in
+        let citations: [[String: Any]] = citedPages.filter { (1...9).contains($0) }.map { p in
             ["page": p, "label": Self.manualPageTitles[p] ?? "Page \(p) · Manual V1.1"]
         }
         let audioB64 = synthesizeSpeechB64(diagnosisText)
@@ -3867,6 +4435,7 @@ public final class StandaloneFieldScanServer: NSObject {
         return [
             "diagnosis": diagnosisText,
             "assistant_message": diagnosisText,
+            "grounding_corrected": groundingCorrected,
             "probable_causes": isTechnicalQuery ? probableCauses : [],
             "recommended_actions": isTechnicalQuery ? recommendedActions : [],
             "highlighted_zone": shouldHighlightZone ? targetZone : NSNull(),
@@ -4347,9 +4916,9 @@ public final class StandaloneFieldScanServer: NSObject {
             SFSpeechRecognizer.requestAuthorization { _ in }
         }
         #if os(iOS)
-        if AVAudioSession.sharedInstance().recordPermission == .undetermined {
+        if AVAudioApplication.shared.recordPermission == .undetermined {
             let micPermSema = DispatchSemaphore(value: 0)
-            AVAudioSession.sharedInstance().requestRecordPermission { _ in
+            AVAudioApplication.requestRecordPermission { _ in
                 micPermSema.signal()
             }
             _ = micPermSema.wait(timeout: .now() + 2.0)
@@ -4358,8 +4927,12 @@ public final class StandaloneFieldScanServer: NSObject {
     }
 
     private func selectBestSpeechRecognizer() -> SFSpeechRecognizer? {
-        if let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), rec.isAvailable {
-            return rec
+        let lang = FieldScanSessionEngine.shared.preferredLanguage
+        let candidateLocales = (lang == "es") ? ["es-MX", "es-ES", "en-US"] : ["en-US", "es-MX"]
+        for locId in candidateLocales {
+            if let rec = SFSpeechRecognizer(locale: Locale(identifier: locId)), rec.isAvailable {
+                return rec
+            }
         }
         return SFSpeechRecognizer(locale: Locale(identifier: "en-US")) ?? SFSpeechRecognizer()
     }
@@ -4414,7 +4987,7 @@ public final class StandaloneFieldScanServer: NSObject {
            SFSpeechRecognizer.authorizationStatus() == .authorized {
             let req = SFSpeechAudioBufferRecognitionRequest()
             req.shouldReportPartialResults = true
-            req.requiresOnDeviceRecognition = false
+            req.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
             optionalRequest = req
 
             optionalTask = recognizer.recognitionTask(with: req) { [weak self] result, error in
@@ -4892,10 +5465,10 @@ public final class StandaloneFieldScanServer: NSObject {
             return ("", true)
         }
 
-        // Apple SFSpeechRecognizer strictly in English (en-US) on the M4 Neural Engine
+        // Apple SFSpeechRecognizer in preferred session locale (en-US or es-MX/es-ES) with on-device recognition (`VOZ-01`, `OFF-01`)
         var recognizedText = ""
         if SFSpeechRecognizer.authorizationStatus() == .authorized,
-           let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+           let recognizer = selectBestSpeechRecognizer(),
            recognizer.isAvailable {
             let tempURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("fieldscan_asr_\(UUID().uuidString).wav")
@@ -4904,7 +5477,7 @@ public final class StandaloneFieldScanServer: NSObject {
                 defer { try? FileManager.default.removeItem(at: tempURL) }
 
                 let request = SFSpeechURLRecognitionRequest(url: tempURL)
-                request.requiresOnDeviceRecognition = false
+                request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
                 request.shouldReportPartialResults = true
 
                 let sema = DispatchSemaphore(value: 0)

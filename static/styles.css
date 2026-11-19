@@ -2857,3 +2857,130 @@ svg.lucide {
     grid-template-columns: 1fr;
   }
 }
+
+/* ==========================================================================
+   PLANNED CALIBRATION EXTENSION (CAL-00) & SESSION ACTION STRIP
+   ========================================================================== */
+.planned-cal-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fde68a;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.planned-cal-pill:hover {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: rgba(251, 191, 36, 0.78);
+}
+
+.modal-planned-cal {
+  width: min(760px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.planned-cal-body {
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.planned-cal-banner {
+  padding: 14px 16px;
+  border-radius: var(--r-md);
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.4);
+}
+
+.planned-badge {
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.22);
+  color: #fef08a;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.planned-cal-banner p,
+.planned-cal-scope-card p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-normal);
+}
+
+.planned-cal-scope-card {
+  padding: 12px 15px;
+  border-radius: var(--r-md);
+  background: #0b121c;
+  border: 1px solid var(--border-subtle);
+}
+
+.planned-cal-scope-card h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--sky-bright);
+}
+
+.planned-cal-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.planned-stage-row {
+  display: grid;
+  grid-template-columns: 98px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 9px 12px;
+  border-radius: var(--r-sm);
+  background: #0a1017;
+  border: 1px solid var(--border-subtle);
+}
+
+.planned-stage-row code {
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: rgba(56, 189, 248, 0.14);
+  color: var(--sky-bright);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.planned-stage-row strong {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-strong);
+  margin-bottom: 2px;
+}
+
+.planned-stage-row span {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.export-strip {
+  flex-wrap: wrap;
+}

@@ -72,17 +72,39 @@
           <input type="file" id="photoUploadInput" accept="image/*" hidden />
         </div>
 
-        <label class="select-shell" for="selectModbusMode" title="Select RS-485 Modbus-RTU hardware interface or bench state">
-          <i data-lucide="usb"></i>
-          <select id="selectModbusMode" aria-label="Modbus RTU Bus Mode">
-            <option value="auto" selected>Modbus: Auto-Detect</option>
-            <option value="hardware">Modbus: Hardware FT2232HL</option>
-            <option value="sim_disconnected">Modbus: Disconnected</option>
-            <option value="sim_online">Modbus: Online (Nominal)</option>
-            <option value="sim_abnormal_7fff">Modbus: 0x7FFF Probe Alarm</option>
-            <option value="sim_breath_test">Modbus: Breath Humidity Spike</option>
-          </select>
-        </label>
+        <div class="select-group">
+          <label class="select-shell" for="selectModbusMode" title="Select RS-485 Modbus-RTU, PUSR TCP Gateway, or explicit simulation">
+            <i data-lucide="usb"></i>
+            <select id="selectModbusMode" aria-label="Modbus RTU Bus Mode">
+              <option value="auto" selected>Modbus: Auto-Detect</option>
+              <option value="pusr_tcp">Modbus: PUSR TCP Gateway (:502)</option>
+              <option value="hardware">Modbus: Hardware FT2232HL</option>
+              <option value="sim_disconnected">Sim: Bus Disconnected</option>
+              <option value="sim_online">Sim: Synthetic Nominal</option>
+              <option value="sim_abnormal_7fff">Sim: 0x7FFF Probe Alarm</option>
+              <option value="sim_breath_test">Sim: Breath Humidity Spike</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            class="btn-icon-hmi"
+            id="btnConfigGateway"
+            title="Configure isolated bench PUSR USR-DR164 Modbus TCP gateway host and port"
+            aria-label="Configure PUSR Modbus TCP Gateway"
+          >
+            <i data-lucide="network"></i>
+          </button>
+        </div>
+
+        <button
+          type="button"
+          class="planned-cal-pill"
+          id="btnOpenCalibrationPlanned"
+          title="View planned Calibration &amp; Verified Adjustment extension roadmap"
+        >
+          <i data-lucide="sliders"></i>
+          <span>Calibration &amp; Verified Adjustment · Planned</span>
+        </button>
       </div>
 
       <div class="telemetry-cluster">
@@ -305,7 +327,7 @@
           >
             3D LOCK: SENSOR ONLY
           </span>
-          <span class="twin-verdict-badge is-nominal" id="twinMatchBadge">100% DIGITAL TWIN MATCH</span>
+          <span class="twin-verdict-badge is-nominal" id="twinMatchBadge">PARAMETRIC CAD MODEL · 140.0×Ø16.0 MM</span>
 
           <div class="segmented-bar" role="group" aria-label="3D Twin View Controls">
             <button type="button" class="seg-btn active" id="btnModeSolid" title="Solid PBR CAD surface">Solid</button>
@@ -368,11 +390,20 @@
       <div class="scada-header">
         <div class="scada-title-group">
           <span class="scada-status-led" aria-hidden="true"></span>
-          <span class="scada-panel-name">INDUSTRIAL SCADA &amp; MODBUS-RTU HMI</span>
-          <span class="scada-banner-tag" id="scadaStatusBadge">RED ALERT: NO MODBUS SIGNAL</span>
+          <span class="scada-panel-name">BENCH MODBUS TELEMETRY &amp; EVIDENCE HMI</span>
+          <span class="scada-banner-tag" id="scadaStatusBadge">STANDBY: NO MODBUS SIGNAL</span>
         </div>
 
         <div class="scada-actions">
+          <button
+            type="button"
+            class="scada-action-btn scada-action-emerald"
+            id="btnPollReadonly"
+            title="Send single read-only Function 0x03 holding register request on active physical transport"
+          >
+            <i data-lucide="refresh-cw"></i>
+            <span>Start Read-Only Poll</span>
+          </button>
           <button
             type="button"
             class="scada-action-btn"
@@ -386,19 +417,21 @@
             type="button"
             class="scada-action-btn scada-action-emerald"
             id="btnSimConnectModbus"
-            title="Energize RS-485 bus and validate live SHT30 registers"
+            title="Simulation only: synthesize nominal sensor response"
+            hidden
           >
             <i data-lucide="plug-zap"></i>
-            <span>Energize Bus</span>
+            <span>Sim: Nominal Bus</span>
           </button>
           <button
             type="button"
             class="scada-action-btn scada-action-sky"
             id="btnBreathTest"
-            title="Trigger dynamic humidity and temperature breath spike test"
+            title="Simulation only: trigger synthetic humidity and temperature spike"
+            hidden
           >
             <i data-lucide="wind"></i>
-            <span>Simulate Breath Spike</span>
+            <span>Sim: Breath Spike</span>
           </button>
         </div>
       </div>
@@ -610,22 +643,34 @@
 
       <!-- Compact CAD & Offline Sign-Off Export Strip -->
       <footer class="export-strip">
+        <button type="button" class="export-chip-btn" id="btnCaptureManualPhoto" title="Capture manual inspection photo into active session">
+          <i data-lucide="camera"></i>
+          <span>Photo</span>
+        </button>
+        <button type="button" class="export-chip-btn" id="btnConfirmPhysicalChange" title="Explicitly confirm a physical intervention performed on bench">
+          <i data-lucide="check-square"></i>
+          <span id="confirmChangeLabel">Confirm Change (0)</span>
+        </button>
+        <button type="button" class="export-chip-btn" id="btnExportSessionDossier" title="Export authoritative Maintenance PDF + JSON Dossier">
+          <i data-lucide="file-text"></i>
+          <span>PDF + JSON</span>
+        </button>
         <button type="button" class="export-chip-btn" id="btnDownloadDxf" title="Download 1:1 AutoCAD .DXF drawing">
           <i data-lucide="download"></i>
-          <span>AutoCAD .DXF</span>
+          <span>.DXF</span>
         </button>
         <button type="button" class="export-chip-btn" id="btnDownloadStl" title="Download 1:1 Binary .STL 3D mesh">
           <i data-lucide="box"></i>
-          <span>3D Mesh .STL</span>
+          <span>.STL</span>
         </button>
         <button
           type="button"
           class="export-chip-btn export-chip-primary"
           id="btnOpenEscalateModal"
-          title="Generate 4-Angle 3D Manufacturer Sign-Off Dossier (.ZIP / .EML)"
+          title="Generate 4-Angle 3D Bench Dossier (.ZIP / .EML)"
         >
           <i data-lucide="mail"></i>
-          <span id="escQueueTag">Sign-Off .ZIP</span>
+          <span id="escQueueTag">Dossier .ZIP</span>
         </button>
       </footer>
     </aside>
@@ -712,9 +757,83 @@
             </div>
             <div class="esc-cad-summary" id="escCadSummary">
               <div><span>Verified Metrology:</span> <strong>140.0 mm × Ø16.0 mm (1:1)</strong></div>
-              <div><span>Inspection Verdict:</span> <strong id="escSummaryZone">SCADA ONLINE VERIFIED</strong></div>
+              <div><span>Inspection Verdict:</span> <strong id="escSummaryZone">SENSOR COMM OBSERVED (BENCH)</strong></div>
               <div><span>DIP-8 Configuration:</span> <strong id="escSummaryDip">Slave #01 (Pin 8 ON)</strong></div>
-              <div><span>Included Exports:</span> <strong>.DXF · .STL · .EML · .ZIP</strong></div>
+              <div><span>Included Exports:</span> <strong>.PDF · .JSON · .DXF · .STL · .ZIP</strong></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       MODAL 3: CALIBRATION & VERIFIED ADJUSTMENT · PLANNED (CAL-00)
+       ===================================================================== -->
+  <div class="modal-backdrop" id="calibrationPlannedModal" hidden>
+    <div
+      class="modal-dialog modal-planned-cal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Calibration and Verified Adjustment Planned Extension"
+    >
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="modal-kicker">METROLOGY EXTENSION ROADMAP · READ-ONLY PILOT</span>
+          <h2>Calibration &amp; Verified Adjustment · Planned</h2>
+        </div>
+        <button type="button" class="btn-close" id="calibrationPlannedCloseBtn" aria-label="Close modal">✕</button>
+      </div>
+
+      <div class="planned-cal-body">
+        <div class="planned-cal-banner">
+          <span class="planned-badge">PLANNED EXTENSION · ZERO WRITES IN PILOT</span>
+          <p id="plannedCalEventCopy">
+            FieldScan already guides inspection and reads our TZONE sensors over Modbus. Calibration and Verified Adjustment is a planned extension. It will compare a device against a reference and, on documented compatible models, apply and verify an adjustment.
+          </p>
+        </div>
+
+        <div class="planned-cal-scope-card">
+          <h3>Current Bench Hardware Scope (TZONE TZ THT-02 / THT-03R)</h3>
+          <p id="plannedCalScopeReason">
+            Published TZONE manuals document communication baud rate (0x0005) as the only writable parameter and publish no temperature or relative humidity offset registers. FieldScan keeps TZONE units strictly in read-only Function 0x03 mode.
+          </p>
+        </div>
+
+        <div class="planned-cal-stages">
+          <div class="planned-stage-row">
+            <code>C0 · Active</code>
+            <div>
+              <strong>Planned Extension Informational Card</strong>
+              <span>Separates live read-only Modbus diagnostics from future reference-standard adjustment workflows.</span>
+            </div>
+          </div>
+          <div class="planned-stage-row">
+            <code>C1 · Planned</code>
+            <div>
+              <strong>Read-Only Reference Standard Comparison</strong>
+              <span>Records reference instrument certificate, validity, uncertainty, equilibrium window, and single-point delta.</span>
+            </div>
+          </div>
+          <div class="planned-stage-row">
+            <code>C2 · Planned</code>
+            <div>
+              <strong>Single-Vendor Verified Bench Adjustment (Candidate: NOVUS RHT Climate RS-485)</strong>
+              <span>Preserves as-found state, requires human confirmation of bounded offset write, verifies readback and post-adjustment residual error.</span>
+            </div>
+          </div>
+          <div class="planned-stage-row">
+            <code>C3 · Planned</code>
+            <div>
+              <strong>Multi-Vendor Profile Adapter (Candidate: Vaisala HMP Series)</strong>
+              <span>Reuses the session contract with model-specific two-point adjustment sequences on an isolated metrology bench.</span>
+            </div>
+          </div>
+          <div class="planned-stage-row">
+            <code>C4 · Planned</code>
+            <div>
+              <strong>Laboratory Calibration Workflow Integration</strong>
+              <span>Exports comparison records governed by approved laboratory metrology procedures.</span>
             </div>
           </div>
         </div>

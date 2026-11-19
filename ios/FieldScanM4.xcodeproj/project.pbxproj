@@ -15,6 +15,9 @@
 		A100000626B1000100000001 /* NativeCameraBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000626B1000100000001 /* NativeCameraBridge.swift */; };
 		A100000726B1000100000001 /* FieldScanWebViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000726B1000100000001 /* FieldScanWebViewController.swift */; };
 		A100000926B1000100000001 /* StandaloneFieldScanServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000B26B1000100000001 /* StandaloneFieldScanServer.swift */; };
+		A100000A26B1000100000001 /* ModbusTCPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000C26B1000100000001 /* ModbusTCPClient.swift */; };
+		A100000B26B1000100000001 /* FieldScanSessionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000D26B1000100000001 /* FieldScanSessionEngine.swift */; };
+		A100001A26B1000100000001 /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A200001A26B1000100000001 /* libsqlite3.tbd */; };
 		A100000826B1000100000001 /* BundleResources in Resources */ = {isa = PBXBuildFile; fileRef = A200000826B1000100000001 /* BundleResources */; };
 		A100001026B1000100000001 /* libggml-base.0.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001026B1000100000001 /* libggml-base.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		A100001126B1000100000001 /* libggml-blas.0.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A200001126B1000100000001 /* libggml-blas.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
@@ -35,6 +38,16 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
+				A100001026B1000100000001 /* libggml-base.0.dylib in Embed Frameworks */,
+				A100001126B1000100000001 /* libggml-blas.0.dylib in Embed Frameworks */,
+				A100001226B1000100000001 /* libggml-cpu.0.dylib in Embed Frameworks */,
+				A100001326B1000100000001 /* libggml-metal.0.dylib in Embed Frameworks */,
+				A100001426B1000100000001 /* libggml-rpc.0.dylib in Embed Frameworks */,
+				A100001526B1000100000001 /* libggml.0.dylib in Embed Frameworks */,
+				A100001626B1000100000001 /* libllama.0.dylib in Embed Frameworks */,
+				A100001726B1000100000001 /* libmtmd.0.dylib in Embed Frameworks */,
+				A100001826B1000100000001 /* libllama-common.0.dylib in Embed Frameworks */,
+				A100001926B1000100000001 /* libllama-server-impl.dylib in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -51,6 +64,9 @@
 		A200000626B1000100000001 /* NativeCameraBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraBridge.swift; sourceTree = "<group>"; };
 		A200000726B1000100000001 /* FieldScanWebViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldScanWebViewController.swift; sourceTree = "<group>"; };
 		A200000B26B1000100000001 /* StandaloneFieldScanServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandaloneFieldScanServer.swift; sourceTree = "<group>"; };
+		A200000C26B1000100000001 /* ModbusTCPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModbusTCPClient.swift; sourceTree = "<group>"; };
+		A200000D26B1000100000001 /* FieldScanSessionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldScanSessionEngine.swift; sourceTree = "<group>"; };
+		A200001A26B1000100000001 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
 		A200000826B1000100000001 /* BundleResources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = BundleResources; sourceTree = "<group>"; };
 		A200000926B1000100000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A200000A26B1000100000001 /* FieldScanM4.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FieldScanM4.entitlements; sourceTree = "<group>"; };
@@ -71,6 +87,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A100001A26B1000100000001 /* libsqlite3.tbd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -98,6 +115,9 @@
 				A200000626B1000100000001 /* NativeCameraBridge.swift */,
 				A200000726B1000100000001 /* FieldScanWebViewController.swift */,
 				A200000B26B1000100000001 /* StandaloneFieldScanServer.swift */,
+				A200000C26B1000100000001 /* ModbusTCPClient.swift */,
+				A200000D26B1000100000001 /* FieldScanSessionEngine.swift */,
+				A200001A26B1000100000001 /* libsqlite3.tbd */,
 				A200000826B1000100000001 /* BundleResources */,
 				A200001026B1000100000001 /* libggml-base.0.dylib */,
 				A200001126B1000100000001 /* libggml-blas.0.dylib */,
@@ -199,6 +219,8 @@
 				A100000626B1000100000001 /* NativeCameraBridge.swift in Sources */,
 				A100000726B1000100000001 /* FieldScanWebViewController.swift in Sources */,
 				A100000926B1000100000001 /* StandaloneFieldScanServer.swift in Sources */,
+				A100000A26B1000100000001 /* ModbusTCPClient.swift in Sources */,
+				A100000B26B1000100000001 /* FieldScanSessionEngine.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

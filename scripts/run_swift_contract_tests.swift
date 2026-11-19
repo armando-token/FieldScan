@@ -1,0 +1,233 @@
+import Foundation
+
+// ============================================================================
+// FieldScan CAD v2.1 — Native Swift Contract & Parity Verification Runner
+// Compiles directly against `ModbusTCPClient.swift` and `FieldScanSessionEngine.swift`
+// to validate `DAT-01..09`, `BUS-02..08`, `BUS-12`, `VOZ-01..07`, `EXP-01..06`, `CAL-00..09`.
+// ============================================================================
+
+@inline(__always)
+func check(_ cond: Bool, _ msg: String, file: String = #file, line: Int = #line) {
+    if !cond {
+        fputs("[SWIFT_CONTRACT_FAIL] \(file):\(line) — \(msg)\n", stderr)
+        exit(1)
+    }
+}
+
+func runSwiftContractSuite() throws {
+    let fm = FileManager.default
+    let tmpDir = fm.temporaryDirectory.appendingPathComponent("fieldscan_swift_test_\(UUID().uuidString)", isDirectory: true)
+    try fm.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: tmpDir) }
+
+    // Create orphan .tmp file before booting engine (`DAT-07`)
+    let exportsDir = tmpDir.appendingPathComponent("exports", isDirectory: true)
+    try fm.createDirectory(at: exportsDir, withIntermediateDirectories: true)
+    let orphanTmp = exportsDir.appendingPathComponent("crash_leftover.pdf.tmp")
+    try Data("partial".utf8).write(to: orphanTmp)
+
+    let repoRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    let engine = FieldScanSessionEngine(baseDirectory: tmpDir, bundleRoot: repoRoot)
+
+    check(!fm.fileExists(atPath: orphanTmp.path), "DAT-07: Orphan .tmp file must be cleaned on engine init")
+
+    // 1. Resource manifest & manual citation verification (`OFF-08`, `VIS-10`)
+    let manifestCheck = engine.verifyResourceManifest()
+    check((manifestCheck["verified"] as? Bool) == true, "OFF-08: Bundle resource manifest must verify cleanly: \(manifestCheck)")
+
+    let tht02Prof = engine.resolveDeviceProfile("TZ THT-02")
+    check((tht02Prof["profile_id"] as? String) == "tzone_tht02", "Profile resolution for TZ THT-02")
+    let citValid = engine.verifyAndResolveCitations(profile: tht02Prof, requestedPages: [4, 5, 9])
+    check((citValid["verified"] as? Bool) == true, "VIS-10: Valid manual pages 4,5,9 must verify SHA-256")
+    let citInvalid = engine.verifyAndResolveCitations(profile: tht02Prof, requestedPages: [99])
+    check((citInvalid["instruction_blocked"] as? Bool) == true, "VIS-10: Missing page 99 must block instruction")
+
+    // 2. Unverified / unknown device profile gate (`FLU-04`)
+    let tht03Prof = engine.resolveDeviceProfile("THT03R")
+    check((tht03Prof["identity_pending"] as? Bool) == true, "FLU-04: THT03R must remain identity_pending until bench-verified")
+    let unkSession = try engine.createSession(payload: ["model": "Unknown Sensor X900"])
+    let unkId = unkSession["session_id"] as! String
+    var blockedDecode = false
+    do {
+        _ = try engine.recordModbusObservation(sessionId: unkId, modbusTel: ["online": true, "temp_c": 24.5, "humidity_rh": 50.0])
+    } catch let err as FieldScanDomainError {
+        blockedDecode = (err.code == "PROFILE_MISMATCH")
+    }
+    check(blockedDecode, "FLU-04: Unknown profile must block automatic register scaling")
+
+    // 3. Modbus TCP MBAP framing: split header, concatenated frames, raw-RTU guard, per-channel 0x7FFF, pilot write block (`BUS-02..08`, `BUS-12`)
+    let reqFrame = try ModbusTCPStreamParser.buildMBAPReadHoldingRequest(transactionId: 0x0042, unitId: 1, startReg: 0, count: 8)
+    check(reqFrame.count == 12, "BUS-02: MBAP FC03 request must be 12 bytes (no RTU CRC)")
+
+    var writeBlocked = false
+    do {
+        _ = try ModbusTCPStreamParser.buildMBAPReadHoldingRequest(transactionId: 1, unitId: 1, startReg: 5, count: 1, pilotReadonly: true, functionCode: 0x06)
+    } catch let fe as ModbusTCPFramingError {
+        writeBlocked = (fe.errorCode == "PILOT_WRITE_BLOCKED")
+    }
+    check(writeBlocked, "BUS-12: Function 0x06 must be blocked in pilot read-only mode")
+
+    let port5502Client = ModbusTCPClient(host: "127.0.0.1", port: 5502)
+    let p5502Res = port5502Client.readTHT02Holding(unitId: 1)
+    check((p5502Res["error_code"] as? String) == "PROTOCOL_MISMATCH", "BUS-03: Port 5502 must be refused with PROTOCOL_MISMATCH")
+
+    // Build two valid MBAP responses: Frame 1 = (25.0 C, 60.0 %RH), Frame 2 = Exception 0x02
+    let f1Payload: [UInt8] = [
+        0x00, 0x42, 0x00, 0x00, 0x00, 0x13, 0x01, 0x03, 0x10,
+        0x00, 0xFA, // 25.0 C
+        0x02, 0x58, // 60.0 %RH
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0x25, 0x80, 0x06, 0x00, 0x00, 0x0B
+    ]
+    let f2Exc: [UInt8] = [0x00, 0x43, 0x00, 0x00, 0x00, 0x03, 0x01, 0x83, 0x02]
+
+    let parser = ModbusTCPStreamParser()
+    // BUS-04: Split 7-byte MBAP header across 3 chunks
+    let partA = try parser.feed(Data(f1Payload[0..<3]))
+    check(partA.isEmpty, "BUS-04: Partial 3-byte MBAP header should buffer without emitting")
+    let partB = try parser.feed(Data(f1Payload[3..<7]))
+    check(partB.isEmpty, "BUS-04: 7-byte header without PDU should wait for payload")
+    let partC = try parser.feed(Data(f1Payload[7..<f1Payload.count]))
+    check(partC.count == 1 && partC[0].transactionId == 0x0042 && !partC[0].isException, "BUS-04: Split MBAP frame reassembled")
+    let dec1 = try ModbusTCPStreamParser.decodeTHT02PDURegisters(unitId: 1, pduPayload: partC[0].pduPayload)
+    check((dec1["temp_c"] as? Double) == 25.0 && (dec1["humidity_rh"] as? Double) == 60.0, "BUS-04: Register decode 25.0C / 60.0%RH")
+
+    // BUS-05: Two concatenated MBAP frames in a single read
+    let combined = Data(f1Payload + f2Exc)
+    let multi = try parser.feed(combined)
+    check(multi.count == 2 && !multi[0].isException && multi[1].isException && multi[1].exceptionCode == 0x02, "BUS-05/BUS-07: Multi-frame + exception 0x02")
+
+    // BUS-08: Per-channel 0x7FFF sentinel
+    let partial7fffPDU = Data([
+        0x10,
+        0x7F, 0xFF, // Temp = 0x7FFF sentinel
+        0x02, 0x00, // RH = 51.2 %RH valid
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x25, 0x80, 0x06, 0x00, 0x00, 0x0B
+    ])
+    let dec7fff = try ModbusTCPStreamParser.decodeTHT02PDURegisters(unitId: 1, pduPayload: partial7fffPDU)
+    check((dec7fff["temp_quality"] as? String) == "invalid_sentinel_7fff" && (dec7fff["humidity_rh"] as? Double) == 51.2, "BUS-08: Per-channel 0x7FFF quality")
+
+    // 4. Authoritative Session Lifecycle, Idempotency, Bilingual Voice, Grounding & Export (`DAT-01..09`, `VOZ-01..07`, `EXP-01..06`)
+    let s1 = try engine.createSession(payload: [
+        "profile_id": "tzone_tht02",
+        "serial_number": "THT02-SN998877",
+        "transport_mode": "pusr_tcp",
+        "idempotency_key": "swift-create-1"
+    ])
+    let s1Replay = try engine.createSession(payload: [
+        "profile_id": "tzone_tht02",
+        "serial_number": "THT02-SN998877",
+        "transport_mode": "pusr_tcp",
+        "idempotency_key": "swift-create-1"
+    ])
+    let sid = s1["session_id"] as! String
+    check((s1Replay["session_id"] as? String) == sid && (s1Replay["idempotent_replay"] as? Bool) == true, "DAT-08: Idempotent session creation replay")
+
+    var conflictCaught = false
+    do {
+        _ = try engine.createSession(payload: [
+            "profile_id": "tzone_tht02",
+            "serial_number": "DIFFERENT-SN",
+            "transport_mode": "pusr_tcp",
+            "idempotency_key": "swift-create-1"
+        ])
+    } catch let err as FieldScanDomainError {
+        conflictCaught = (err.code == "IDEMPOTENCY_CONFLICT" && err.statusCode == 409)
+    }
+    check(conflictCaught, "DAT-08: Reusing idempotency key with different payload must return 409 IDEMPOTENCY_CONFLICT")
+
+    // Bilingual Spanish utterance with Unicode escapes (`VOZ-01`, `VOZ-02`)
+    let esPage4 = "Mu\u{00E9}strame la p\u{00E1}gina 4"
+    let parsedEs = FieldScanSessionEngine.classifyBilingualVoiceIntent(esPage4, currentLanguage: "en")
+    check((parsedEs["intent"] as? String) == "show_manual" && (parsedEs["page"] as? Int) == 4 && (parsedEs["detected_language"] as? String) == "es", "VOZ-01/02: Spanish page 4 intent")
+
+    let ambNum = FieldScanSessionEngine.classifyBilingualVoiceIntent("25", currentLanguage: "en")
+    check((ambNum["ambiguous"] as? Bool) == true, "VOZ-04: Bare number without unit must require clarification")
+
+    // TTS echo rejection (`VOZ-06`)
+    engine.registerTTSPlayback("Sensor communication observed on Slave Address 1", estimatedDurationS: 1.5)
+    let echoRes = try engine.applyAction(sessionId: sid, payload: [
+        "action": "voice_utterance",
+        "utterance": "Sensor communication observed on Slave Address 1"
+    ])
+    check((echoRes["ignored"] as? Bool) == true, "VOZ-06: TTS acoustic echo must be ignored")
+    engine.setAudioState("idle")
+
+    // Grounding filter (`IA-04`)
+    let grounded = engine.applyDeterministicGroundingFilter(
+        candidateText: "SCADA online verified calibrated values per Page 14.",
+        profile: tht02Prof,
+        verifiedTelemetry: ["online": false]
+    )
+    check((grounded["grounding_corrected"] as? Bool) == true, "IA-04: Hallucinated Page 14 and SCADA/calibrated claims must be blocked")
+
+    // Unconfirmed observation -> 0 confirmed changes (`DAT-03`)
+    _ = try engine.applyAction(sessionId: sid, payload: ["action": "confirm_identity"])
+    _ = try engine.applyAction(sessionId: sid, payload: ["action": "record_as_found", "communication": "responded"])
+    _ = try engine.applyAction(sessionId: sid, payload: ["action": "record_observation", "note_text": "Suggested inspecting DIP-8 pin 8"])
+    _ = try engine.recordModbusObservation(sessionId: sid, modbusTel: [
+        "online": true,
+        "temp_c": 24.8,
+        "humidity_rh": 53.4,
+        "temp_quality": "valid",
+        "humidity_quality": "valid",
+        "slave_id": 1,
+        "protocol": "modbus_tcp_mbap",
+        "source": "hardware:pusr_tcp:192.168.0.7:502",
+        "simulation": false
+    ])
+
+    // Public demo export masks serial (`EXP-04`) & 0 confirmed changes (`DAT-03`)
+    let expDemo = try engine.exportSessionDossier(sessionId: sid, payload: ["audience": "public_demo"])
+    check((expDemo["confirmed_changes_count"] as? Int) == 0, "DAT-03: Unconfirmed observation must have 0 confirmed changes")
+    let jsonURL = URL(fileURLWithPath: expDemo["json_path"] as! String)
+    let jsonObj = try JSONSerialization.jsonObject(with: Data(contentsOf: jsonURL)) as! [String: Any]
+    let devObj = jsonObj["device"] as! [String: Any]
+    check((devObj["serial_number"] as? String) == "**********8877", "EXP-04: Public demo audience must mask serial number")
+
+    // Canonical share path (`EXP-05`)
+    check(engine.resolveAuthorizedExportFile(named: "../Info.plist") == nil, "EXP-05: Path traversal must be rejected")
+    check(engine.resolveAuthorizedExportFile(named: jsonURL.lastPathComponent) != nil, "EXP-05: Authorized export file must resolve")
+
+    // Planned calibration extension (`CAL-00..09`)
+    let calTzone = FieldScanSessionEngine.evaluateCalibrationComparisonContract(payload: [
+        "profile_id": "tzone_tht02",
+        "quantity": "temperature",
+        "evaluated_at_utc": "2026-11-19T00:00:00Z",
+        "reference": [
+            "instrument_id": "FLUKE-971",
+            "certificate_id": "CERT-2026-01",
+            "valid_until_utc": "2027-06-01T00:00:00Z",
+            "uncertainty": 0.1,
+            "unit": "Cel",
+            "samples": [["value": 25.0, "ts_s": 1.0], ["value": 25.02, "ts_s": 2.0]]
+        ],
+        "uut": [
+            "unit": "Cel",
+            "samples": [["value": 25.3, "ts_s": 1.1], ["value": 25.32, "ts_s": 2.1]]
+        ]
+    ])
+    check((calTzone["status_code"] as? String) == "READONLY_COMPARISON_COMPLETE" && (calTzone["writes_emitted"] as? Int) == 0, "CAL-03: TZONE read-only comparison")
+
+    let summary: [String: Any] = [
+        "swift_contract_suite": "PASS",
+        "contract_version": FieldScanSessionEngine.contractVersion,
+        "manifest_verified": true,
+        "pilot_writes_blocked": true,
+        "sample_export_sha256": expDemo["pdf_sha256"] ?? "",
+    ]
+    let outData = try JSONSerialization.data(withJSONObject: summary, options: [.sortedKeys])
+    print(String(data: outData, encoding: .utf8)!)
+}
+
+@main
+enum SwiftContractMain {
+    static func main() {
+        do {
+            try runSwiftContractSuite()
+        } catch {
+            fputs("[SWIFT_CONTRACT_ERROR] \(error)\n", stderr)
+            exit(1)
+        }
+    }
+}

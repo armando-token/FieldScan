@@ -16,6 +16,7 @@ Supports:
 from __future__ import annotations
 
 from collections import deque
+from datetime import datetime, timezone
 import glob
 import math
 import os
@@ -32,10 +33,12 @@ from serial.tools import list_ports
 DIP_WEIGHTS: tuple[int, ...] = (128, 64, 32, 16, 8, 4, 2, 1)
 SUPPORTED_BAUDS: tuple[int, ...] = (9600, 4800, 19200)
 ABNORMAL_SENTINEL = 0x7FFF
+DEFAULT_MAX_SAMPLE_AGE_S = 3.0
 
 MODBUS_MODES: tuple[str, ...] = (
     "auto",
     "hardware",
+    "pusr_tcp",
     "sim_disconnected",
     "sim_abnormal_7fff",
     "sim_online",
@@ -173,11 +176,18 @@ def decode_tht02_holding_response(frame: bytes) -> dict[str, Any]:
     # Signed two's complement decoding for sub-zero temperatures (-40.0..+125.0 C)
     if temp_abnormal:
         temp_c = None
+        temp_quality = "invalid_sentinel_7fff"
     else:
         signed_temp = raw_temp - 0x10000 if (raw_temp & 0x8000) else raw_temp
         temp_c = round(signed_temp / 10.0, 1)
+        temp_quality = "valid"
 
-    humidity_rh = None if hum_abnormal else round(raw_hum / 10.0, 1)
+    if hum_abnormal:
+        humidity_rh = None
+        humidity_quality = "invalid_sentinel_7fff"
+    else:
+        humidity_rh = round(raw_hum / 10.0, 1)
+        humidity_quality = "valid"
 
     reported_addr = int(regs_u16[4]) if reg_count > 4 else int(slave_id)
     raw_baud = int(regs_u16[5]) if reg_count > 5 else 0x2580
@@ -193,9 +203,13 @@ def decode_tht02_holding_response(frame: bytes) -> dict[str, Any]:
         "dip_bits": address_to_dip_bits(reported_addr),
         "temp_c": temp_c,
         "humidity_rh": humidity_rh,
+        "temp_quality": temp_quality,
+        "humidity_quality": humidity_quality,
         "raw_temp_hex": f"0x{raw_temp:04X}",
         "raw_humidity_hex": f"0x{raw_hum:04X}",
         "sensor_abnormal_7fff": sensor_abnormal,
+        "temp_abnormal_7fff": temp_abnormal,
+        "humidity_abnormal_7fff": hum_abnormal,
         "baud_bps": baud_bps,
         "hw_version": f"0x{hw_ver_raw:04X}",
         "sw_version": f"V{sw_ver_raw / 10.0:.1f}",
@@ -210,15 +224,18 @@ def build_simulated_tht02_response(
     humidity_rh: float | None = 48.6,
     baud_bps: int = 9600,
     abnormal_7fff: bool = False,
+    *,
+    temp_7fff: bool = False,
+    humidity_7fff: bool = False,
 ) -> bytes:
     """Synthesize a byte-exact 21-byte TZ THT-02 Function 0x03 response frame with valid CRC-16."""
-    if abnormal_7fff or temp_c is None:
+    if abnormal_7fff or temp_7fff or temp_c is None:
         raw_t = ABNORMAL_SENTINEL
     else:
         t_int = int(round(temp_c * 10.0))
         raw_t = (t_int + 0x10000) & 0xFFFF if t_int < 0 else (t_int & 0xFFFF)
 
-    if abnormal_7fff or humidity_rh is None:
+    if abnormal_7fff or humidity_7fff or humidity_rh is None:
         raw_h = ABNORMAL_SENTINEL
     else:
         raw_h = max(0, min(1000, int(round(humidity_rh * 10.0))))
@@ -457,6 +474,14 @@ class ModbusRTUScanner:
         self._poll_seq: int = 0
         self._hw_miss_streak: int = 0
         self._last_hw_success: dict[str, Any] | None = None
+        self._last_valid_historical: dict[str, Any] | None = None
+        self._last_valid_monotonic: float = -999.0
+        self._connection_generation: int = 1
+        self.max_sample_age_s: float = DEFAULT_MAX_SAMPLE_AGE_S
+        self._pusr_host: str = os.environ.get("FIELDSCAN_PUSR_HOST", "").strip()
+        self._pusr_port: int = int(os.environ.get("FIELDSCAN_PUSR_PORT", "502") or 502)
+        self._pusr_client: Any = None
+        self.tx_audit_log: deque[dict[str, Any]] = deque(maxlen=256)
         self._breath_started_at: float = 0.0
         self._history: deque[dict[str, Any]] = deque(maxlen=36)
         self._latest_telemetry: dict[str, Any] = {}
@@ -464,6 +489,35 @@ class ModbusRTUScanner:
         self.step_once()
         if auto_start:
             self.start()
+
+    def set_pusr_gateway(self, host: str, port: int = 502) -> dict[str, Any]:
+        """Configure isolated bench PUSR USR-DR164 Modbus TCP gateway (`MBAP`), cancelling prior connections."""
+        from fieldscan.offline_guard import set_authorized_bench_gateway
+
+        clean_host = (host or "").strip()
+        clean_port = int(port)
+        with self._lock:
+            if self._pusr_client is not None:
+                try:
+                    self._pusr_client.close()
+                except Exception:
+                    pass
+                self._pusr_client = None
+            self._pusr_host = clean_host
+            self._pusr_port = clean_port
+            self._connection_generation += 1
+            self._last_hw_success = None
+            self._last_valid_monotonic = -999.0
+            set_authorized_bench_gateway(clean_host or None)
+        return self.get_gateway_config()
+
+    def get_gateway_config(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "pusr_host": self._pusr_host,
+                "pusr_port": self._pusr_port,
+                "connection_generation": self._connection_generation,
+            }
 
     def start(self) -> None:
         with self._lock:
@@ -480,6 +534,12 @@ class ModbusRTUScanner:
             self._running = False
             thread = self._thread
             self._thread = None
+            if self._pusr_client is not None:
+                try:
+                    self._pusr_client.close()
+                except Exception:
+                    pass
+                self._pusr_client = None
         if thread is not None and thread.is_alive():
             thread.join(timeout=1.5)
 
@@ -493,6 +553,15 @@ class ModbusRTUScanner:
         if clean not in MODBUS_MODES:
             raise ValueError(f"Unsupported Modbus mode '{mode}'. Valid: {MODBUS_MODES}")
         with self._lock:
+            if clean != self._mode:
+                self._connection_generation += 1
+                self._last_valid_monotonic = -999.0
+                if self._pusr_client is not None and clean != "pusr_tcp":
+                    try:
+                        self._pusr_client.close()
+                    except Exception:
+                        pass
+                    self._pusr_client = None
             self._mode = clean
             self._hw_miss_streak = 0
             if clean not in ("auto", "hardware"):
@@ -537,6 +606,15 @@ class ModbusRTUScanner:
         """Send Function 0x03 Read Holding Registers over real RS-485 serial port or USB-C TCP bridge."""
         tx = build_read_registers_request(slave_id=slave_id, start_reg=0x0000, count=8)
         tx_hex = format_hex(tx)
+        self.tx_audit_log.append(
+            {
+                "ts_monotonic": round(time.monotonic(), 4),
+                "unit_id": slave_id,
+                "function_code": 0x03,
+                "tx_hex": tx_hex,
+                "endpoint": port_name,
+            }
+        )
         t0 = time.perf_counter()
         try:
             if port_name.lower().startswith(("tcp://", "socket://")):
@@ -644,6 +722,95 @@ class ModbusRTUScanner:
             active_sid = self._active_slave_id
             active_baud = self._active_baud
             breath_t0 = self._breath_started_at
+            pusr_host = self._pusr_host
+            pusr_port = self._pusr_port
+
+        # 0. PUSR USR-DR164 Modbus TCP (MBAP -> RTU Gateway) autonomous bench path (`BUS-02..10`)
+        if mode == "pusr_tcp":
+            if not pusr_host:
+                return self._record_telemetry(
+                    online=False,
+                    source="physical_tcp_gateway:unconfigured",
+                    port=None,
+                    adapter_present=False,
+                    mode=mode,
+                    baud_bps=active_baud,
+                    decoded=None,
+                    tx_hex="",
+                    rx_hex="",
+                    roundtrip_ms=0.0,
+                    status_label="PUSR GATEWAY NOT CONFIGURED",
+                    protocol="modbus_tcp_mbap",
+                    error_code="SOURCE_UNAVAILABLE",
+                    crc_checked_by_client=False,
+                    mbap_valid=False,
+                )
+            from fieldscan.modbus_tcp import ModbusTCPClient
+            from fieldscan.offline_guard import set_authorized_bench_gateway
+
+            set_authorized_bench_gateway(pusr_host)
+            with self._lock:
+                if (
+                    self._pusr_client is None
+                    or self._pusr_client.host != pusr_host
+                    or int(self._pusr_client.port) != int(pusr_port)
+                ):
+                    if self._pusr_client is not None:
+                        try:
+                            self._pusr_client.close()
+                        except Exception:
+                            pass
+                    self._pusr_client = ModbusTCPClient(host=pusr_host, port=pusr_port, timeout_s=1.0, pilot_readonly=True)
+                client = self._pusr_client
+
+            res = client.read_tht02_holding(unit_id=target_sid, start_reg=0x0000, count=8)
+            for item in list(client.tx_audit_log)[-1:]:
+                if not self.tx_audit_log or self.tx_audit_log[-1] != item:
+                    self.tx_audit_log.append(item)
+
+            gw_uri = f"modbus-tcp://{pusr_host}:{pusr_port}"
+            if res.get("ok"):
+                dec = res["decoded"]
+                return self._record_telemetry(
+                    online=True,
+                    source="physical_tcp_gateway",
+                    port=gw_uri,
+                    adapter_present=True,
+                    mode=mode,
+                    baud_bps=dec.get("baud_bps", active_baud),
+                    decoded=dec,
+                    tx_hex=res.get("tx_hex", ""),
+                    rx_hex=res.get("rx_hex", ""),
+                    roundtrip_ms=float(res.get("roundtrip_ms", 0.0)),
+                    status_label="SENSOR RESPONDED · 0x7FFF PROBE FAULT"
+                    if dec.get("sensor_abnormal_7fff")
+                    else "SENSOR RESPONDED · COMM OK (MODBUS TCP)",
+                    protocol="modbus_tcp_mbap",
+                    transaction_id=res.get("transaction_id"),
+                    crc_checked_by_client=False,
+                    mbap_valid=True,
+                )
+            err_code = str(res.get("error_code") or "READ_TIMEOUT")
+            err_detail = str(res.get("error_detail") or err_code)
+            return self._record_telemetry(
+                online=False,
+                source="physical_tcp_gateway",
+                port=gw_uri,
+                adapter_present=False,
+                mode=mode,
+                baud_bps=active_baud,
+                decoded=None,
+                tx_hex=res.get("tx_hex", ""),
+                rx_hex=res.get("rx_hex", ""),
+                roundtrip_ms=float(res.get("roundtrip_ms", 0.0)),
+                status_label=f"PUSR {err_code} · {err_detail[:42]}",
+                protocol="modbus_tcp_mbap",
+                transaction_id=res.get("transaction_id"),
+                error_code=err_code,
+                error_detail=err_detail,
+                crc_checked_by_client=False,
+                mbap_valid=bool(res.get("mbap_valid", False)),
+            )
 
         ports = discover_serial_ports()
         hw_present = len(ports) > 0
@@ -662,6 +829,7 @@ class ModbusRTUScanner:
 
             # Fast locked-link probe with 220ms turnaround budget + 1 immediate retry
             if active_port and active_port in avail_devs:
+                proto_name = "rtu_over_tcp_bridge" if str(active_port).startswith(("tcp://", "socket://")) else "modbus_rtu_serial"
                 for attempt in range(2):
                     decoded, tx_hex, rx_hex, rtt_ms = self._probe_single_serial(
                         active_port, slave_id=active_sid, baud_bps=active_baud, timeout_s=0.22
@@ -688,14 +856,17 @@ class ModbusRTUScanner:
                             tx_hex=tx_hex,
                             rx_hex=rx_hex,
                             roundtrip_ms=rtt_ms,
-                            status_label="SCADA ONLINE (7FFFH FAULT)"
+                            status_label="SENSOR RESPONDED · 0x7FFF PROBE FAULT"
                             if decoded["sensor_abnormal_7fff"]
-                            else "SCADA ONLINE · VERIFIED",
+                            else "SENSOR RESPONDED · COMM OK",
+                            protocol=proto_name,
+                            crc_checked_by_client=True,
                         )
                     if attempt == 0:
                         time.sleep(0.015)
 
             for dev in port_list:
+                proto_name = "rtu_over_tcp_bridge" if str(dev).startswith(("tcp://", "socket://")) else "modbus_rtu_serial"
                 for sid in slave_candidates:
                     if dev == active_port and sid == active_sid:
                         continue
@@ -726,15 +897,24 @@ class ModbusRTUScanner:
                             tx_hex=tx_hex,
                             rx_hex=rx_hex,
                             roundtrip_ms=rtt_ms,
-                            status_label="SCADA ONLINE (7FFFH FAULT)"
+                            status_label="SENSOR RESPONDED · 0x7FFF PROBE FAULT"
                             if decoded["sensor_abnormal_7fff"]
-                            else "SCADA ONLINE · VERIFIED",
+                            else "SENSOR RESPONDED · COMM OK",
+                            protocol=proto_name,
+                            crc_checked_by_client=True,
                         )
 
-            # Debounce isolated single-frame RS-485 collisions so UI/TTS never flicker
+            # Debounce isolated single-frame RS-485 collisions (within freshness budget)
             with self._lock:
                 prev_ok = self._last_hw_success
-                if prev_ok is not None and hw_present and prev_ok["port"] in avail_devs and self._hw_miss_streak < 3:
+                age_since_ok = time.monotonic() - self._last_valid_monotonic
+                if (
+                    prev_ok is not None
+                    and hw_present
+                    and prev_ok["port"] in avail_devs
+                    and self._hw_miss_streak < 2
+                    and age_since_ok <= self.max_sample_age_s
+                ):
                     self._hw_miss_streak += 1
                     hold_ok = dict(prev_ok)
                 else:
@@ -744,6 +924,7 @@ class ModbusRTUScanner:
 
             if hold_ok is not None:
                 dec_hold = hold_ok["decoded"]
+                proto_hold = "rtu_over_tcp_bridge" if str(hold_ok["port"]).startswith(("tcp://", "socket://")) else "modbus_rtu_serial"
                 return self._record_telemetry(
                     online=True,
                     source=f"hardware:{hold_ok['port']}",
@@ -755,9 +936,12 @@ class ModbusRTUScanner:
                     tx_hex=hold_ok["tx_hex"],
                     rx_hex=hold_ok["rx_hex"],
                     roundtrip_ms=hold_ok["rtt_ms"],
-                    status_label="SCADA ONLINE (7FFFH FAULT)"
+                    status_label="SENSOR RESPONDED · 0x7FFF PROBE FAULT"
                     if dec_hold["sensor_abnormal_7fff"]
-                    else "SCADA ONLINE · VERIFIED",
+                    else "SENSOR RESPONDED · COMM OK",
+                    protocol=proto_hold,
+                    crc_checked_by_client=True,
+                    preserve_original_timestamp=True,
                 )
 
             # Hardware adapter present (or requested), but sensor unpowered / wrong DIP / disconnected
@@ -774,12 +958,15 @@ class ModbusRTUScanner:
                 tx_hex=format_hex(tx_probe),
                 rx_hex="",
                 roundtrip_ms=160.0 if hw_present else 0.0,
-                status_label="BUS TIMEOUT · NO RS-485 SIGNAL"
-                if hw_present
-                else "USB-RS485 ADAPTER DISCONNECTED",
+                status_label="BUS TIMEOUT · HISTORICAL DATA ONLY"
+                if (hw_present and self._last_valid_historical)
+                else ("BUS TIMEOUT · NO RS-485 SIGNAL" if hw_present else "USB-RS485 ADAPTER DISCONNECTED"),
+                protocol="modbus_rtu_serial",
+                error_code="READ_TIMEOUT" if hw_present else "SOURCE_UNAVAILABLE",
+                crc_checked_by_client=False,
             )
 
-        # 2. Deterministic Workbench Bus Simulation modes (for VM & rehearsal)
+        # 2. Deterministic Workbench Bus Simulation modes (explicitly labeled as simulation)
         now = time.perf_counter()
         tx = build_read_registers_request(slave_id=target_sid, start_reg=0x0000, count=8)
         tx_hex = format_hex(tx)
@@ -797,6 +984,9 @@ class ModbusRTUScanner:
                 rx_hex="",
                 roundtrip_ms=52.0,
                 status_label="NO MODBUS SIGNAL (TIMEOUT)",
+                protocol="simulation" if mode == "sim_disconnected" else "standby_no_adapter",
+                error_code="READ_TIMEOUT" if mode == "sim_disconnected" else "SOURCE_UNAVAILABLE",
+                crc_checked_by_client=False,
             )
 
         if mode == "sim_abnormal_7fff":
@@ -817,17 +1007,17 @@ class ModbusRTUScanner:
                 tx_hex=tx_hex,
                 rx_hex=format_hex(rx),
                 roundtrip_ms=11.4,
-                status_label="ALARM 7FFFH · SHT30 PROBE ABNORMAL",
+                status_label="SIMULATION · 0x7FFF PROBE ALARM",
+                protocol="simulation",
+                crc_checked_by_client=True,
             )
 
         if mode == "sim_breath_test":
             elapsed = max(0.0, now - breath_t0)
-            # Smoothly ramp from 24.4 C / 48.6 %RH up to 27.6 C / 83.4 %RH over 4 seconds, then decay slowly
             envelope = math.sin(min(math.pi * 0.85, elapsed * 0.45)) if elapsed < 6.0 else max(0.15, math.exp(-(elapsed - 6.0) / 8.0))
             sim_temp = round(24.4 + 3.2 * max(0.0, envelope), 1)
             sim_hum = round(48.6 + 34.8 * max(0.0, envelope), 1)
         else:
-            # sim_online: realistic subtle laboratory ambient readings
             sim_temp = round(24.3 + 0.15 * math.sin(now * 0.7), 1)
             sim_hum = round(48.8 + 0.45 * math.cos(now * 0.55), 1)
 
@@ -850,11 +1040,13 @@ class ModbusRTUScanner:
             tx_hex=tx_hex,
             rx_hex=format_hex(rx),
             roundtrip_ms=11.8,
-            status_label="SCADA ONLINE · SIGNAL VERIFIED",
+            status_label="SIMULATION · SYNTHETIC RESPONSE",
+            protocol="simulation",
+            crc_checked_by_client=True,
         )
 
     def drive_andon_relay(self, tier_color: str, relay_slave_id: int = 2) -> dict[str, Any]:
-        """Build (and optionally transmit over RS-485) Function 0x05 coil frames for a 3-tier Andon stacklight."""
+        """Preview Function 0x05 coil frames while keeping hardware Andon writes strictly disabled in pilot (`BUS-12`)."""
         clean_tier = (tier_color or "RED").strip().upper()
         coil_states = {
             0: clean_tier == "RED",
@@ -862,54 +1054,17 @@ class ModbusRTUScanner:
             2: clean_tier == "GREEN",
         }
         frames_hex: list[str] = []
-        raw_frames: list[bytes] = []
         for c_addr, on_flag in coil_states.items():
             frm = build_write_single_coil_request(slave_id=relay_slave_id, coil_addr=c_addr, turn_on=on_flag)
-            raw_frames.append(frm)
             frames_hex.append(format_hex(frm))
 
-        transmitted = False
-        with self._lock:
-            port_name = self._active_port
-            baud = self._active_baud
-
-        if port_name and not port_name.startswith("sim://") and os.environ.get("FIELDSCAN_ANDON_RELAY_SLAVE"):
-            try:
-                if port_name.lower().startswith(("tcp://", "socket://")):
-                    host, port = _parse_tcp_bridge_endpoint(port_name)
-                    for frm in raw_frames:
-                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                            sock.settimeout(0.15)
-                            sock.connect((host, port))
-                            sock.sendall(frm)
-                            try:
-                                sock.recv(8)
-                            except socket.timeout:
-                                pass
-                    transmitted = True
-                else:
-                    with serial.Serial(
-                        port=port_name,
-                        baudrate=baud,
-                        bytesize=serial.EIGHTBITS,
-                        parity=serial.PARITY_NONE,
-                        stopbits=serial.STOPBITS_ONE,
-                        timeout=0.05,
-                        write_timeout=0.05,
-                    ) as ser:
-                        for frm in raw_frames:
-                            ser.write(frm)
-                            ser.flush()
-                            ser.read(8)
-                        transmitted = True
-            except Exception:
-                transmitted = False
-
+        # Phase 1.4 & BUS-12 safety gate: physical Andon coil transmission is disabled in pilot builds.
         return {
             "andon_light": clean_tier,
             "relay_slave_id": relay_slave_id,
             "coil_frames_hex": frames_hex,
-            "transmitted_hardware": transmitted,
+            "transmitted_hardware": False,
+            "pilot_disabled": True,
         }
 
     def _record_telemetry(
@@ -926,20 +1081,57 @@ class ModbusRTUScanner:
         rx_hex: str,
         roundtrip_ms: float,
         status_label: str,
+        protocol: str = "modbus_rtu_serial",
+        transaction_id: int | None = None,
+        error_code: str | None = None,
+        error_detail: str | None = None,
+        crc_checked_by_client: bool = False,
+        mbap_valid: bool | None = None,
+        preserve_original_timestamp: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
             self._poll_seq += 1
             if port:
                 self._active_port = port
             ts = time.time()
+            now_mono = time.monotonic()
+            now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
+            is_sim = source.startswith("simulator:")
             temp_c = decoded["temp_c"] if decoded else None
             hum_rh = decoded["humidity_rh"] if decoded else None
+            temp_q = decoded.get("temp_quality", "valid" if temp_c is not None else "unavailable") if decoded else "unavailable"
+            hum_q = decoded.get("humidity_quality", "valid" if hum_rh is not None else "unavailable") if decoded else "unavailable"
             abnormal = bool(decoded["sensor_abnormal_7fff"]) if decoded else False
             slave_id = decoded["reported_slave_id"] if decoded else self.target_slave_id
             dip_bits = decoded["dip_bits"] if decoded else address_to_dip_bits(self.target_slave_id)
             healthy = bool(online and not abnormal and temp_c is not None and hum_rh is not None)
             andon_light = "GREEN" if healthy else "RED"
+
+            if online and decoded is not None:
+                if not preserve_original_timestamp or self._last_valid_historical is None:
+                    self._last_valid_monotonic = now_mono
+                    captured_utc = now_utc
+                else:
+                    captured_utc = str(self._last_valid_historical.get("captured_at_utc") or now_utc)
+                self._last_valid_historical = {
+                    "captured_at_utc": captured_utc,
+                    "temp_c": temp_c,
+                    "humidity_rh": hum_rh,
+                    "temp_quality": temp_q,
+                    "humidity_quality": hum_q,
+                    "slave_id": slave_id,
+                    "source": source,
+                    "protocol": protocol,
+                    "simulation": is_sim,
+                }
+                fresh = True
+                sample_state = "fresh"
+            else:
+                self._last_valid_monotonic = -999.0
+                captured_utc = None
+                fresh = False
+                sample_state = "historical" if self._last_valid_historical else "none"
 
             if online and temp_c is not None and hum_rh is not None:
                 self._history.append(
@@ -950,12 +1142,50 @@ class ModbusRTUScanner:
                     }
                 )
 
+            if online:
+                if is_sim:
+                    visible_verdict = "Simulation Mode"
+                    scope = "simulation"
+                elif abnormal:
+                    visible_verdict = "Measurement Fault (0x7FFF)"
+                    scope = "sensor_communication"
+                else:
+                    visible_verdict = "Sensor Responded"
+                    scope = "sensor_communication"
+            else:
+                visible_verdict = "Historical Data Only" if self._last_valid_historical else "No Sensor Response"
+                scope = "historical_only" if self._last_valid_historical else "unverified"
+
+            crc_field: bool | None
+            if protocol == "modbus_tcp_mbap":
+                crc_field = None
+            else:
+                crc_field = bool(decoded["crc_valid"]) if (decoded and crc_checked_by_client) else False
+
             payload: dict[str, Any] = {
                 "online": online,
                 "healthy": healthy,
+                "fresh": fresh,
+                "sample_state": sample_state,
+                "captured_at_utc": captured_utc,
+                "max_sample_age_s": self.max_sample_age_s,
+                "simulation": is_sim,
+                "scope": scope,
+                "visible_verdict": visible_verdict,
+                "plc_verified": False,
+                "scada_verified": False,
+                "calibrated_against_reference": False,
                 "andon_light": andon_light,
+                "andon_hardware_pilot_disabled": True,
                 "sensor_abnormal_7fff": abnormal,
+                "temp_quality": temp_q,
+                "humidity_quality": hum_q,
                 "mode": mode,
+                "protocol": protocol,
+                "transaction_id": transaction_id,
+                "connection_generation": self._connection_generation,
+                "error_code": error_code,
+                "error_detail": error_detail,
                 "source": source,
                 "port": port,
                 "adapter_present": adapter_present,
@@ -972,10 +1202,13 @@ class ModbusRTUScanner:
                 "sw_version": decoded["sw_version"] if decoded else None,
                 "last_tx_hex": tx_hex,
                 "last_rx_hex": rx_hex,
-                "crc_valid": bool(decoded["crc_valid"]) if decoded else False,
+                "crc_valid": crc_field,
+                "crc_checked_by_client": crc_checked_by_client,
+                "mbap_valid": mbap_valid,
                 "roundtrip_ms": roundtrip_ms,
                 "status_label": status_label,
                 "poll_seq": self._poll_seq,
+                "historical_sample": dict(self._last_valid_historical) if (not fresh and self._last_valid_historical) else None,
                 "history": list(self._history),
             }
             self._latest_telemetry = payload
@@ -999,5 +1232,24 @@ class ModbusRTUScanner:
     def get_telemetry(self) -> dict[str, Any]:
         with self._lock:
             if self._latest_telemetry:
-                return dict(self._latest_telemetry)
+                snap = dict(self._latest_telemetry)
+                # Enforce monotonic aging (`max_sample_age_s`) on physical samples even between polls (`DAT-03`)
+                if snap.get("online") and not snap.get("simulation") and self._last_valid_monotonic > 0:
+                    age_s = time.monotonic() - self._last_valid_monotonic
+                    snap["sample_age_s"] = round(max(0.0, age_s), 3)
+                    if age_s > self.max_sample_age_s:
+                        snap["online"] = False
+                        snap["healthy"] = False
+                        snap["fresh"] = False
+                        snap["sample_state"] = "historical"
+                        snap["error_code"] = "STALE_SAMPLE"
+                        snap["visible_verdict"] = "Historical Data Only"
+                        snap["scope"] = "historical_only"
+                        snap["andon_light"] = "RED"
+                        snap["temp_c"] = None
+                        snap["humidity_rh"] = None
+                        snap["status_label"] = "STALE SAMPLE · HISTORICAL DATA ONLY"
+                        if self._last_valid_historical:
+                            snap["historical_sample"] = dict(self._last_valid_historical)
+                return snap
         return self.step_once()

@@ -171,7 +171,13 @@ const state = {
   seenRepairEventId: 0,
 
   modbusHealthy: false,
+  modbusSimulation: false,
   wasModbusHealthy: false,
+  activeSessionId: null,
+  confirmedChangesCount: 0,
+  pusrGatewayHost: '',
+  pusrGatewayPort: 502,
+  lastPollSeq: 0,
   emeraldVerifyUntil: 0,
   occlusionFiltered: false,
   handDetected: false,
@@ -211,6 +217,8 @@ const dom = {
   btnUploadPhoto: document.getElementById('btnUploadPhoto'),
   photoUploadInput: document.getElementById('photoUploadInput'),
   selectModbusMode: document.getElementById('selectModbusMode'),
+  btnConfigGateway: document.getElementById('btnConfigGateway'),
+  btnOpenCalibrationPlanned: document.getElementById('btnOpenCalibrationPlanned'),
 
   pillModelText: document.getElementById('pillModelText'),
   pillRamText: document.getElementById('pillRamText'),
@@ -281,6 +289,7 @@ const dom = {
 
   scadaLiveCard: document.getElementById('scadaLiveCard'),
   scadaStatusBadge: document.getElementById('scadaStatusBadge'),
+  btnPollReadonly: document.getElementById('btnPollReadonly'),
   btnScanRealModbus: document.getElementById('btnScanRealModbus'),
   btnSimConnectModbus: document.getElementById('btnSimConnectModbus'),
   btnBreathTest: document.getElementById('btnBreathTest'),
@@ -329,9 +338,18 @@ const dom = {
   manualPageCaption: document.getElementById('manualPageCaption'),
 
   escQueueTag: document.getElementById('escQueueTag'),
+  btnCaptureManualPhoto: document.getElementById('btnCaptureManualPhoto'),
+  btnConfirmPhysicalChange: document.getElementById('btnConfirmPhysicalChange'),
+  confirmChangeLabel: document.getElementById('confirmChangeLabel'),
+  btnExportSessionDossier: document.getElementById('btnExportSessionDossier'),
   btnDownloadDxf: document.getElementById('btnDownloadDxf'),
   btnDownloadStl: document.getElementById('btnDownloadStl'),
   btnOpenEscalateModal: document.getElementById('btnOpenEscalateModal'),
+
+  calibrationPlannedModal: document.getElementById('calibrationPlannedModal'),
+  calibrationPlannedCloseBtn: document.getElementById('calibrationPlannedCloseBtn'),
+  plannedCalEventCopy: document.getElementById('plannedCalEventCopy'),
+  plannedCalScopeReason: document.getElementById('plannedCalScopeReason'),
 
   manualModal: document.getElementById('manualModal'),
   lightboxTitle: document.getElementById('lightboxTitle'),
@@ -2281,17 +2299,19 @@ function updateTwinMatchBadge() {
   dom.twinMatchBadge.classList.remove('is-nominal', 'is-verified', 'is-deviation');
   if (state.modbusHealthy && !state.highlightedZone) {
     dom.twinMatchBadge.classList.add('is-verified');
-    dom.twinMatchBadge.textContent = '✅ 100% DIGITAL TWIN MATCH';
+    dom.twinMatchBadge.textContent = state.modbusSimulation
+      ? 'SIMULATION · PARAMETRIC CAD 140×Ø16 MM'
+      : 'PARAMETRIC CAD MODEL · 140.0×Ø16.0 MM';
   } else if (state.highlightedZone && ZONE_SPECS[state.highlightedZone]) {
     dom.twinMatchBadge.classList.add('is-deviation');
-    dom.twinMatchBadge.textContent = `⚠️ TWIN DEVIATION: ${ZONE_SPECS[state.highlightedZone].shortLabel}`;
+    dom.twinMatchBadge.textContent = `⚠️ ZONE FOCUS: ${ZONE_SPECS[state.highlightedZone].shortLabel}`;
   } else if (state.activeCameraMode === 'usb' && !state.sensorDetected) {
     dom.twinMatchBadge.textContent = state.cameraOffline
       ? 'AWAITING USB CAMERA'
       : 'AWAITING SENSOR IN VIEW';
   } else {
     dom.twinMatchBadge.classList.add('is-nominal');
-    dom.twinMatchBadge.textContent = '100% DIGITAL TWIN MATCH';
+    dom.twinMatchBadge.textContent = 'PARAMETRIC CAD MODEL · 140.0×Ø16.0 MM';
   }
 }
 
@@ -2750,54 +2770,74 @@ function updateAndonAndBanners({ healthy, abn7fff, mb, repair }) {
   dom.systemStateBanner.classList.remove('is-red', 'is-amber', 'is-green');
   dom.nextStepBox.classList.toggle('is-online', healthy);
 
+  const isSimMb = Boolean(mb?.simulation || String(mb?.source || '').startsWith('simulator'));
+  const hasHistorical = Boolean(!healthy && mb?.historical_sample);
+
   if (andon === 'GREEN') {
     dom.systemStateBanner.classList.add('is-green');
-    dom.systemStateText.textContent = '🟢 NOMINAL · SCADA ONLINE';
-    dom.systemStateSub.textContent = `Modbus RTU Slave #${mb?.slave_id || 1} Verified · ${Number(mb?.temp_c ?? 24.4).toFixed(1)} °C · ${Number(mb?.humidity_rh ?? 48.8).toFixed(1)} %RH`;
-    dom.scadaLiveCard.dataset.scadaState = 'green';
-    dom.scadaStatusBadge.textContent = '🟢 GREEN: MODBUS RTU ONLINE';
+    if (isSimMb) {
+      dom.systemStateText.textContent = '🧪 SIMULATION MODE · SYNTHETIC RESPONSE';
+      dom.systemStateSub.textContent = `Simulated Slave #${mb?.slave_id || 1} · ${Number(mb?.temp_c ?? 24.4).toFixed(1)} °C · ${Number(mb?.humidity_rh ?? 48.8).toFixed(1)} %RH (Does Not Verify Hardware)`;
+      dom.scadaLiveCard.dataset.scadaState = 'green';
+      dom.scadaStatusBadge.textContent = 'SIMULATION: SYNTHETIC TELEMETRY';
+    } else {
+      dom.systemStateText.textContent = '🟢 SENSOR RESPONDED · COMM OK';
+      dom.systemStateSub.textContent = `Bench Modbus Slave #${mb?.slave_id || 1} (${mb?.protocol || 'RTU'}) · ${Number(mb?.temp_c ?? 24.4).toFixed(1)} °C · ${Number(mb?.humidity_rh ?? 48.8).toFixed(1)} %RH · PLC/SCADA Not Verified`;
+      dom.scadaLiveCard.dataset.scadaState = 'green';
+      dom.scadaStatusBadge.textContent = 'GREEN: SENSOR RESPONDED (BENCH SCOPE)';
+    }
 
-    dom.nextStepTitle.textContent = 'NEXT STEP · STEP 4: GENERATE 3D SIGN-OFF DOSSIER';
+    dom.nextStepTitle.textContent = 'NEXT STEP · STEP 4: EXPORT BENCH DOSSIER';
     dom.nextStepBody.innerHTML =
-      'Sensor verified online with live SHT30 telemetry! Click <strong>4. 3D Sign-Off Dossier</strong> to compile 4-angle CAD views and manufacturer approval package.';
+      'Observation recorded. Click <strong>PDF + JSON</strong> or <strong>4. 3D Sign-Off Dossier</strong> to save local maintenance evidence.';
     if (state.activeStep < 3) setWorkflowActiveStep(3);
   } else if (andon === 'AMBER') {
     dom.systemStateBanner.classList.add('is-amber');
     const targetSid = mb?.target_slave_id || computeDipAddress() || 1;
-    dom.systemStateText.textContent = '🟡 REPAIRING · CONFIGURE DIP-8';
-    dom.systemStateSub.textContent = `Set SW1 DIP-8 to Slave #${targetSid} · Close Housing & Energize RS-485 Bus`;
+    dom.systemStateText.textContent = '🟡 INSPECTING · CONFIGURE DIP-8';
+    dom.systemStateSub.textContent = `Set SW1 DIP-8 to Slave #${targetSid} · Close Housing & Poll Bus`;
     dom.scadaLiveCard.dataset.scadaState = 'amber';
-    dom.scadaStatusBadge.textContent = '🟡 AMBER: AWAITING BUS POWER';
+    dom.scadaStatusBadge.textContent = 'AMBER: AWAITING SENSOR RESPONSE';
 
-    dom.nextStepTitle.textContent = `NEXT STEP · STEP 3: POWER & VERIFY SLAVE #${targetSid}`;
+    dom.nextStepTitle.textContent = `NEXT STEP · STEP 3: POLL SLAVE #${targetSid}`;
     dom.nextStepBody.innerHTML =
-      'Verify DIP-8 switches in the macro inset, re-thread the IP65 barrel, and click <strong>3. Power &amp; Verify Bus</strong>.';
+      'Verify DIP-8 switches in the macro inset, re-thread the IP65 barrel, and click <strong>Start Read-Only Poll</strong>.';
   } else {
     dom.systemStateBanner.classList.add('is-red');
     dom.scadaLiveCard.dataset.scadaState = 'red';
     if (abn7fff) {
-      dom.systemStateText.textContent = '🔴 FAULT · 0x7FFF SHT30 PROBE ALARM';
-      dom.systemStateSub.textContent = 'Holding Registers 0000H/0001H reporting 0x7FFF abnormal sentinel (Manual Page 6)';
-      dom.scadaStatusBadge.textContent = '🔴 RED ALERT: 0x7FFF SHT30 ALARM';
+      dom.systemStateText.textContent = isSimMb
+        ? '🧪 SIMULATION · 0x7FFF PROBE FAULT'
+        : '🔴 SENSOR RESPONDED · 0x7FFF CHANNEL FAULT';
+      dom.systemStateSub.textContent = 'Communication OK, but register 0000H/0001H returned 0x7FFF abnormal sentinel (Manual Page 6)';
+      dom.scadaStatusBadge.textContent = 'ALERT: 0x7FFF SHT30 CHANNEL FAULT';
       dom.nextStepTitle.textContent = 'NEXT STEP · INSPECT SHT30 STRAINER TIP';
       dom.nextStepBody.innerHTML =
-        'Sensor reports <code>0x7FFF</code> probe fault. Inspect stainless steel strainer head for condensation or physical obstruction.';
+        'Channel reports <code>0x7FFF</code> sentinel. Inspect stainless steel strainer head for condensation or obstruction.';
+    } else if (hasHistorical) {
+      const hs = mb.historical_sample;
+      dom.systemStateText.textContent = '🟠 LINK LOST · HISTORICAL DATA ONLY';
+      dom.systemStateSub.textContent = `No fresh response (${mb?.error_code || 'TIMEOUT'}) · Historical from ${hs.captured_at_utc || 'earlier'}: ${hs.temp_c ?? '--'} °C / ${hs.humidity_rh ?? '--'} %RH`;
+      dom.scadaStatusBadge.textContent = 'HISTORICAL SAMPLE ONLY · LINK OFFLINE';
+      dom.nextStepTitle.textContent = 'NEXT STEP · RESTORE PHYSICAL LINK';
+      dom.nextStepBody.innerHTML =
+        'Link lost after previous reading. Last value is preserved strictly as <strong>Historical</strong> and cannot close as fresh verification.';
     } else if (stage === 'STEP1_OPEN_FAULT_DETECTED' || state.exploded) {
-      dom.systemStateText.textContent = '🔴 FAULT / OFFLINE · OPEN HOUSING DETECTED';
+      dom.systemStateText.textContent = '🔴 OFFLINE · OPEN HOUSING DETECTED';
       dom.systemStateSub.textContent = 'Internal Blue DIP-8 PCB Exposed · Configure Modbus Slave Address';
-      dom.scadaStatusBadge.textContent = '🔴 RED ALERT: NO MODBUS SIGNAL';
+      dom.scadaStatusBadge.textContent = 'STANDBY: NO MODBUS SIGNAL';
       dom.nextStepTitle.textContent = 'NEXT STEP · STEP 2: FOCUS & SET DIP-8';
       dom.nextStepBody.innerHTML =
-        'Open housing detected! Click <strong>2. Focus &amp; Set DIP-8</strong> so the AI zooms onto the 8 pins and prescribes your Modbus address.';
+        'Open housing detected! Click <strong>2. Focus &amp; Set DIP-8</strong> to inspect the 8 pins and Modbus address.';
     } else {
-      dom.systemStateText.textContent = '🔴 FAULT / OFFLINE';
+      dom.systemStateText.textContent = '🔴 STANDBY / NO SENSOR RESPONSE';
       dom.systemStateSub.textContent = state.highlightedZone
-        ? `Twin Deviation in ${ZONE_SPECS[state.highlightedZone]?.shortLabel || state.highlightedZone} · No RS-485 Signal`
-        : 'No RS-485 Modbus Signal · Click "1. Inspect Fault" to begin';
-      dom.scadaStatusBadge.textContent = '🔴 RED ALERT: NO MODBUS SIGNAL';
-      dom.nextStepTitle.textContent = 'NEXT STEP · STEP 1: INSPECT SENSOR FAULT';
+        ? `Zone Focus: ${ZONE_SPECS[state.highlightedZone]?.shortLabel || state.highlightedZone} · No Modbus Response`
+        : 'No Modbus Response · Click "1. Inspect Fault" or "Start Read-Only Poll"';
+      dom.scadaStatusBadge.textContent = 'STANDBY: NO MODBUS SIGNAL';
+      dom.nextStepTitle.textContent = 'NEXT STEP · STEP 1: INSPECT SENSOR';
       dom.nextStepBody.innerHTML =
-        'Click <strong>1. Inspect Fault</strong> in the top bar or hold the Push-to-Speak microphone button to diagnose the sensor.';
+        'Click <strong>1. Inspect Fault</strong> in the top bar or hold the Push-to-Speak microphone button to begin.';
     }
   }
 }
@@ -2988,18 +3028,32 @@ function applyTelemetryPayload(data) {
     }
   }
 
-  // 7. Live RS-485 Modbus SCADA Telemetry & State Transitions
+  // 7. Live Bench Modbus Telemetry, Freshness & Action Gating
   const mb = data.modbus || {};
-  const healthy = Boolean(mb.healthy);
+  const pollSeq = Number(mb.poll_seq || 0);
+  if (pollSeq > 0 && pollSeq < state.lastPollSeq && mb.mode === dom.selectModbusMode?.value) {
+    return; // Ignore out-of-order stale status packet
+  }
+  if (pollSeq > 0) state.lastPollSeq = pollSeq;
+
+  const healthy = Boolean(mb.healthy && mb.fresh !== false);
   const abn7fff = Boolean(mb.online && mb.sensor_abnormal_7fff);
+  const isSimMb = Boolean(mb.simulation || String(mb.source || '').startsWith('simulator'));
   state.modbusHealthy = healthy;
+  state.modbusSimulation = isSimMb;
 
   if (mb.mode && dom.selectModbusMode && dom.selectModbusMode.value !== mb.mode) {
     const hasMbOpt = Array.from(dom.selectModbusMode.options).some((o) => o.value === mb.mode);
     if (hasMbOpt) dom.selectModbusMode.value = mb.mode;
   }
 
-  // Rising edge: Sensor just came online on RS-485 Modbus!
+  // Gate virtual simulation buttons out of physical bench modes (`Phase 1.7`)
+  const simModeActive = String(dom.selectModbusMode?.value || mb.mode || 'auto').startsWith('sim_');
+  if (dom.btnSimConnectModbus) dom.btnSimConnectModbus.hidden = !simModeActive;
+  if (dom.btnBreathTest) dom.btnBreathTest.hidden = !simModeActive;
+  if (dom.btnPollReadonly) dom.btnPollReadonly.hidden = simModeActive;
+
+  // Rising edge: Sensor just responded cleanly on Modbus!
   if (healthy && !state.wasModbusHealthy) {
     state.lastDiagnosisFaultLock = false;
     if (!physPcbNow) {
@@ -3013,31 +3067,40 @@ function applyTelemetryPayload(data) {
   }
   state.wasModbusHealthy = healthy;
 
-  dom.scadaTempVal.classList.toggle('is-alarm', abn7fff);
-  dom.scadaHumVal.classList.toggle('is-alarm', abn7fff);
+  dom.scadaTempVal.classList.toggle('is-alarm', abn7fff && mb.temp_quality !== 'valid');
+  dom.scadaHumVal.classList.toggle('is-alarm', abn7fff && mb.humidity_quality !== 'valid');
 
+  const isMbap = mb.protocol === 'modbus_tcp_mbap';
   if (healthy) {
     const tVal = Number(mb.temp_c);
     const hVal = Number(mb.humidity_rh);
     dom.scadaTempVal.textContent = `${tVal.toFixed(1)} °C`;
     dom.scadaHumVal.textContent = `${hVal.toFixed(1)} %RH`;
-    dom.scadaSlaveVal.textContent = `Slave #${String(mb.slave_id || 1).padStart(2, '0')} · ${mb.baud_bps || 9600} 8N1`;
-    dom.scadaCrcPill.textContent = 'CRC-16 OK';
+    dom.scadaSlaveVal.textContent = `Slave #${String(mb.slave_id || 1).padStart(2, '0')} · ${isMbap ? 'MODBUS TCP' : `${mb.baud_bps || 9600} 8N1`}`;
+    dom.scadaCrcPill.textContent = isSimMb ? 'SIMULATED' : isMbap ? 'MBAP OK' : 'CRC-16 OK';
     dom.scadaFrameHex.textContent = `RX: ${mb.last_rx_hex || ''} (${mb.roundtrip_ms || 12} ms)`;
     pushScadaSample(tVal, hVal);
   } else if (abn7fff) {
-    dom.scadaTempVal.textContent = '0x7FFF';
-    dom.scadaHumVal.textContent = '0x7FFF';
-    dom.scadaSlaveVal.textContent = `Slave #${String(mb.slave_id || 1).padStart(2, '0')} · ${mb.baud_bps || 9600} 8N1`;
-    dom.scadaCrcPill.textContent = 'PROBE FAULT';
-    dom.scadaFrameHex.textContent = `RX: ${mb.last_rx_hex || ''} (SHT30 0x7FFF ALARM)`;
-    setFaultHighlight('strainer_head', 'Modbus Register 0x0000/0x0001 returned 0x7FFF probe fault.');
+    dom.scadaTempVal.textContent = mb.temp_c !== null && mb.temp_c !== undefined ? `${Number(mb.temp_c).toFixed(1)} °C` : '0x7FFF';
+    dom.scadaHumVal.textContent = mb.humidity_rh !== null && mb.humidity_rh !== undefined ? `${Number(mb.humidity_rh).toFixed(1)} %RH` : '0x7FFF';
+    dom.scadaSlaveVal.textContent = `Slave #${String(mb.slave_id || 1).padStart(2, '0')} · ${isMbap ? 'MODBUS TCP' : `${mb.baud_bps || 9600} 8N1`}`;
+    dom.scadaCrcPill.textContent = 'CHANNEL 0x7FFF';
+    dom.scadaFrameHex.textContent = `RX: ${mb.last_rx_hex || ''} (CHANNEL FAULT)`;
+    setFaultHighlight('strainer_head', 'Modbus Register 0x0000/0x0001 returned 0x7FFF channel sentinel.');
+    pushScadaSample(null, null);
+  } else if (mb.historical_sample) {
+    const hs = mb.historical_sample;
+    dom.scadaTempVal.textContent = hs.temp_c !== null && hs.temp_c !== undefined ? `${Number(hs.temp_c).toFixed(1)}*` : '--.- °C';
+    dom.scadaHumVal.textContent = hs.humidity_rh !== null && hs.humidity_rh !== undefined ? `${Number(hs.humidity_rh).toFixed(1)}*` : '--.- %RH';
+    dom.scadaSlaveVal.textContent = `HISTORICAL (${hs.captured_at_utc ? hs.captured_at_utc.slice(11, 19) + 'Z' : 'EARLIER'})`;
+    dom.scadaCrcPill.textContent = mb.error_code || 'HISTORICAL';
+    dom.scadaFrameHex.textContent = `LINK OFFLINE · LAST TX: ${mb.last_tx_hex || '01 03 00 00 00 08 44 0C'}`;
     pushScadaSample(null, null);
   } else {
     dom.scadaTempVal.textContent = '--.- °C';
     dom.scadaHumVal.textContent = '--.- %RH';
-    dom.scadaSlaveVal.textContent = `Slave #${String(mb.target_slave_id || computeDipAddress() || 1).padStart(2, '0')} · ${mb.baud_bps || 9600} 8N1`;
-    dom.scadaCrcPill.textContent = mb.adapter_present ? 'BUS TIMEOUT' : 'NO SIGNAL';
+    dom.scadaSlaveVal.textContent = `Slave #${String(mb.target_slave_id || computeDipAddress() || 1).padStart(2, '0')} · ${isMbap ? 'MODBUS TCP' : `${mb.baud_bps || 9600} 8N1`}`;
+    dom.scadaCrcPill.textContent = mb.error_code || (mb.adapter_present ? 'BUS TIMEOUT' : 'NO SIGNAL');
     dom.scadaFrameHex.textContent = `TX: ${mb.last_tx_hex || '01 03 00 00 00 08 44 0C'} · AWAITING RESPONSE`;
     pushScadaSample(null, null);
   }
@@ -3382,6 +3445,14 @@ async function switchCameraMode(mode) {
 
 async function switchModbusMode(mode) {
   state.activeModbusMode = mode;
+  state.activeSessionId = null;
+  state.confirmedChangesCount = 0;
+  state.lastPollSeq = 0;
+  if (dom.confirmChangeLabel) dom.confirmChangeLabel.textContent = 'Confirm Change (0)';
+  const simModeActive = String(mode || 'auto').startsWith('sim_');
+  if (dom.btnSimConnectModbus) dom.btnSimConnectModbus.hidden = !simModeActive;
+  if (dom.btnBreathTest) dom.btnBreathTest.hidden = !simModeActive;
+  if (dom.btnPollReadonly) dom.btnPollReadonly.hidden = simModeActive;
   try {
     const res = await fetchJsonWithFallback(['/api/modbus/mode'], {
       method: 'POST',
@@ -4745,8 +4816,8 @@ async function generateAndOpenEscalationPackage() {
   dom.escalationModal.hidden = false;
   dom.escSnapshotImg.src = `/api/video/snapshot?t=${Date.now()}`;
   dom.escSummaryZone.textContent = state.modbusHealthy
-    ? 'SCADA ONLINE · 100% TWIN VERIFIED'
-    : state.highlightedZone || 'upper_barrel_dip';
+    ? (state.modbusSimulation ? 'SIMULATION WALKTHROUGH ONLY' : 'SENSOR COMM OBSERVED (BENCH)')
+    : state.highlightedZone || 'PARTIAL INSPECTION';
   renderDipHud();
 
   appendChatMessage({
@@ -5220,12 +5291,213 @@ function bindWorkstationEvents() {
     if (e.target === dom.escalationModal) dom.escalationModal.hidden = true;
   });
 
+  // Planned Calibration Extension Modal (`CAL-00`)
+  if (dom.btnOpenCalibrationPlanned && dom.calibrationPlannedModal) {
+    dom.btnOpenCalibrationPlanned.addEventListener('click', async () => {
+      try {
+        const card = await fetchJsonWithFallback(['/api/calibration/planned']);
+        if (card?.event_summary_en && dom.plannedCalEventCopy) {
+          dom.plannedCalEventCopy.textContent = card.event_summary_en;
+        }
+        if (card?.tzone_scope_reason && dom.plannedCalScopeReason) {
+          dom.plannedCalScopeReason.textContent = card.tzone_scope_reason;
+        }
+      } catch (_e) {}
+      dom.calibrationPlannedModal.hidden = false;
+    });
+    dom.calibrationPlannedCloseBtn?.addEventListener('click', () => {
+      dom.calibrationPlannedModal.hidden = true;
+    });
+    dom.calibrationPlannedModal.addEventListener('click', (e) => {
+      if (e.target === dom.calibrationPlannedModal) dom.calibrationPlannedModal.hidden = true;
+    });
+  }
+
+  // Configure PUSR Modbus TCP Gateway (`BUS-02`)
+  if (dom.btnConfigGateway) {
+    dom.btnConfigGateway.addEventListener('click', async () => {
+      const currentTarget = state.pusrGatewayHost
+        ? `${state.pusrGatewayHost}:${state.pusrGatewayPort}`
+        : '192.168.0.7:502';
+      const entered = window.prompt(
+        'Enter isolated bench PUSR USR-DR164 Modbus TCP (MBAP) host:port (never use :5502 raw RTU bridge):',
+        currentTarget
+      );
+      if (!entered) return;
+      const parts = entered.trim().split(':');
+      const host = (parts[0] || '').trim();
+      const port = Number(parts[1] || 502) || 502;
+      if (!host) return;
+      state.pusrGatewayHost = host;
+      state.pusrGatewayPort = port;
+      try {
+        await fetchJsonWithFallback(['/api/modbus/gateway'], {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ host, port, activate_mode: true }),
+        });
+        if (dom.selectModbusMode) dom.selectModbusMode.value = 'pusr_tcp';
+        appendChatMessage({
+          role: 'assistant',
+          author: 'BENCH GATEWAY CONFIG',
+          text: `Configured PUSR Modbus TCP (MBAP) endpoint to ${host}:${port}. Previous session link invalidated; reconfirm asset before closing.`,
+        });
+        pollTelemetry();
+      } catch (err) {
+        appendChatMessage({
+          role: 'assistant',
+          author: 'BENCH GATEWAY CONFIG',
+          text: `Failed to update gateway: ${err.message || err}`,
+        });
+      }
+    });
+  }
+
+  // Physical Read-Only Poll (`FC03`)
+  if (dom.btnPollReadonly) {
+    dom.btnPollReadonly.addEventListener('click', async () => {
+      try {
+        await ensureActiveWorkSession();
+        const res = await fetchJsonWithFallback(['/api/modbus/poll'], {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: state.activeSessionId }),
+        });
+        if (res?.modbus) applyTelemetryPayload({ modbus: res.modbus });
+        const m = res?.modbus || {};
+        appendChatMessage({
+          role: 'assistant',
+          author: 'MODBUS READ-ONLY POLL',
+          text: m.online
+            ? `Sensor responded (${m.protocol || 'Modbus'}): Temp=${m.temp_c ?? 'FAULT'} °C, RH=${m.humidity_rh ?? 'FAULT'} %RH (Scope: ${m.scope || 'sensor_communication'}).`
+            : `No fresh sensor response (${m.error_code || 'READ_TIMEOUT'}): ${m.status_label || 'Timeout'}.`,
+        });
+      } catch (_e) {}
+    });
+  }
+
+  // Manual Session Photo Capture (`VIS-02` / `VIS-07`)
+  if (dom.btnCaptureManualPhoto) {
+    dom.btnCaptureManualPhoto.addEventListener('click', async () => {
+      try {
+        await ensureActiveWorkSession();
+        const res = await fetchJsonWithFallback([`/api/sessions/${state.activeSessionId}/capture`], {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ manual: true }),
+        });
+        const ph = res?.capture?.photo;
+        appendChatMessage({
+          role: 'assistant',
+          author: 'SESSION EVIDENCE',
+          text: ph
+            ? `Saved manual photo ${ph.original_filename} (origin: ${ph.evidence_origin}, sha256: ${String(ph.original_sha256 || '').slice(0, 12)}...).`
+            : `Photo not saved: ${res?.capture?.reason || 'unavailable'}.`,
+        });
+      } catch (_e) {}
+    });
+  }
+
+  // Explicit Technician Confirmation of Physical Change (`Phase 1.5`, `DAT-04`, `FLU-02`)
+  if (dom.btnConfirmPhysicalChange) {
+    dom.btnConfirmPhysicalChange.addEventListener('click', async () => {
+      const actionTaken = window.prompt(
+        'Confirm physical intervention performed on bench (leave blank to cancel — inspection-only sessions keep 0 changes):',
+        ''
+      );
+      if (!actionTaken || !actionTaken.trim()) return;
+      try {
+        await ensureActiveWorkSession();
+        const res = await fetchJsonWithFallback([`/api/sessions/${state.activeSessionId}/actions`], {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'confirm_physical_change',
+            confirmed: true,
+            observed: `Step ${state.activeStep} bench inspection`,
+            action_taken: actionTaken.trim(),
+          }),
+        });
+        const count = res?.session?.state?.confirmed_changes?.length || 0;
+        state.confirmedChangesCount = count;
+        if (dom.confirmChangeLabel) dom.confirmChangeLabel.textContent = `Confirm Change (${count})`;
+        appendChatMessage({
+          role: 'assistant',
+          author: 'CHANGE CONFIRMATION LOG',
+          text: `Recorded confirmed technician intervention (#${count}): "${actionTaken.trim()}". Perform a fresh post-change Modbus read before closing.`,
+        });
+      } catch (err) {
+        appendChatMessage({
+          role: 'assistant',
+          author: 'CHANGE CONFIRMATION LOG',
+          text: `Could not record change: ${err.message || err}`,
+        });
+      }
+    });
+  }
+
+  // Export Authoritative Session PDF + JSON Dossier (`EXP-01`, `EXP-02`)
+  if (dom.btnExportSessionDossier) {
+    dom.btnExportSessionDossier.addEventListener('click', async () => {
+      try {
+        await ensureActiveWorkSession();
+        const manifest = await fetchJsonWithFallback([`/api/sessions/${state.activeSessionId}/exports`], {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audience: 'private_bench' }),
+        });
+        appendChatMessage({
+          role: 'assistant',
+          author: 'MAINTENANCE DOSSIER EXPORT',
+          text: `Generated ${manifest.export_profile} dossier (partial=${manifest.partial_report}, changes=${manifest.confirmed_changes_count ?? 0}): PDF (${manifest.pdf_url}) & JSON (${manifest.json_url}).`,
+        });
+        if (manifest.pdf_url) {
+          if (window.FIELDSCAN_IOS_NATIVE && window.fieldscanNativeBridge?.shareExportedFile) {
+            const pdfName = manifest.pdf_url.split('/').pop();
+            window.fieldscanNativeBridge.shareExportedFile(pdfName, '', 'application/pdf');
+          } else {
+            window.open(manifest.pdf_url, '_blank');
+          }
+        }
+      } catch (err) {
+        appendChatMessage({
+          role: 'assistant',
+          author: 'MAINTENANCE DOSSIER EXPORT',
+          text: `Export error: ${err.message || err}`,
+        });
+      }
+    });
+  }
+
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       dom.manualModal.hidden = true;
       dom.escalationModal.hidden = true;
+      if (dom.calibrationPlannedModal) dom.calibrationPlannedModal.hidden = true;
     }
   });
+}
+
+async function ensureActiveWorkSession() {
+  if (state.activeSessionId) return state.activeSessionId;
+  try {
+    const mode = dom.selectModbusMode?.value || 'auto';
+    const created = await fetchJsonWithFallback(['/api/sessions'], {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        profile_id: 'tzone_tht02',
+        transport_mode: mode,
+        simulation: mode.startsWith('sim_'),
+      }),
+    });
+    if (created?.session_id) {
+      state.activeSessionId = created.session_id;
+      const count = created?.state?.confirmed_changes?.length || 0;
+      if (dom.confirmChangeLabel) dom.confirmChangeLabel.textContent = `Confirm Change (${count})`;
+    }
+  } catch (_e) {}
+  return state.activeSessionId;
 }
 
 function bootstrap() {

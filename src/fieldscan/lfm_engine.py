@@ -359,27 +359,50 @@ class LFMEngine:
     def check_health(self) -> dict[str, Any]:
         vl_ok = False
         audio_ok = False
+        vl_model_id: str | None = None
+        audio_model_id: str | None = None
         with httpx.Client(trust_env=False, timeout=1.2) as client:
             try:
                 r_vl = client.get(f"{self.vl_url}/health")
                 vl_ok = r_vl.status_code == 200
+                if vl_ok:
+                    r_vm = client.get(f"{self.vl_url}/v1/models")
+                    if r_vm.status_code == 200:
+                        items = (r_vm.json().get("data") or [])
+                        if items and isinstance(items[0], dict):
+                            vl_model_id = str(items[0].get("id") or "").strip() or None
             except Exception:
                 vl_ok = False
             try:
                 r_au = client.get(f"{self.audio_url}/health")
                 audio_ok = r_au.status_code == 200
+                if audio_ok:
+                    r_am = client.get(f"{self.audio_url}/v1/models")
+                    if r_am.status_code == 200:
+                        items = (r_am.json().get("data") or [])
+                        if items and isinstance(items[0], dict):
+                            audio_model_id = str(items[0].get("id") or "").strip() or None
             except Exception:
                 audio_ok = False
 
         tts_ok = self.piper_model_path.is_file()
+        effective_provider = (
+            f"{vl_model_id or 'llama-server'} · Mac Mini"
+            if vl_ok
+            else "Local Deterministic Rules v2.1 · On-Device"
+        )
         return {
             "vl_online": vl_ok,
             "vl_url": self.vl_url,
+            "effective_vl_model_id": vl_model_id,
             "audio_online": audio_ok,
             "audio_url": self.audio_url,
+            "effective_audio_model_id": audio_model_id,
             "tts_ready": tts_ok,
             "piper_voice": self.piper_model_path.name if tts_ok else None,
-            "model_name": "LFM3-VL-2B Q4 + LFM3-Audio-2B Q4",
+            "provider_id": "mac_assisted_llm" if vl_ok else "local_rules_v2",
+            "provider_label": effective_provider,
+            "model_name": effective_provider,
             "last_latency_ms": self.last_latency_ms,
             "tokens_per_sec": self.last_tokens_per_sec,
         }
@@ -491,15 +514,24 @@ class LFMEngine:
         mb = modbus_telemetry or {}
         history_msgs = self._snapshot_chat_history()
 
-        if mb.get("healthy"):
+        is_sim_mb = bool(mb.get("simulation") or str(mb.get("source", "")).startswith("simulator"))
+        is_fresh_mb = bool(mb.get("fresh", mb.get("online", False)))
+        if mb.get("healthy") and is_fresh_mb:
+            prov_tag = "SIMULATION (SYNTHETIC)" if is_sim_mb else "PHYSICAL BENCH"
             scada_note = (
-                f"RS-485 Modbus-RTU ONLINE (Slave #{mb.get('slave_id')}, {mb.get('baud_bps', 9600)} 8N1): "
-                f"Temp={mb.get('temp_c')} C, Humidity={mb.get('humidity_rh')} %RH, CRC-16 OK."
+                f"Modbus [{prov_tag}, Slave #{mb.get('slave_id')}, {mb.get('baud_bps', 9600)} 8N1]: "
+                f"Temp={mb.get('temp_c')} C, Humidity={mb.get('humidity_rh')} %RH."
             )
         elif mb.get("online") and mb.get("sensor_abnormal_7fff"):
-            scada_note = "RS-485 Bus reports 0x7FFF ALARM on holding registers 0x0000/0x0001 (SHT30 probe abnormal)."
+            scada_note = "Modbus Bus reports 0x7FFF sentinel on holding registers 0x0000/0x0001 (SHT30 probe abnormal)."
+        elif mb.get("historical_sample"):
+            hs = mb["historical_sample"]
+            scada_note = (
+                f"No fresh Modbus response; HISTORICAL sample from {hs.get('captured_at_utc')}: "
+                f"Temp={hs.get('temp_c')} C, Humidity={hs.get('humidity_rh')} %RH."
+            )
         else:
-            scada_note = f"RS-485 Modbus-RTU Bus: {mb.get('status_label', 'NO RESPONSE / DISCONNECTED')}."
+            scada_note = f"Modbus Bus: {mb.get('status_label', 'NO RESPONSE / DISCONNECTED')}."
 
         zone_id: str | None = None
         explode_pcb: bool | None = None
@@ -635,13 +667,17 @@ class LFMEngine:
 
         vlm_text = ""
         tokens_per_s: float | None = None
-        model_used = "LiquidAI LFM3-VL-2B (QAD-Q4_0)"
+        model_used = "LiquidAI LFM3-VL-2B · Mac Mini"
+        provider_id = "mac_assisted_llm"
 
         try:
             with httpx.Client(trust_env=False, timeout=22.0) as client:
                 resp = client.post(f"{self.vl_url}/v1/chat/completions", json=payload)
                 if resp.status_code == 200:
                     data = resp.json()
+                    actual_model = str(data.get("model") or "").strip()
+                    if actual_model:
+                        model_used = f"{actual_model} · Mac Mini"
                     msg = (data.get("choices") or [{}])[0].get("message", {})
                     vlm_text = (msg.get("content") or "").strip()
                     timings = data.get("timings") or {}
@@ -654,7 +690,8 @@ class LFMEngine:
         elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
 
         if not vlm_text:
-            model_used = "FieldScan Manual Engine + TZ THT-02 Spec (Fallback)"
+            provider_id = "local_rules_v2"
+            model_used = "Local Deterministic Rules v2.1 · On-Device"
             if mode == "conversational":
                 vlm_text = (
                     "Hello! I am your offline FieldScan AI Engineer. Go ahead with your question—I can help with "
@@ -677,6 +714,17 @@ class LFMEngine:
                     f"{sym_0}. Recommended action: {act_0} (Manual V1.1 Pages {', '.join(map(str, cited_pages[:3]))})."
                 )
 
+        from fieldscan.profiles_and_manual import resolve_device_profile, verify_and_resolve_citations
+        from fieldscan.session_engine import apply_deterministic_grounding_filter
+
+        active_prof = resolve_device_profile("tzone_tht02")
+        grounding = apply_deterministic_grounding_filter(
+            vlm_text,
+            profile=active_prof,
+            verified_telemetry=mb,
+        )
+        vlm_text = grounding["text"]
+
         self._record_chat_turn(query, vlm_text)
 
         self.last_latency_ms = elapsed_ms
@@ -684,16 +732,25 @@ class LFMEngine:
             self.last_tokens_per_sec = tokens_per_s
         self.last_model_label = model_used
 
-        citations = [
-            {"page": int(p), "label": MANUAL_PAGE_TITLES.get(int(p), f"Page {p} · Manual V1.1")}
-            for p in cited_pages
-        ]
+        cit_check = verify_and_resolve_citations(active_prof, [int(p) for p in cited_pages])
+        citations = (
+            cit_check["citations"]
+            if cit_check["verified"]
+            else [
+                {"page": int(p), "label": MANUAL_PAGE_TITLES.get(int(p), f"Page {p} · Manual V1.1")}
+                for p in cited_pages
+                if 1 <= int(p) <= 9
+            ]
+        )
         audio_b64 = self.synthesize_speech_b64(vlm_text)
 
         return {
             "diagnosis": vlm_text,
             "assistant_message": vlm_text,
             "query_mode": mode,
+            "provider_id": provider_id,
+            "grounding_corrected": grounding["grounding_corrected"],
+            "grounding_reasons": grounding["reasons"],
             "probable_causes": (probable_causes + recommended_actions[:1]) if mode == "visual_diagnosis" else [],
             "recommended_actions": recommended_actions if mode == "visual_diagnosis" else [],
             "highlighted_zone": zone_id,

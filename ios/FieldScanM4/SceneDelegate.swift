@@ -19,6 +19,12 @@ public final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     public func sceneDidBecomeActive(_ scene: UIScene) {
         UIApplication.shared.isIdleTimerDisabled = true
+        StandaloneFieldScanServer.shared.start()
+    }
+
+    public func sceneWillResignActive(_ scene: UIScene) {
+        // Phase 2.2.6 & FLU-06: Close active physical gateway socket and mark last sample historical on suspend
+        StandaloneFieldScanServer.shared.handleAppSuspend()
     }
 }
 #endif

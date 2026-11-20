@@ -39,11 +39,15 @@
     <true/>
     <key>UISupportedInterfaceOrientations</key>
     <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
     <key>UISupportedInterfaceOrientations~ipad</key>
     <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
@@ -65,10 +69,7 @@
         </dict>
     </dict>
     <key>UILaunchScreen</key>
-    <dict>
-        <key>UIColorName</key>
-        <string>LaunchBackground</string>
-    </dict>
+    <dict/>
     <key>NSCameraUsageDescription</key>
     <string>FieldScan CAD uses the iPad Air M4 camera and connected USB-C UVC cameras for 30 FPS optical inspection and DIP-8 switch verification of the TZ THT-02 sensor.</string>
     <key>NSMicrophoneUsageDescription</key>

@@ -130,13 +130,16 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
     private var liveMicRmsPct: Int = 8
     private var handsFreeActive: Bool = false
     private var handsFreeTurnInFlight: Bool = false
-    private var pendingHandsFreeResult: [String: Any]?
+    private var pendingHandsFreeResults: [[String: Any]] = []
     private var handsFreeMonitorTimer: DispatchSourceTimer?
     private var activeSpeechSessionGeneration: Int = 0
     private var lastTtsActiveUptime: TimeInterval = 0
     private var ttsUtteranceStartUptime: TimeInterval = 0
     private var ttsSpeakingFlag: Bool = false
     private var ttsExpectedEndUptime: TimeInterval = 0
+    private var needsSpeechTaskResetAfterTts: Bool = false
+    private var lastCompletedLiveTranscriptNorm: String = ""
+    private var lastCompletedLiveTurnUptime: TimeInterval = 0
     private var pttRecordingActive: Bool = false
     private var bargeInConsecutiveFrames: Int = 0
     private var lastAudioStartAttemptUptime: TimeInterval = 0
@@ -268,7 +271,11 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         ttsExpectedEndUptime = 0
         lastTtsActiveUptime = now
         bargeInConsecutiveFrames = 0
+        livePartialTranscript = ""
+        lastTranscriptChangeTime = 0
+        needsSpeechTaskResetAfterTts = true
         stateLock.unlock()
+        FieldScanSessionEngine.shared.setAudioState("idle")
     }
 
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
@@ -283,9 +290,14 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
     // MARK: - Lifecycle
 
+    private let lifecycleLock = NSLock()
+
     /// Starts the in-process HTTP/1.1 server on `127.0.0.1:8088`, the 25 FPS optical workbench loop,
     /// and the 2 Hz Modbus-RTU telemetry loop.
     public func start() {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+
         stateLock.lock()
         if isRunning {
             stateLock.unlock()
@@ -331,11 +343,13 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         listener = nil
     }
 
-    public func configurePusrGateway(host: String, port: Int = 502, activate: Bool = true) {
+    public func configurePusrGateway(host: String, port: Int = 502, activate: Bool = true, topology: String = "ap_direct") {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanTopo = topology.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "sta_lan" ? "sta_lan" : "ap_direct"
         let cfg = FieldScanRuntimeConfig.shared
         cfg.pusrGatewayHost = trimmed
         cfg.pusrGatewayPort = port
+        cfg.pusrGatewayTopology = cleanTopo
 
         stateLock.lock()
         pusrTCPClient?.close()
@@ -354,6 +368,57 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         if activate && !trimmed.isEmpty {
             stepModbusTelemetryOnce(forceImmediateTCPPoll: true)
         }
+    }
+
+    /// 1-Tap PUSR USR-DR164 diagnostics, UDP 48899 auto-provisioning (`9600 8N1`, `TCP Server :502`, `Modbus TCP`), and immediate RS-485 bus scan.
+    public func runOneTapPusrAutoSetup(
+        preferredHost: String? = nil,
+        baud: Int = 9600,
+        port: Int = FieldScanRuntimeConfig.defaultPusrPort
+    ) -> [String: Any] {
+        var result = ModbusTCPClient.autoProvisionPusrGateway(
+            preferredHost: preferredHost,
+            baud: baud,
+            targetPort: port
+        )
+        let statusStr = (result["status"] as? String) ?? ""
+        if let detectedHost = result["host"] as? String, !detectedHost.isEmpty {
+            let activateNow = (statusStr == "ready_on_502")
+            configurePusrGateway(host: detectedHost, port: port, activate: activateNow, topology: "ap_direct")
+            result["gateway"] = [
+                "host": detectedHost,
+                "port": port,
+                "topology": "ap_direct",
+                "protocol": "modbus_tcp_mbap",
+            ]
+            if activateNow {
+                let scanRes = scanHardwareModbusBus()
+                result["scan_result"] = scanRes
+                result["modbus"] = getModbusTelemetry()
+                if (scanRes["found"] as? Bool) == true, let foundSid = scanRes["slave_id"] as? Int {
+                    let tVal = scanRes["temp_c"] as? Double
+                    let hVal = scanRes["humidity_rh"] as? Double
+                    if let t = tVal, let h = hVal {
+                        result["message"] = String(
+                            format: "Connected to PUSR at %@:%d — Sensor Slave #%d live (%.1f C, %.1f %%RH)!",
+                            detectedHost,
+                            port,
+                            foundSid,
+                            t,
+                            h
+                        )
+                    } else {
+                        result["message"] = "Connected to PUSR at \(detectedHost):\(port) — Sensor Slave #\(foundSid) responded!"
+                    }
+                } else {
+                    let errDetail = (scanRes["error_detail"] as? String)
+                        ?? (scanRes["error_code"] as? String)
+                        ?? "No RS-485 response"
+                    result["message"] = "PUSR TCP \(detectedHost):\(port) is REACHABLE, but sensor did not reply on Slave IDs 1..10/176 (\(errDetail)). Check THT-02 power (5-24V), RS-485 A+/B- wiring (try swapping Yellow/Green), Serial = 9600 8N1, and Modbus TCP enabled."
+                }
+            }
+        }
+        return result
     }
 
     public func handleTopologySwitch() {
@@ -795,10 +860,75 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             return
         }
 
+        if req.method == "POST" && path == "/api/modbus/gateway/auto_setup" {
+            let bodyJSON = parseJSONBody(req.body)
+            let port = intFromAny(bodyJSON["port"]) ?? FieldScanRuntimeConfig.defaultPusrPort
+            if port == ModbusTCPClient.legacyRTUBridgePort {
+                sendJSONResponse(on: connection, statusCode: 400, payload: [
+                    "ok": false,
+                    "status": "protocol_mismatch",
+                    "error_code": "PROTOCOL_MISMATCH",
+                    "message": "Port 5502 is reserved for raw RTU-over-TCP framing; configure PUSR USR-DR164 as Modbus TCP (MBAP) on port 502.",
+                ])
+                return
+            }
+            let baud = intFromAny(bodyJSON["baud_bps"]) ?? 9600
+            let savedHost = FieldScanRuntimeConfig.shared.pusrGatewayHost
+            let prefHost = ((bodyJSON["host"] as? String) ?? savedHost).trimmingCharacters(in: .whitespacesAndNewlines)
+            let result = runOneTapPusrAutoSetup(
+                preferredHost: prefHost.isEmpty ? nil : prefHost,
+                baud: baud,
+                port: port
+            )
+            sendJSONResponse(on: connection, statusCode: 200, payload: result)
+            return
+        }
+
+        if req.method == "POST" && path == "/api/modbus/gateway/discover" {
+            let bodyJSON = parseJSONBody(req.body)
+            let port = intFromAny(bodyJSON["port"]) ?? FieldScanRuntimeConfig.defaultPusrPort
+            if port == ModbusTCPClient.legacyRTUBridgePort {
+                sendJSONResponse(on: connection, statusCode: 400, payload: [
+                    "ok": false,
+                    "error_code": "PROTOCOL_MISMATCH",
+                    "message": "Port 5502 is reserved for raw RTU-over-TCP framing; configure PUSR USR-DR164 as Modbus TCP (MBAP) on port 502.",
+                ])
+                return
+            }
+            let timeoutS = (bodyJSON["timeout_s"] as? Double)
+                ?? (bodyJSON["timeout_s"] as? NSNumber)?.doubleValue
+                ?? 0.45
+            let autoSelect = boolFromAny(bodyJSON["auto_select"], defaultValue: true)
+            let savedHost = FieldScanRuntimeConfig.shared.pusrGatewayHost
+            var result = ModbusTCPClient.discoverDirectPusrAP(
+                port: port,
+                timeoutS: timeoutS,
+                savedHost: savedHost.isEmpty ? nil : savedHost
+            )
+            var autoSelected = false
+            if autoSelect, let recHost = result["recommended_host"] as? String, !recHost.isEmpty {
+                let recTopo = (result["recommended_topology"] as? String) ?? "ap_direct"
+                configurePusrGateway(host: recHost, port: port, activate: true, topology: recTopo)
+                autoSelected = true
+                result["gateway"] = [
+                    "host": recHost,
+                    "port": port,
+                    "topology": recTopo,
+                    "protocol": "modbus_tcp_mbap",
+                ]
+                result["modbus"] = getModbusTelemetry()
+            }
+            result["auto_selected"] = autoSelected
+            sendJSONResponse(on: connection, statusCode: 200, payload: result)
+            return
+        }
+
         if req.method == "POST" && path == "/api/modbus/gateway" {
             let bodyJSON = parseJSONBody(req.body)
             let host = ((bodyJSON["host"] as? String) ?? FieldScanRuntimeConfig.shared.pusrGatewayHost).trimmingCharacters(in: .whitespacesAndNewlines)
             let port = intFromAny(bodyJSON["port"]) ?? 502
+            let topology = ((bodyJSON["topology"] as? String) ?? "ap_direct").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let cleanTopo = topology == "sta_lan" ? "sta_lan" : "ap_direct"
             let activate = boolFromAny(bodyJSON["activate"] ?? bodyJSON["activate_mode"], defaultValue: !host.isEmpty)
             if port == ModbusTCPClient.legacyRTUBridgePort {
                 sendJSONResponse(on: connection, statusCode: 400, payload: [
@@ -808,10 +938,10 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 ])
                 return
             }
-            configurePusrGateway(host: host, port: port, activate: activate)
+            configurePusrGateway(host: host, port: port, activate: activate, topology: cleanTopo)
             sendJSONResponse(on: connection, statusCode: 200, payload: [
                 "ok": true,
-                "gateway": ["host": host, "port": port, "protocol": "modbus_tcp_mbap"],
+                "gateway": ["host": host, "port": port, "topology": cleanTopo, "protocol": "modbus_tcp_mbap"],
                 "modbus": getModbusTelemetry(),
             ])
             return
@@ -2588,23 +2718,66 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         stateLock.unlock()
 
         if mode == "pusr_tcp" || !FieldScanRuntimeConfig.shared.pusrGatewayHost.isEmpty {
-            stepModbusTelemetryOnce(forceImmediateTCPPoll: true)
-            let tel = getModbusTelemetry()
-            let ok = (tel["online"] as? Bool) ?? false
-            return [
-                "found": ok,
-                "port": tel["port"] ?? "tcp://\(FieldScanRuntimeConfig.shared.pusrGatewayHost):\(FieldScanRuntimeConfig.shared.pusrGatewayPort)",
-                "adapter": "PUSR USR-DR164 Modbus TCP Gateway (MBAP)",
-                "baud_bps": tel["baud_bps"] ?? baud,
-                "slave_id": tel["slave_id"] ?? sid,
-                "dip_bits": tel["dip_bits"] ?? Self.addressToDipBits(sid),
-                "temp_c": tel["temp_c"] ?? NSNull(),
-                "humidity_rh": tel["humidity_rh"] ?? NSNull(),
-                "tx_hex": tel["last_tx_hex"] ?? "",
-                "rx_hex": tel["last_rx_hex"] ?? "",
-                "roundtrip_ms": tel["roundtrip_ms"] ?? 0.0,
-                "ports_checked": [tel["port"] ?? ""],
-            ]
+            let cfg = FieldScanRuntimeConfig.shared
+            let host = cfg.pusrGatewayHost
+            let port = cfg.pusrGatewayPort
+            if !host.isEmpty {
+                stateLock.lock()
+                if pusrTCPClient == nil {
+                    pusrTCPClient = ModbusTCPClient(host: host, port: port, timeoutS: 1.0, pilotReadonly: true)
+                }
+                activeModbusMode = "pusr_tcp"
+                stateLock.unlock()
+
+                // 1. Try current targetSlaveId first
+                stepModbusTelemetryOnce(forceImmediateTCPPoll: true)
+                var tel = getModbusTelemetry()
+                var ok = (tel["online"] as? Bool) ?? false
+                var scannedIds: [Int] = [sid]
+
+                // 2. If TCP gateway is reachable (timeout/exception rather than unreachable/denied), scan common Slave IDs (strictly read-only FC03)
+                let errCode = (tel["error_code"] as? String) ?? ""
+                if !ok && errCode != "LOCAL_NETWORK_DENIED" && errCode != "SOURCE_UNAVAILABLE" && errCode != "PROTOCOL_MISMATCH" {
+                    let probeClient = ModbusTCPClient(host: host, port: port, timeoutS: 0.35, pilotReadonly: true)
+                    defer { probeClient.close() }
+                    let candidateIds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 176].filter { $0 != sid }
+                    for candId in candidateIds {
+                        scannedIds.append(candId)
+                        let probe = probeClient.readTHT02Holding(unitId: UInt8(candId), startReg: 0x0000, count: 8, respectBackoff: false)
+                        if (probe["ok"] as? Bool) == true {
+                            stateLock.lock()
+                            targetSlaveId = candId
+                            simulatedVisualDipAddress = candId
+                            stateLock.unlock()
+                            stepModbusTelemetryOnce(forceImmediateTCPPoll: true)
+                            tel = getModbusTelemetry()
+                            ok = (tel["online"] as? Bool) ?? false
+                            break
+                        }
+                        if (probe["error_code"] as? String) == "SOURCE_UNAVAILABLE" || (probe["error_code"] as? String) == "PROTOCOL_MISMATCH" {
+                            break
+                        }
+                    }
+                }
+
+                return [
+                    "found": ok,
+                    "port": tel["port"] ?? "tcp://\(host):\(port)",
+                    "adapter": "PUSR USR-DR164 Modbus TCP Gateway (MBAP)",
+                    "baud_bps": tel["baud_bps"] ?? baud,
+                    "slave_id": tel["slave_id"] ?? targetSlaveId,
+                    "scanned_ids": scannedIds,
+                    "error_code": tel["error_code"] ?? NSNull(),
+                    "error_detail": tel["error_detail"] ?? NSNull(),
+                    "dip_bits": tel["dip_bits"] ?? Self.addressToDipBits(targetSlaveId),
+                    "temp_c": tel["temp_c"] ?? NSNull(),
+                    "humidity_rh": tel["humidity_rh"] ?? NSNull(),
+                    "tx_hex": tel["last_tx_hex"] ?? "",
+                    "rx_hex": tel["last_rx_hex"] ?? "",
+                    "roundtrip_ms": tel["roundtrip_ms"] ?? 0.0,
+                    "ports_checked": [tel["port"] ?? "tcp://\(host):\(port)"],
+                ]
+            }
         }
 
         if mode == "sim_online" || mode == "sim_breath_test" {
@@ -2643,12 +2816,14 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let baud = activeBaudBps
         let breathT0 = breathTestStartTime
         var tcpClient = pusrTCPClient
-        if (mode == "pusr_tcp" || (mode == "auto" && !FieldScanRuntimeConfig.shared.pusrGatewayHost.isEmpty)) && tcpClient == nil {
+        if mode == "pusr_tcp" || (mode == "auto" && !FieldScanRuntimeConfig.shared.pusrGatewayHost.isEmpty) {
             let cfg = FieldScanRuntimeConfig.shared
             if !cfg.pusrGatewayHost.isEmpty {
-                let c = ModbusTCPClient(host: cfg.pusrGatewayHost, port: cfg.pusrGatewayPort, timeoutS: 1.0, pilotReadonly: true)
-                pusrTCPClient = c
-                tcpClient = c
+                if tcpClient == nil {
+                    let c = ModbusTCPClient(host: cfg.pusrGatewayHost, port: cfg.pusrGatewayPort, timeoutS: 1.0, pilotReadonly: true)
+                    pusrTCPClient = c
+                    tcpClient = c
+                }
                 if mode == "auto" {
                     mode = "pusr_tcp"
                 }
@@ -3053,8 +3228,13 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "pusr_gateway": [
                 "host": FieldScanRuntimeConfig.shared.pusrGatewayHost,
                 "port": FieldScanRuntimeConfig.shared.pusrGatewayPort,
+                "topology": FieldScanRuntimeConfig.shared.pusrGatewayTopology,
                 "configured": !FieldScanRuntimeConfig.shared.pusrGatewayHost.isEmpty,
                 "protocol": "modbus_tcp_mbap",
+                "presets": [
+                    ["host": FieldScanRuntimeConfig.defaultPusrAPHost, "port": FieldScanRuntimeConfig.defaultPusrPort, "label": "Direct PUSR AP Default", "topology": "ap_direct"],
+                    ["host": FieldScanRuntimeConfig.alternatePusrAPHost, "port": FieldScanRuntimeConfig.defaultPusrPort, "label": "Direct PUSR Alternate AP", "topology": "ap_direct"],
+                ],
             ],
             "repair": repairState,
             "system": sysInfo,
@@ -4551,8 +4731,14 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                     currentDipAddress: (res["simulated_visual_dip_address"] as? Int) ?? dipAddr,
                     sceneGeneration: sceneGen
                 )
+                let dipLookup = FieldScanManualNavigator.lookupManual(for: query, language: "en")
                 res["twin_action"] = prep["twin_action"] ?? NSNull()
                 res["twin_action_v1"] = prep["twin_action_v1"] ?? NSNull()
+                res["open_manual"] = true
+                res["open_manual_lightbox"] = FieldScanManualNavigator.isExplicitManualLookupQuery(query) || dipLookup.openLightbox
+                if let sec = dipLookup.sectionDict {
+                    res["manual_section"] = sec
+                }
                 return res
             }
             if intent == "signoff_report" {
@@ -5328,7 +5514,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 if isSpeakingNow && !isPtt {
                     self.lastTtsActiveUptime = now
                 }
-                let cooldownOk = isPtt || (!isSpeakingNow && (now - self.lastTtsActiveUptime) >= 0.28)
+                let cooldownOk = isPtt || (!isSpeakingNow && (now - self.lastTtsActiveUptime) >= 0.72)
                 guard self.activeSpeechSessionGeneration == sessionGen, cooldownOk else {
                     self.stateLock.unlock()
                     return
@@ -5382,21 +5568,23 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 self.lastTtsActiveUptime = now
             }
 
-            if !isPtt && (isSpeakingNow || (now - self.lastTtsActiveUptime) < 0.28) {
-                // Real-time Barge-In: if operator speaks over the AI (sustained AEC-cleaned RMS >= 0.046 for ~64ms), interrupt TTS immediately!
-                if isSpeakingNow && (now - self.ttsUtteranceStartUptime) >= 0.28 && rms >= 0.046 {
+            if !isPtt && (isSpeakingNow || (now - self.lastTtsActiveUptime) < 0.72) {
+                // Real-time Barge-In: require sustained human speech well above speaker bleed (RMS >= 0.095 for 5 frames after 0.55s)
+                if isSpeakingNow && (now - self.ttsUtteranceStartUptime) >= 0.55 && rms >= 0.095 {
                     self.bargeInConsecutiveFrames += 1
                 } else {
                     self.bargeInConsecutiveFrames = 0
                 }
 
-                if self.bargeInConsecutiveFrames >= 3 {
+                if self.bargeInConsecutiveFrames >= 5 {
                     self.bargeInConsecutiveFrames = 0
                     self.ttsSpeakingFlag = false
                     self.ttsExpectedEndUptime = 0
                     self.lastTtsActiveUptime = 0
+                    self.needsSpeechTaskResetAfterTts = false
                     isSpeakingNow = false
                     self.livePartialTranscript = ""
+                    self.lastTranscriptChangeTime = 0
                     self.liveRecordedPcmSamples = self.livePreRollPcmSamples
                     self.livePreRollPcmSamples.removeAll(keepingCapacity: true)
                     self.liveRecordedPcmSamples.append(contentsOf: pcmChunk)
@@ -5500,6 +5688,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         liveSpeechRequest = nil
         liveTapInstalled = false
         let capturedText = livePartialTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        livePartialTranscript = ""
+        lastTranscriptChangeTime = 0
         var capturedSamples = liveRecordedPcmSamples
         if capturedSamples.isEmpty && !livePreRollPcmSamples.isEmpty {
             capturedSamples = livePreRollPcmSamples
@@ -5747,11 +5937,15 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             ]
         }
 
-        var diag = handleDiagnoseRequest(payload: [
+        var diagPayload: [String: Any] = [
             "query": transcript,
             "include_camera": true,
             "dip_address": dipAddr,
-        ])
+        ]
+        if let sid = payload["session_id"] as? String { diagPayload["session_id"] = sid }
+        if let mSha = payload["manifest_sha256"] as? String { diagPayload["manifest_sha256"] = mSha }
+        if let sGen = payload["scene_generation"] { diagPayload["scene_generation"] = sGen }
+        var diag = handleDiagnoseRequest(payload: diagPayload)
         diag["transcript"] = transcript
         diag["asr_ms"] = asrMs
         diag["sensor_id"] = "TZ-THT-02"
@@ -5801,7 +5995,10 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         stateLock.lock()
         handsFreeActive = true
         handsFreeTurnInFlight = false
-        pendingHandsFreeResult = nil
+        pendingHandsFreeResults.removeAll()
+        needsSpeechTaskResetAfterTts = false
+        lastCompletedLiveTranscriptNorm = ""
+        lastCompletedLiveTurnUptime = 0
         handsFreeMonitorTimer?.cancel()
         handsFreeMonitorTimer = nil
         stateLock.unlock()
@@ -5850,7 +6047,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         if aiSpeaking {
             lastTtsActiveUptime = now
         }
-        let inEchoCooldown = aiSpeaking || (now - lastTtsActiveUptime) < 0.28
+        let inEchoCooldown = aiSpeaking || (now - lastTtsActiveUptime) < 0.72
+        let needsReset = needsSpeechTaskResetAfterTts
         let tapCurrentlyInstalled = liveTapInstalled
         let sinceLastStartAttempt = now - lastAudioStartAttemptUptime
 
@@ -5871,11 +6069,22 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         }
 
         if inEchoCooldown {
-            // Keep `liveAudioEngine` + hardware AEC running continuously so real-time Barge-In works with zero restart delay!
+            // Keep `liveAudioEngine` + hardware AEC running continuously while discarding speaker echo
+            livePartialTranscript = ""
+            lastTranscriptChangeTime = 0
             stateLock.unlock()
             if !tapCurrentlyInstalled && sinceLastStartAttempt >= 0.45 {
                 _ = startLiveAudioRecognitionPipelineOnAudioQueue(resetTranscript: true)
             }
+            return
+        }
+        if needsReset {
+            needsSpeechTaskResetAfterTts = false
+            livePartialTranscript = ""
+            lastTranscriptChangeTime = 0
+            stateLock.unlock()
+            // Recreate SFSpeechRecognitionTask cleanly after TTS ends so Apple ASR never replays stale accumulated text
+            _ = startLiveAudioRecognitionPipelineOnAudioQueue(resetTranscript: true)
             return
         }
         stateLock.unlock()
@@ -5898,13 +6107,13 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let dipAddr = targetSlaveId
         let words = currentTranscript.split(whereSeparator: { $0.isWhitespace })
 
-        let hasEnoughWords = words.count >= 2 || (words.count == 1 && currentTranscript.count >= 2)
-        let transcriptReady = !currentTranscript.isEmpty && hasEnoughWords && lastChange > 0 && (now - lastChange) >= 0.55
+        let hasEnoughWords = words.count >= 2 || (words.count == 1 && currentTranscript.count >= 3)
+        let transcriptReady = !currentTranscript.isEmpty && hasEnoughWords && lastChange > 0 && (now - lastChange) >= 0.60
         let acousticVadReady = liveVoiceDetectedInSession
-            && liveActiveSpeechFrames >= 4
-            && liveRecordedPcmSamples.count >= 3200
+            && liveActiveSpeechFrames >= 5
+            && liveRecordedPcmSamples.count >= 4000
             && lastVoiceActivityTime > 0
-            && (now - lastVoiceActivityTime) >= 0.62
+            && (now - lastVoiceActivityTime) >= 0.68
 
         guard transcriptReady || acousticVadReady else {
             stateLock.unlock()
@@ -5918,19 +6127,37 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
         let (capturedPartial, capturedPcm, capturedFrames) = stopLiveAudioRecognitionPipelineOnAudioQueue()
 
-        // Offload ASR fallback + diagnosis onto `voiceDiagnosisQueue` so `audioEngineQueue` returns in <1 ms
+        // Offload ASR fallback + echo guard + diagnosis onto `voiceDiagnosisQueue` so `audioEngineQueue` returns in <1 ms
         voiceDiagnosisQueue.async { [weak self] in
             guard let self = self else { return }
             let finalTranscript = self.transcribeCapturedVoiceSession(
                 partialTranscript: capturedPartial.isEmpty ? currentTranscript : capturedPartial,
                 pcmSamples: capturedPcm,
                 activeFrames: max(capturedFrames, 5)
-            )
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
 
             let cleanedAlpha = finalTranscript.replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
             guard cleanedAlpha.count >= 2 else {
                 self.stateLock.lock()
                 self.handsFreeTurnInFlight = false
+                self.stateLock.unlock()
+                return
+            }
+
+            // Anti-Echo & Anti-Repeat Loop Guard (`VOZ-02`): drop transcripts overlapping recent AI TTS speech or rapid duplicates
+            let (isEcho, _) = FieldScanSessionEngine.shared.isTTSEchoOrDuplicate(utterance: finalTranscript)
+            let normLive = FieldScanManualNavigator.stripAccentsLower(finalTranscript)
+            let nowCheck = ProcessInfo.processInfo.systemUptime
+            self.stateLock.lock()
+            let isRapidRepeat = !normLive.isEmpty
+                && normLive == self.lastCompletedLiveTranscriptNorm
+                && (nowCheck - self.lastCompletedLiveTurnUptime) < 4.0
+            self.stateLock.unlock()
+
+            if isEcho || isRapidRepeat {
+                self.stateLock.lock()
+                self.handsFreeTurnInFlight = false
+                self.needsSpeechTaskResetAfterTts = true
                 self.stateLock.unlock()
                 return
             }
@@ -5946,10 +6173,16 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
             self.stateLock.lock()
             if self.handsFreeActive {
-                self.pendingHandsFreeResult = diag
+                self.pendingHandsFreeResults.append(diag)
+                if self.pendingHandsFreeResults.count > 16 {
+                    self.pendingHandsFreeResults.removeFirst(self.pendingHandsFreeResults.count - 16)
+                }
             }
+            self.lastCompletedLiveTranscriptNorm = normLive
+            self.lastCompletedLiveTurnUptime = ProcessInfo.processInfo.systemUptime
             self.handsFreeTurnInFlight = false
             self.lastTtsActiveUptime = ProcessInfo.processInfo.systemUptime
+            self.needsSpeechTaskResetAfterTts = true
             self.stateLock.unlock()
         }
     }
@@ -5972,8 +6205,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 partial = "Listening to your voice..."
             }
         }
-        let popped = pendingHandsFreeResult
-        pendingHandsFreeResult = nil
+        let drained = pendingHandsFreeResults
+        pendingHandsFreeResults.removeAll()
         stateLock.unlock()
 
         return [
@@ -5982,7 +6215,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "rms_pct": rmsPct,
             "partial_transcript": partial,
             "ai_speaking": aiSpeaking,
-            "completed_turn": popped as Any? ?? NSNull(),
+            "completed_turns": drained,
+            "completed_turn": drained.last as Any? ?? NSNull(),
         ]
     }
 
@@ -5990,7 +6224,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         stateLock.lock()
         handsFreeActive = false
         handsFreeTurnInFlight = false
-        pendingHandsFreeResult = nil
+        pendingHandsFreeResults.removeAll()
+        needsSpeechTaskResetAfterTts = false
         handsFreeMonitorTimer?.cancel()
         handsFreeMonitorTimer = nil
         stateLock.unlock()
@@ -6039,11 +6274,14 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             ]
         }
 
-        var diag = handleDiagnoseRequest(payload: [
+        var diagPayload: [String: Any] = [
             "query": transcript,
             "include_camera": true,
             "dip_address": dipAddr,
-        ])
+        ]
+        if let sid = parsedForm.fields["session_id"], !sid.isEmpty { diagPayload["session_id"] = sid }
+        if let mSha = parsedForm.fields["manifest_sha256"], !mSha.isEmpty { diagPayload["manifest_sha256"] = mSha }
+        var diag = handleDiagnoseRequest(payload: diagPayload)
         diag["transcript"] = transcript
         diag["asr_ms"] = asrMs
         diag["sensor_id"] = "TZ-THT-02"

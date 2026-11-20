@@ -480,6 +480,7 @@ class ModbusRTUScanner:
         self.max_sample_age_s: float = DEFAULT_MAX_SAMPLE_AGE_S
         self._pusr_host: str = os.environ.get("FIELDSCAN_PUSR_HOST", "").strip()
         self._pusr_port: int = int(os.environ.get("FIELDSCAN_PUSR_PORT", "502") or 502)
+        self._pusr_topology: str = "ap_direct"
         self._pusr_client: Any = None
         self.tx_audit_log: deque[dict[str, Any]] = deque(maxlen=256)
         self._breath_started_at: float = 0.0
@@ -490,12 +491,13 @@ class ModbusRTUScanner:
         if auto_start:
             self.start()
 
-    def set_pusr_gateway(self, host: str, port: int = 502) -> dict[str, Any]:
+    def set_pusr_gateway(self, host: str, port: int = 502, topology: str = "ap_direct") -> dict[str, Any]:
         """Configure isolated bench PUSR USR-DR164 Modbus TCP gateway (`MBAP`), cancelling prior connections."""
         from fieldscan.offline_guard import set_authorized_bench_gateway
 
         clean_host = (host or "").strip()
         clean_port = int(port)
+        clean_topo = "sta_lan" if str(topology or "").strip().lower() == "sta_lan" else "ap_direct"
         with self._lock:
             if self._pusr_client is not None:
                 try:
@@ -505,6 +507,7 @@ class ModbusRTUScanner:
                 self._pusr_client = None
             self._pusr_host = clean_host
             self._pusr_port = clean_port
+            self._pusr_topology = clean_topo
             self._connection_generation += 1
             self._last_hw_success = None
             self._last_valid_monotonic = -999.0
@@ -516,6 +519,7 @@ class ModbusRTUScanner:
             return {
                 "pusr_host": self._pusr_host,
                 "pusr_port": self._pusr_port,
+                "topology": self._pusr_topology,
                 "connection_generation": self._connection_generation,
             }
 

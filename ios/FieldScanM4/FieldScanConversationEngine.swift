@@ -597,7 +597,12 @@ public final class FieldScanConversationEngine {
             return "Hello! I'm FieldScan AI running locally on your iPad Air M4. Ask me in English to manipulate the 3D Digital Twin, inspect anything on the live camera, jump to a datasheet section, or check Modbus telemetry."
         }
 
-        return "Got it—I'm following right along. Let me know what you'd like me to show on the 3D Digital Twin, inspect on the camera, or open in the datasheet."
+        let trimmedNorm = norm.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedNorm.isEmpty {
+            let shortEcho = String(trimmedNorm.prefix(70))
+            return "I heard \"\(shortEcho)\". Tell me if you want me to open a datasheet page, inspect the camera view, rotate or explode the 3D sensor twin, or check Modbus readings."
+        }
+        return "I'm listening—tell me which datasheet section, 3D sensor zone, or Modbus reading you want to inspect."
     }
 
     private func buildSensorDiagnosticFallback(

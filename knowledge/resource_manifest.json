@@ -79,16 +79,16 @@
       "size_bytes": 3189
     },
     "static/app.js": {
-      "sha256": "783e671f4331268bd49bf3397b9f3114609950049bbf8a9a07cc1546c3a97661",
-      "size_bytes": 258086
+      "sha256": "3df9319c0dc1910275f77de7472aca9c20efe7dab7c9ea891cd06021717d86bc",
+      "size_bytes": 291624
     },
     "static/index.html": {
-      "sha256": "764596636ba5478bdb40d9ee8dd8a5b4105b49f3d58e765b30423fa099598ebc",
-      "size_bytes": 46305
+      "sha256": "dff4cdc7b49e4efc8dddcdc9078a8388fa2f65fc4ce2ed96e5eb9201ddc2332d",
+      "size_bytes": 38101
     },
     "static/styles.css": {
-      "sha256": "fc16b80808c85cf05dc8f894ba96c78572a4f7042376bba0ecba359dacb8aebd",
-      "size_bytes": 67788
+      "sha256": "c39c1beec8057d9a0c18851b4294144f28203cc8584f9cb57c3560cdf56b8f7c",
+      "size_bytes": 45632
     },
     "static/vendor/BufferGeometryUtils.js": {
       "sha256": "448c8dc2e08075d2e7ab9c915075fcdaf95b39e3875d6aedd97c4e38d9c2d9dd",
@@ -128,5 +128,5 @@
     }
   },
   "schema_version": 1,
-  "tree_sha256": "d0a959e0b529275844a572e58357fb439c2e470cb10e0402bf855fdb1b4b4d66"
+  "tree_sha256": "78b0c19b5cd7a3d57f7d7c092da5d8aa7c74231a2f1c718182a0b3d4aacd0d3b"
 }

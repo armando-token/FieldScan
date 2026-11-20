@@ -816,4 +816,603 @@ public final class ModbusTCPClient {
             }
         }
     }
+
+    // MARK: - AP-First Direct PUSR Gateway Discovery (Explicit Operator Action Only; Zero Startup Egress)
+
+    public static let defaultDirectAPHost = "10.10.100.254"
+    public static let alternateDirectAPHost = "192.168.0.7"
+    public static let fallbackDirectAPHost = "192.168.4.1"
+
+    public struct DirectAPCandidate {
+        public let host: String
+        public let label: String
+        public let topology: String
+    }
+
+    /// Returns `true` strictly for private RFC1918 IPv4 addresses (`10/8`, `172.16/12`, `192.168/16`).
+    /// Optionally permits loopback (`127.0.0.1`) only when `allowLoopback == true` (for unit tests).
+    public static func isPrivateRFC1918IPv4(_ host: String, allowLoopback: Bool = false) -> Bool {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        var addr = in_addr()
+        guard inet_pton(AF_INET, trimmed, &addr) == 1 else { return false }
+        let ip = UInt32(bigEndian: addr.s_addr)
+        let b0 = (ip >> 24) & 0xFF
+        let b1 = (ip >> 16) & 0xFF
+        if b0 == 10 { return true }
+        if b0 == 172 && (16...31).contains(b1) { return true }
+        if b0 == 192 && b1 == 168 { return true }
+        if allowLoopback && b0 == 127 { return true }
+        return false
+    }
+
+    /// Reads the device's active Wi-Fi (`en0`) private RFC1918 IPv4 address using POSIX `getifaddrs()`.
+    public static func detectActiveWiFiIPv4() -> String? {
+        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrPtr) == 0, let firstAddr = ifaddrPtr else {
+            return nil
+        }
+        defer { freeifaddrs(ifaddrPtr) }
+
+        var fallbackIP: String?
+        var cursor: UnsafeMutablePointer<ifaddrs>? = firstAddr
+        while let ptr = cursor {
+            let entry = ptr.pointee
+            cursor = entry.ifa_next
+
+            let flags = Int32(entry.ifa_flags)
+            guard (flags & IFF_UP) != 0, (flags & IFF_LOOPBACK) == 0 else { continue }
+            guard let sa = entry.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
+
+            let ifaceName = String(cString: entry.ifa_name)
+            var addrIn = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
+            var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            guard inet_ntop(AF_INET, &addrIn, &buf, socklen_t(INET_ADDRSTRLEN)) != nil else { continue }
+            let ipStr = String(cString: buf)
+            guard isPrivateRFC1918IPv4(ipStr) else { continue }
+
+            if ifaceName == "en0" {
+                return ipStr
+            }
+            if ifaceName.hasPrefix("en") && fallbackIP == nil {
+                fallbackIP = ipStr
+            }
+        }
+        return fallbackIP
+    }
+
+    /// Builds a prioritized, deduplicated list of private RFC1918 PUSR Direct AP candidates.
+    public static func buildDirectAPCandidateHosts(
+        wifiIP: String?,
+        savedHost: String? = nil,
+        extraHosts: [String] = [],
+        allowLoopbackExtra: Bool = false
+    ) -> [DirectAPCandidate] {
+        var seen = Set<String>()
+        var out: [DirectAPCandidate] = []
+        let cleanWifi = wifiIP?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        func add(_ host: String, label: String, topology: String = "ap_direct", allowLoopback: Bool = false) {
+            let h = host.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !h.isEmpty, h != cleanWifi else { return }
+            guard isPrivateRFC1918IPv4(h, allowLoopback: allowLoopback) else { return }
+            guard !seen.contains(h) else { return }
+            seen.insert(h)
+            out.append(DirectAPCandidate(host: h, label: label, topology: topology))
+        }
+
+        // 1. Derive gateway candidates directly from active Wi-Fi subnet (`A.B.C.254` PUSR AP pattern first)
+        if let w = cleanWifi, isPrivateRFC1918IPv4(w) {
+            let octets = w.split(separator: ".")
+            if octets.count == 4 {
+                let prefix = "\(octets[0]).\(octets[1]).\(octets[2])"
+                let isPusrDefaultSubnet = (prefix == "10.10.100")
+                add("\(prefix).254", label: isPusrDefaultSubnet ? "Direct PUSR AP Default (Active Subnet)" : "Active Wi-Fi Subnet AP (.254)")
+                add("\(prefix).1", label: "Active Wi-Fi Subnet AP (.1)")
+                add("\(prefix).7", label: "Active Wi-Fi Subnet Static (.7)")
+            }
+        }
+
+        // 2. Well-known PUSR Direct AP factory defaults
+        add(defaultDirectAPHost, label: "Direct PUSR AP Default")
+        add(alternateDirectAPHost, label: "Direct PUSR Alternate AP")
+        add(fallbackDirectAPHost, label: "Direct Wi-Fi AP Fallback")
+
+        // 3. Previously saved private gateway host if not already present
+        if let saved = savedHost?.trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
+            add(saved, label: "Saved Gateway", topology: "ap_direct")
+        }
+
+        // 4. Optional explicit private (or test loopback) hosts
+        for extra in extraHosts {
+            add(extra, label: "Explicit Bench Candidate", topology: "ap_direct", allowLoopback: allowLoopbackExtra)
+        }
+
+        return out
+    }
+
+    /// Fast non-blocking TCP reachability probe on MBAP port (default `:502`); strictly refuses `:5502` and WAN IPs.
+    public static func probeTCPPort(
+        host: String,
+        port: Int = 502,
+        timeoutS: Double = 0.45,
+        allowLoopback: Bool = false
+    ) -> (reachable: Bool, rttMs: Double, errorCode: String?) {
+        if port == legacyRTUBridgePort {
+            return (false, 0.0, "PROTOCOL_MISMATCH")
+        }
+        let cleanHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isPrivateRFC1918IPv4(cleanHost, allowLoopback: allowLoopback) else {
+            return (false, 0.0, "WAN_HOST_BLOCKED")
+        }
+
+        let t0 = ProcessInfo.processInfo.systemUptime
+        var hints = addrinfo()
+        hints.ai_family = AF_INET
+        hints.ai_socktype = SOCK_STREAM
+        hints.ai_protocol = IPPROTO_TCP
+
+        var resPtr: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(cleanHost, String(port), &hints, &resPtr) == 0, let info = resPtr else {
+            return (false, 0.0, "UNRESOLVABLE")
+        }
+        defer { freeaddrinfo(resPtr) }
+
+        let fd = Darwin.socket(info.pointee.ai_family, info.pointee.ai_socktype, info.pointee.ai_protocol)
+        guard fd >= 0 else {
+            return (false, 0.0, "SOCKET_ALLOC_FAILED")
+        }
+        defer { Darwin.close(fd) }
+
+        var one: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+
+        let rc = Darwin.connect(fd, info.pointee.ai_addr, info.pointee.ai_addrlen)
+        if rc == 0 {
+            let rtt = ((ProcessInfo.processInfo.systemUptime - t0) * 1000.0 * 10.0).rounded() / 10.0
+            return (true, rtt, nil)
+        }
+        if errno != EINPROGRESS {
+            let err = errno
+            let code = (err == EACCES || err == EPERM) ? "LOCAL_NETWORK_DENIED" : "UNREACHABLE"
+            let rtt = ((ProcessInfo.processInfo.systemUptime - t0) * 1000.0 * 10.0).rounded() / 10.0
+            return (false, rtt, code)
+        }
+
+        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        let boundedTimeout = min(max(timeoutS, 0.15), 2.0)
+        let timeoutMs = Int32((boundedTimeout * 1000.0).rounded())
+        let prc = Darwin.poll(&pfd, 1, timeoutMs)
+        let rtt = ((ProcessInfo.processInfo.systemUptime - t0) * 1000.0 * 10.0).rounded() / 10.0
+        if prc <= 0 {
+            return (false, rtt, "TIMEOUT")
+        }
+        var soErr: Int32 = 0
+        var soLen = socklen_t(MemoryLayout<Int32>.size)
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &soLen)
+        if soErr != 0 {
+            let code = (soErr == EACCES || soErr == EPERM) ? "LOCAL_NETWORK_DENIED" : "UNREACHABLE"
+            return (false, rtt, code)
+        }
+        return (true, rtt, nil)
+    }
+
+    /// Parallel AP-First discovery probe across active Wi-Fi subnet and PUSR factory Direct AP defaults.
+    public static func discoverDirectPusrAP(
+        port: Int = 502,
+        timeoutS: Double = 0.45,
+        savedHost: String? = nil,
+        extraHosts: [String] = [],
+        allowLoopbackExtra: Bool = false
+    ) -> [String: Any] {
+        let presets: [[String: Any]] = [
+            ["host": defaultDirectAPHost, "port": port, "label": "Direct PUSR AP Default", "topology": "ap_direct"],
+            ["host": alternateDirectAPHost, "port": port, "label": "Direct PUSR Alternate AP", "topology": "ap_direct"],
+        ]
+
+        if port == legacyRTUBridgePort {
+            return [
+                "ok": false,
+                "found": false,
+                "error_code": "PROTOCOL_MISMATCH",
+                "port": port,
+                "wifi_ip": NSNull(),
+                "recommended_host": NSNull(),
+                "recommended_topology": "ap_direct",
+                "candidates": [],
+                "presets": presets,
+                "message": "Port 5502 is reserved for raw RTU-over-TCP framing; configure PUSR USR-DR164 in Modbus TCP (MBAP) mode on port 502.",
+            ]
+        }
+
+        let wifiIP = detectActiveWiFiIPv4()
+        let candidates = buildDirectAPCandidateHosts(
+            wifiIP: wifiIP,
+            savedHost: savedHost,
+            extraHosts: extraHosts,
+            allowLoopbackExtra: allowLoopbackExtra
+        )
+
+        var orderedResults = Array<[String: Any]?>(repeating: nil, count: candidates.count)
+        let resultsLock = NSLock()
+        let group = DispatchGroup()
+        let queue = DispatchQueue.global(qos: .userInitiated)
+
+        for (index, cand) in candidates.enumerated() {
+            group.enter()
+            queue.async {
+                let probe = probeTCPPort(
+                    host: cand.host,
+                    port: port,
+                    timeoutS: timeoutS,
+                    allowLoopback: allowLoopbackExtra
+                )
+                let row: [String: Any] = [
+                    "host": cand.host,
+                    "port": port,
+                    "label": cand.label,
+                    "topology": cand.topology,
+                    "reachable": probe.reachable,
+                    "rtt_ms": probe.rttMs,
+                    "error_code": probe.errorCode ?? NSNull(),
+                ]
+                resultsLock.lock()
+                orderedResults[index] = row
+                resultsLock.unlock()
+                group.leave()
+            }
+        }
+        group.wait()
+
+        let finalRows = orderedResults.compactMap { $0 }
+        let winner = finalRows.first { ($0["reachable"] as? Bool) == true }
+        let recHost = winner?["host"] as? String
+        let recTopo = (winner?["topology"] as? String) ?? "ap_direct"
+        let anyPermissionDenied = finalRows.contains { ($0["error_code"] as? String) == "LOCAL_NETWORK_DENIED" }
+
+        let message: String
+        if let foundHost = recHost {
+            let rtt = (winner?["rtt_ms"] as? Double) ?? 0.0
+            message = String(format: "Detected PUSR Modbus TCP gateway at %@:%d (%.1f ms).", foundHost, port, rtt)
+        } else if anyPermissionDenied {
+            message = "iPadOS Local Network permission denied. Enable Local Network for FieldScanM4 in iPad Settings and retry."
+        } else if let wip = wifiIP {
+            message = "No PUSR gateway answered on port \(port) from Wi-Fi IP \(wip). Join the PUSR AP Wi-Fi SSID in iPad Settings, verify pure AP Mode + Modbus TCP (:\(port)), or tap a preset below."
+        } else {
+            message = "No active Wi-Fi IPv4 address detected. Join the PUSR USR-DR164 Direct AP Wi-Fi SSID in iPad Settings (no router or internet needed), then retry."
+        }
+
+        return [
+            "ok": true,
+            "found": recHost != nil,
+            "wifi_ip": wifiIP ?? NSNull(),
+            "port": port,
+            "recommended_host": recHost ?? NSNull(),
+            "recommended_topology": recTopo,
+            "candidates": finalRows,
+            "presets": presets,
+            "message": message,
+        ]
+    }
+
+    // MARK: - 1-Tap PUSR USR-DR164 UDP 48899 Discovery & Auto-Provisioning (Explicit Operator Action Only)
+
+    public static let pusrUDPConfigPort: Int = 48899
+    public static let pusrFactoryTCPPort: Int = 8899
+
+    /// Sends one UDP datagram on private RFC1918 LAN to PUSR's Network AT port (`48899`) and awaits reply.
+    public static func sendPusrUDPCommand(
+        host: String,
+        command: String,
+        port: Int = 48899,
+        timeoutS: Double = 0.65,
+        sharedSocketFD: Int32? = nil
+    ) -> (reply: String?, senderIP: String?, errorCode: String?) {
+        let cleanHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isPrivateRFC1918IPv4(cleanHost) else {
+            return (nil, nil, "WAN_HOST_BLOCKED")
+        }
+
+        let fd: Int32
+        let ownsFD: Bool
+        if let existing = sharedSocketFD, existing >= 0 {
+            fd = existing
+            ownsFD = false
+        } else {
+            fd = Darwin.socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+            guard fd >= 0 else { return (nil, nil, "SOCKET_ALLOC_FAILED") }
+            ownsFD = true
+            var one: Int32 = 1
+            setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, socklen_t(MemoryLayout<Int32>.size))
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
+            let flags = fcntl(fd, F_GETFL, 0)
+            _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        }
+        defer {
+            if ownsFD { Darwin.close(fd) }
+        }
+
+        var dst = sockaddr_in()
+        dst.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        dst.sin_family = sa_family_t(AF_INET)
+        dst.sin_port = UInt16(clamping: port).bigEndian
+        guard inet_pton(AF_INET, cleanHost, &dst.sin_addr) == 1 else {
+            return (nil, nil, "INVALID_IP")
+        }
+
+        let data = Data(command.utf8)
+        let sent = data.withUnsafeBytes { rawPtr -> Int in
+            guard let base = rawPtr.baseAddress else { return -1 }
+            return withUnsafePointer(to: &dst) { dstPtr in
+                dstPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { saPtr in
+                    Darwin.sendto(fd, base, data.count, 0, saPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+        }
+        if sent < 0 {
+            let err = errno
+            let code = (err == EACCES || err == EPERM) ? "LOCAL_NETWORK_DENIED" : "UDP_SEND_FAILED"
+            return (nil, nil, code)
+        }
+
+        var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        let boundedMs = Int32((min(max(timeoutS, 0.15), 2.0) * 1000.0).rounded())
+        let prc = Darwin.poll(&pfd, 1, boundedMs)
+        if prc <= 0 {
+            return (nil, nil, "TIMEOUT")
+        }
+
+        var rxBuf = [UInt8](repeating: 0, count: 1024)
+        var srcAddr = sockaddr_in()
+        var srcLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let n = withUnsafeMutablePointer(to: &srcAddr) { srcPtr in
+            srcPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { saPtr in
+                Darwin.recvfrom(fd, &rxBuf, rxBuf.count, 0, saPtr, &srcLen)
+            }
+        }
+        guard n > 0 else {
+            return (nil, nil, "EMPTY_REPLY")
+        }
+        var ipBuf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        var sinIn = srcAddr.sin_addr
+        let senderIP = inet_ntop(AF_INET, &sinIn, &ipBuf, socklen_t(INET_ADDRSTRLEN)).map { String(cString: $0) }
+        let replyStr = String(bytes: rxBuf.prefix(n), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return (replyStr, senderIP, nil)
+    }
+
+    /// 1-Tap PUSR USR-DR164 diagnostics & automatic UDP `48899` provisioning (`9600 8N1`, `TCP Server :502`, `Modbus TCP`, `AT+Z`).
+    public static func autoProvisionPusrGateway(
+        preferredHost: String? = nil,
+        baud: Int = 9600,
+        targetPort: Int = 502
+    ) -> [String: Any] {
+        if targetPort == legacyRTUBridgePort {
+            return [
+                "ok": false,
+                "status": "protocol_mismatch",
+                "error_code": "PROTOCOL_MISMATCH",
+                "message": "Port 5502 is forbidden; PUSR USR-DR164 must run Modbus TCP (MBAP) on port 502.",
+            ]
+        }
+
+        let wifiIP = detectActiveWiFiIPv4()
+        let candidates = buildDirectAPCandidateHosts(wifiIP: wifiIP, savedHost: preferredHost)
+        let candidateHosts = candidates.map { $0.host }
+
+        // 1. Probe UDP 48899 ("www.usr.cn") across active subnet & PUSR defaults to identify unit even on factory port 8899
+        var udpTargets: [String] = []
+        if let w = wifiIP, isPrivateRFC1918IPv4(w) {
+            let octs = w.split(separator: ".")
+            if octs.count == 4 {
+                let pfx = "\(octs[0]).\(octs[1]).\(octs[2])"
+                udpTargets.append("\(pfx).254")
+                udpTargets.append("\(pfx).255")
+                udpTargets.append("\(pfx).1")
+            }
+        }
+        for h in [preferredHost ?? "", defaultDirectAPHost, alternateDirectAPHost] where isPrivateRFC1918IPv4(h) {
+            if !udpTargets.contains(h) { udpTargets.append(h) }
+        }
+
+        let udpFD = Darwin.socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        if udpFD >= 0 {
+            var one: Int32 = 1
+            setsockopt(udpFD, SOL_SOCKET, SO_BROADCAST, &one, socklen_t(MemoryLayout<Int32>.size))
+            setsockopt(udpFD, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
+            let flags = fcntl(udpFD, F_GETFL, 0)
+            _ = fcntl(udpFD, F_SETFL, flags | O_NONBLOCK)
+        }
+        defer { if udpFD >= 0 { Darwin.close(udpFD) } }
+
+        var udpReply: String?
+        var udpHost: String?
+        var localNetDenied = false
+        for target in udpTargets {
+            let res = sendPusrUDPCommand(
+                host: target,
+                command: "www.usr.cn",
+                port: pusrUDPConfigPort,
+                timeoutS: 0.45,
+                sharedSocketFD: udpFD >= 0 ? udpFD : nil
+            )
+            if res.errorCode == "LOCAL_NETWORK_DENIED" {
+                localNetDenied = true
+                break
+            }
+            if let rep = res.reply, !rep.isEmpty {
+                udpReply = rep
+                let firstField = rep.split(separator: ",").first.map(String.init) ?? ""
+                if isPrivateRFC1918IPv4(firstField) {
+                    udpHost = firstField
+                } else if let sip = res.senderIP, isPrivateRFC1918IPv4(sip) {
+                    udpHost = sip
+                } else if !target.hasSuffix(".255") {
+                    udpHost = target
+                }
+                break
+            }
+        }
+
+        // 2. Check TCP :502 (ready), :8899 (factory default), and :80 (web UI) on discovered host or top candidates
+        var probeList: [String] = []
+        if let uh = udpHost { probeList.append(uh) }
+        for h in candidateHosts where !probeList.contains(h) { probeList.append(h) }
+
+        var host502: String?
+        var host8899: String?
+        var host80: String?
+        for h in probeList.prefix(4) {
+            let p502 = probeTCPPort(host: h, port: targetPort, timeoutS: 0.35)
+            if p502.errorCode == "LOCAL_NETWORK_DENIED" { localNetDenied = true; break }
+            if p502.reachable { host502 = h; break }
+            let p8899 = probeTCPPort(host: h, port: pusrFactoryTCPPort, timeoutS: 0.30)
+            if p8899.reachable && host8899 == nil { host8899 = h }
+            let p80 = probeTCPPort(host: h, port: 80, timeoutS: 0.30)
+            if p80.reachable && host80 == nil { host80 = h }
+        }
+
+        if localNetDenied {
+            return [
+                "ok": false,
+                "status": "local_network_denied",
+                "error_code": "LOCAL_NETWORK_DENIED",
+                "wifi_ip": wifiIP ?? NSNull(),
+                "message": "iPadOS Local Network permission is OFF for FieldScanM4. Open iPad Settings > Privacy & Security > Local Network and enable FieldScanM4.",
+            ]
+        }
+
+        // Case A: Already listening on Modbus TCP :502!
+        if let readyHost = host502 {
+            return [
+                "ok": true,
+                "status": "ready_on_502",
+                "host": readyHost,
+                "port": targetPort,
+                "topology": "ap_direct",
+                "wifi_ip": wifiIP ?? NSNull(),
+                "udp_identity": udpReply ?? NSNull(),
+                "port_502_open": true,
+                "port_8899_open": false,
+                "at_log": [],
+                "message": "PUSR gateway is live on \(readyHost):\(targetPort) (Modbus TCP). Selected gateway and scanning RS-485 bus now.",
+            ]
+        }
+
+        // Case B: PUSR detected (via UDP 48899, factory :8899, or web :80) -> attempt 1-tap UDP Network AT auto-provisioning!
+        if let foundHost = udpHost ?? host8899 ?? host80 {
+            var atLog: [[String: String]] = []
+            var appliedCount = 0
+            var rebootSent = false
+
+            if udpFD >= 0 {
+                // Re-enter Network AT mode specifically against `foundHost`
+                let hello = sendPusrUDPCommand(host: foundHost, command: "www.usr.cn", port: pusrUDPConfigPort, timeoutS: 0.50, sharedSocketFD: udpFD)
+                if let r = hello.reply, !r.isEmpty {
+                    atLog.append(["cmd": "www.usr.cn", "reply": r])
+                    let ack = sendPusrUDPCommand(host: foundHost, command: "+ok", port: pusrUDPConfigPort, timeoutS: 0.40, sharedSocketFD: udpFD)
+                    if let ar = ack.reply, !ar.isEmpty {
+                        atLog.append(["cmd": "+ok", "reply": ar])
+                    }
+
+                    func runAT(_ cmd: String) -> String {
+                        let r = sendPusrUDPCommand(host: foundHost, command: "\(cmd)\r\n", port: pusrUDPConfigPort, timeoutS: 0.55, sharedSocketFD: udpFD)
+                        let out = r.reply ?? (r.errorCode ?? "NO_REPLY")
+                        atLog.append(["cmd": cmd, "reply": out])
+                        return out
+                    }
+
+                    _ = runAT("AT+VER")
+                    let wResp = runAT("AT+WMODE=AP")
+                    if wResp.lowercased().contains("ok") { appliedCount += 1 }
+
+                    var uResp = runAT("AT+UART=\(baud),8,1,NONE,NFC")
+                    if !uResp.lowercased().contains("ok") {
+                        uResp = runAT("AT+UART=\(baud),8,N,1")
+                    }
+                    if uResp.lowercased().contains("ok") { appliedCount += 1 }
+
+                    var sResp = runAT("AT+NETP=TCP,Server,\(targetPort),\(foundHost)")
+                    if !sResp.lowercased().contains("ok") {
+                        sResp = runAT("AT+NETP=TCP,SERVER,\(targetPort),\(foundHost)")
+                    }
+                    if !sResp.lowercased().contains("ok") {
+                        sResp = runAT("AT+SOCKA=TCPS,\(foundHost),\(targetPort)")
+                    }
+                    if !sResp.lowercased().contains("ok") {
+                        sResp = runAT("AT+SOCKA=TCPS,\(targetPort),\(foundHost)")
+                    }
+                    if sResp.lowercased().contains("ok") { appliedCount += 1 }
+
+                    var mResp = runAT("AT+WKMOD=MODBUS")
+                    if !mResp.lowercased().contains("ok") {
+                        mResp = runAT("AT+MODBUS=ON")
+                    }
+                    if !mResp.lowercased().contains("ok") {
+                        mResp = runAT("AT+TCPMB=ON")
+                    }
+                    if mResp.lowercased().contains("ok") { appliedCount += 1 }
+
+                    if appliedCount > 0 {
+                        let zResp = runAT("AT+Z")
+                        rebootSent = zResp.lowercased().contains("ok") || !zResp.lowercased().contains("err")
+                    }
+                }
+            }
+
+            if appliedCount >= 2 && rebootSent {
+                return [
+                    "ok": true,
+                    "status": "provisioned_rebooting",
+                    "host": foundHost,
+                    "port": targetPort,
+                    "topology": "ap_direct",
+                    "wifi_ip": wifiIP ?? NSNull(),
+                    "udp_identity": udpReply ?? NSNull(),
+                    "port_502_open": false,
+                    "port_8899_open": host8899 != nil,
+                    "port_80_open": host80 != nil,
+                    "at_applied_count": appliedCount,
+                    "at_log": atLog,
+                    "message": "Auto-configured PUSR at \(foundHost) (AP, \(baud) 8N1, TCP Server :\(targetPort)) and rebooted via AT+Z. Wait 5 seconds, ensure iPad stays on USR-DR164 Wi-Fi, then tap 1-Tap Auto-Setup again.",
+                ]
+            }
+
+            let factoryHint = (host8899 != nil)
+                ? "Port 8899 (factory default) is open, but port \(targetPort) is closed — likely reset by the physical Reload button."
+                : "Web UI (http://\(foundHost)) is reachable, but port \(targetPort) is closed."
+            return [
+                "ok": true,
+                "status": "needs_port_502",
+                "host": foundHost,
+                "port": targetPort,
+                "topology": "ap_direct",
+                "wifi_ip": wifiIP ?? NSNull(),
+                "udp_identity": udpReply ?? NSNull(),
+                "port_502_open": false,
+                "port_8899_open": host8899 != nil,
+                "port_80_open": host80 != nil,
+                "at_applied_count": appliedCount,
+                "at_log": atLog,
+                "message": "Detected PUSR at \(foundHost). \(factoryHint) Open http://\(foundHost) (admin/admin), set Serial = \(baud) 8N1, Socket = TCP Server Port \(targetPort) + Modbus TCP, click Save + Software Restart (do NOT press physical Reload button!).",
+            ]
+        }
+
+        // Case C: Not reachable on Wi-Fi at all
+        let wifiText = wifiIP != nil ? "Current iPad Wi-Fi IP is \(wifiIP!)." : "No active Wi-Fi IPv4 address detected."
+        return [
+            "ok": false,
+            "status": "not_found",
+            "host": NSNull(),
+            "port": targetPort,
+            "topology": "ap_direct",
+            "wifi_ip": wifiIP ?? NSNull(),
+            "port_502_open": false,
+            "port_8899_open": false,
+            "at_log": [],
+            "message": "PUSR gateway not reachable. \(wifiText) Join USR-DR164-XXXX in iPad Settings > Wi-Fi ('Use Without Internet') and tap 1-Tap Auto-Setup again.",
+        ]
+    }
 }

@@ -269,6 +269,10 @@ def _build_unified_status(run_socket_test: bool = False) -> dict[str, Any]:
     }
 
     sensor_id_out = "TZ-THT-02" if eff_ctx.get("product_id") == "tzone_tht02" else str(eff_ctx.get("product_id", "")).upper()
+    gw_cfg = _MODBUS.get_gateway_config()
+    pusr_host = str(gw_cfg.get("pusr_host") or "").strip()
+    pusr_port = int(gw_cfg.get("pusr_port") or 502)
+    pusr_topo = str(gw_cfg.get("topology") or "ap_direct")
     return {
         "status": "ok",
         "contract_version": CONTRACT_VERSION,
@@ -284,6 +288,17 @@ def _build_unified_status(run_socket_test: bool = False) -> dict[str, Any]:
         "fps": vision_tel.get("fps", 30.0),
         "vision": vision_tel,
         "modbus": modbus_tel,
+        "pusr_gateway": {
+            "host": pusr_host,
+            "port": pusr_port,
+            "topology": pusr_topo,
+            "configured": bool(pusr_host),
+            "protocol": "modbus_tcp_mbap",
+            "presets": [
+                {"host": "10.10.100.254", "port": 502, "label": "Direct PUSR AP Default", "topology": "ap_direct"},
+                {"host": "192.168.0.7", "port": 502, "label": "Direct PUSR Alternate AP", "topology": "ap_direct"},
+            ],
+        },
         "repair": repair_state,
         "system": sys_info,
         "offline": offline_info,
@@ -1174,10 +1189,119 @@ async def api_profiles() -> dict[str, Any]:
     }
 
 
+@app.post("/api/modbus/gateway/auto_setup", response_model=None)
+async def api_modbus_gateway_auto_setup(payload: dict[str, Any] | None = None) -> Response | dict[str, Any]:
+    from fieldscan.modbus_tcp import auto_provision_pusr_gateway
+
+    body = payload or {}
+    port = int(body.get("port") or 502)
+    if port == 5502:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "status": "protocol_mismatch",
+                "error_code": "PROTOCOL_MISMATCH",
+                "message": "Port 5502 is reserved for raw RTU-over-TCP framing; configure PUSR USR-DR164 as Modbus TCP (MBAP) on port 502.",
+            },
+        )
+    baud = int(body.get("baud_bps") or 9600)
+    gw_cfg = _MODBUS.get_gateway_config()
+    pref_host = str(body.get("host") or gw_cfg.get("pusr_host") or "").strip() or None
+    result = await asyncio.to_thread(
+        auto_provision_pusr_gateway,
+        preferred_host=pref_host,
+        baud=baud,
+        target_port=port,
+    )
+    detected_host = result.get("host")
+    status_str = str(result.get("status") or "")
+    if detected_host:
+        activate_now = status_str == "ready_on_502"
+        _SESSIONS.invalidate_live_connection("gateway_endpoint_changed")
+        cfg = _MODBUS.set_pusr_gateway(str(detected_host), port, topology="ap_direct")
+        if activate_now:
+            await asyncio.to_thread(_MODBUS.set_mode, "pusr_tcp")
+            scan_res = await asyncio.to_thread(_MODBUS.scan_hardware_bus, True)
+            result["scan_result"] = scan_res
+            result["modbus"] = _MODBUS.get_telemetry()
+            if scan_res.get("found"):
+                sid = scan_res.get("slave_id")
+                t_val = scan_res.get("temp_c")
+                h_val = scan_res.get("humidity_rh")
+                if t_val is not None and h_val is not None:
+                    result["message"] = (
+                        f"Connected to PUSR at {detected_host}:{port} — Sensor Slave #{sid} live ({t_val:.1f} C, {h_val:.1f} %RH)!"
+                    )
+                else:
+                    result["message"] = f"Connected to PUSR at {detected_host}:{port} — Sensor Slave #{sid} responded!"
+            else:
+                err_detail = scan_res.get("error_detail") or scan_res.get("error_code") or "No RS-485 response"
+                result["message"] = (
+                    f"PUSR TCP {detected_host}:{port} is REACHABLE, but sensor did not reply ({err_detail}). "
+                    "Check THT-02 power (5-24V), RS-485 A+/B- wiring (try swapping Yellow/Green), Serial = 9600 8N1, and Modbus TCP enabled."
+                )
+        result["gateway"] = {
+            "host": str(detected_host),
+            "port": port,
+            "topology": "ap_direct",
+            "protocol": "modbus_tcp_mbap",
+            **cfg,
+        }
+    return result
+
+
+@app.post("/api/modbus/gateway/discover", response_model=None)
+async def api_modbus_gateway_discover(payload: dict[str, Any] | None = None) -> Response | dict[str, Any]:
+    from fieldscan.modbus_tcp import discover_direct_pusr_ap
+
+    body = payload or {}
+    port = int(body.get("port") or 502)
+    if port == 5502:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "error_code": "PROTOCOL_MISMATCH",
+                "message": "Port 5502 is reserved for raw RTU-over-TCP framing; configure PUSR USR-DR164 as Modbus TCP (MBAP) on port 502.",
+            },
+        )
+    timeout_s = float(body.get("timeout_s") or 0.45)
+    auto_select = bool(body.get("auto_select", True))
+    gw_cfg = _MODBUS.get_gateway_config()
+    saved_host = str(gw_cfg.get("pusr_host") or "").strip() or None
+    result = await asyncio.to_thread(
+        discover_direct_pusr_ap,
+        port=port,
+        timeout_s=timeout_s,
+        saved_host=saved_host,
+    )
+    auto_selected = False
+    rec_host = result.get("recommended_host")
+    if auto_select and rec_host:
+        rec_topo = str(result.get("recommended_topology") or "ap_direct")
+        _SESSIONS.invalidate_live_connection("gateway_endpoint_changed")
+        cfg = _MODBUS.set_pusr_gateway(str(rec_host), port, topology=rec_topo)
+        await asyncio.to_thread(_MODBUS.set_mode, "pusr_tcp")
+        auto_selected = True
+        result["gateway"] = {
+            "host": str(rec_host),
+            "port": port,
+            "topology": rec_topo,
+            "protocol": "modbus_tcp_mbap",
+            **cfg,
+        }
+        result["modbus"] = _MODBUS.get_telemetry()
+    result["auto_selected"] = auto_selected
+    return result
+
+
 @app.post("/api/modbus/gateway", response_model=None)
 async def api_modbus_gateway(payload: dict[str, Any]) -> Response | dict[str, Any]:
     host = str(payload.get("host") or payload.get("pusr_host") or "").strip()
     port = int(payload.get("port") or payload.get("pusr_port") or 502)
+    topology = str(payload.get("topology") or "ap_direct").strip().lower()
+    clean_topo = "sta_lan" if topology == "sta_lan" else "ap_direct"
     if port == 5502:
         return JSONResponse(
             status_code=400,
@@ -1188,12 +1312,18 @@ async def api_modbus_gateway(payload: dict[str, Any]) -> Response | dict[str, An
             },
         )
     _SESSIONS.invalidate_live_connection("gateway_endpoint_changed")
-    cfg = _MODBUS.set_pusr_gateway(host, port)
-    if payload.get("activate_mode") or payload.get("activate"):
+    cfg = _MODBUS.set_pusr_gateway(host, port, topology=clean_topo)
+    if (payload.get("activate_mode") or payload.get("activate")) and host:
         await asyncio.to_thread(_MODBUS.set_mode, "pusr_tcp")
     return {
         "ok": True,
-        "gateway": cfg,
+        "gateway": {
+            "host": host,
+            "port": port,
+            "topology": clean_topo,
+            "protocol": "modbus_tcp_mbap",
+            **cfg,
+        },
         "modbus": _MODBUS.get_telemetry(),
     }
 

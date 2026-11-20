@@ -589,12 +589,31 @@ func runSwiftContractSuite() throws {
     }
     check(redirBlocked, "M4-WAN-04: Swift URLSessionTaskDelegate must block cross-origin redirect")
 
+    // 11. AP-First Direct PUSR Discovery & RFC1918 Guard Verification (Swift)
+    check(ModbusTCPClient.isPrivateRFC1918IPv4("10.10.100.254") == true, "AP-First Swift: 10.10.100.254 must be RFC1918")
+    check(ModbusTCPClient.isPrivateRFC1918IPv4("192.168.0.7") == true, "AP-First Swift: 192.168.0.7 must be RFC1918")
+    check(ModbusTCPClient.isPrivateRFC1918IPv4("8.8.8.8") == false, "AP-First Swift: public WAN IP 8.8.8.8 must be rejected")
+    let apCandidates = ModbusTCPClient.buildDirectAPCandidateHosts(wifiIP: "10.10.100.100", savedHost: "192.168.50.254")
+    let apHosts = apCandidates.map { $0.host }
+    check(apHosts.first == "10.10.100.254", "AP-First Swift: active PUSR subnet must rank 10.10.100.254 first")
+    check(!apHosts.contains("10.10.100.100"), "AP-First Swift: must exclude device's own Wi-Fi IP")
+    check(apHosts.contains("192.168.0.7"), "AP-First Swift: must include alternate PUSR AP preset 192.168.0.7")
+    let badPortProbe = ModbusTCPClient.probeTCPPort(host: "10.10.100.254", port: 5502)
+    check(!badPortProbe.reachable && badPortProbe.errorCode == "PROTOCOL_MISMATCH", "AP-First Swift: probe must block :5502")
+    let badWanProbe = ModbusTCPClient.probeTCPPort(host: "8.8.8.8", port: 502)
+    check(!badWanProbe.reachable && badWanProbe.errorCode == "WAN_HOST_BLOCKED", "AP-First Swift: probe must block public WAN IP")
+    let badUdpWan = ModbusTCPClient.sendPusrUDPCommand(host: "8.8.8.8", command: "www.usr.cn")
+    check(badUdpWan.reply == nil && badUdpWan.errorCode == "WAN_HOST_BLOCKED", "1-Tap PUSR Swift: UDP 48899 must block public WAN IP")
+    let badAuto5502 = ModbusTCPClient.autoProvisionPusrGateway(preferredHost: "10.10.100.254", baud: 9600, targetPort: 5502)
+    check((badAuto5502["ok"] as? Bool) == false && (badAuto5502["error_code"] as? String) == "PROTOCOL_MISMATCH", "1-Tap PUSR Swift: autoProvision must block :5502")
+
     let summary: [String: Any] = [
         "swift_contract_suite": "PASS",
         "contract_version": FieldScanSessionEngine.contractVersion,
         "manifest_verified": true,
         "pilot_writes_blocked": true,
         "cloud_catalog_swift_parity": "PASS",
+        "ap_first_swift_parity": "PASS",
         "golden_mbap_vectors_passed": mbapPassed,
         "golden_voice_en_passed": enPassed,
         "golden_voice_es_passed": esPassed,

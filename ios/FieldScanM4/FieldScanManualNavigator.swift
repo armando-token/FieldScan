@@ -190,7 +190,7 @@ public enum FieldScanManualNavigator {
         if extractAnyPageNumber(norm) != nil {
             return true
         }
-        let manualReqPattern = "\\b(manual|datasheet|bulletin|page|pag\\.?|section|where\\s+in\\s+the\\s+manual|where\\s+is\\s+the\\s+section|which\\s+page|what\\s+page|what\\s+section|open\\s+the\\s+manual|open\\s+datasheet|in\\s+the\\s+datasheet|in\\s+the\\s+manual)\\b"
+        let manualReqPattern = "\\b(manual|datasheet|bulletin|pdf|page|pag\\.?|section|where\\s+in\\s+the\\s+manual|where\\s+is\\s+the\\s+section|which\\s+page|what\\s+page|what\\s+section|open\\s+the\\s+manual|open\\s+datasheet|in\\s+the\\s+datasheet|in\\s+the\\s+manual|documentation|schematic|wiring\\s+diagram|pinout|configuration\\s+section|where\\s+do\\s+i\\s+configure|how\\s+do\\s+i\\s+configure)\\b"
         if norm.range(of: manualReqPattern, options: .regularExpression) != nil {
             return true
         }
@@ -254,7 +254,12 @@ public enum FieldScanManualNavigator {
             let heading = topic.headingEN
             let excerpt = topic.excerptEN
             let answer = topic.summaryEN
-            let wantsLocation = ["where", "page", "section", "show", "open", "manual", "datasheet"].contains(where: { norm.contains($0) })
+            let wantsLocation = [
+                "where", "page", "section", "show", "open", "manual", "datasheet", "pdf",
+                "configure", "configuration", "config", "setup", "setting", "settings",
+                "diagram", "schematic", "wiring", "pinout", "calibration", "spec", "specs",
+                "register", "guide", "read", "find",
+            ].contains(where: { norm.contains($0) })
             let shouldLightbox = explicitOpen || wantsLocation
 
             let sectionDict: [String: Any] = [
@@ -469,7 +474,41 @@ public enum FieldScanManualNavigator {
         }
 
         if let bd = bestDoc, let bp = bestPage {
-            return buildDescriptorPageResponse(doc: bd, pageObj: bp, openLightbox: isExplicitManualLookupQuery(query))
+            let wantsManualOpen = isExplicitManualLookupQuery(query)
+                || ["where", "page", "section", "show", "open", "configure", "configuration", "wiring", "diagram", "calibration", "register", "spec"].contains(where: { norm.contains($0) })
+            return buildDescriptorPageResponse(doc: bd, pageObj: bp, openLightbox: wantsManualOpen)
+        }
+
+        // If a Cloud catalog package for TZ THT-02 lacks rich per-page keywords, fall back cleanly to our verified 9-page THT-02 section index
+        let prodId = ((descriptor["context"] as? [String: Any])?["product_id"] as? String) ?? ""
+        if prodId == "tzone_tht02" {
+            let rich = lookupManual(for: query, language: "en")
+            if rich.matched, let rp = rich.primaryPage {
+                let cits: [[String: Any]] = rich.citedPages.map { p in
+                    [
+                        "document_id": docId,
+                        "page": p,
+                        "printed_page": "\(p)",
+                        "label": pageTitles[p] ?? "Page \(p)",
+                        "image_url": "/assets/manual_pages/page_\(p).png",
+                        "pdf_fallback_url": "/assets/THT02_Users_Manual_v1.1.pdf#page=\(p)",
+                    ]
+                }
+                return [
+                    "matched": true,
+                    "page_out_of_range": false,
+                    "document_id": docId,
+                    "document_title": docTitle,
+                    "open_manual": true,
+                    "open_manual_lightbox": rich.openLightbox,
+                    "manual_page": rp,
+                    "printed_page": "\(rp)",
+                    "cited_pages": rich.citedPages,
+                    "citations": cits,
+                    "manual_section": rich.sectionDict ?? NSNull(),
+                    "answer": rich.localizedAnswer,
+                ]
+            }
         }
 
         if isExplicitManualLookupQuery(query), let firstPg = pages.first {

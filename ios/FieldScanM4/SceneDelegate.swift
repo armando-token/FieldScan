@@ -19,7 +19,9 @@ public final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     public func sceneDidBecomeActive(_ scene: UIScene) {
         UIApplication.shared.isIdleTimerDisabled = true
-        StandaloneFieldScanServer.shared.start()
+        DispatchQueue.global(qos: .userInitiated).async {
+            StandaloneFieldScanServer.shared.start()
+        }
     }
 
     public func sceneWillResignActive(_ scene: UIScene) {

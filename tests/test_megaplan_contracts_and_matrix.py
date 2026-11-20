@@ -948,3 +948,95 @@ def test_section14_golden_fixtures_40_voice_corpus_latency_and_vis09_matrix(tmp_
         manual_trigger=False,
     )
     assert r_dark_blur["captured"] is False and r_dark_blur["reason"] == "FRAME_REJECTED_OCCLUDED_OR_BLURRY"
+
+
+def test_pusr_ap_first_discovery_candidates_rfc1918_guard_and_api() -> None:
+    """Verify AP-First PUSR candidate prioritization, RFC1918 WAN guard, and live discovery API."""
+    from fieldscan.modbus_tcp import (
+        build_direct_ap_candidates,
+        discover_direct_pusr_ap,
+        is_private_rfc1918_ipv4,
+        probe_tcp_port,
+    )
+
+    # 1. Strict RFC1918 validation blocks public WAN IPs
+    assert is_private_rfc1918_ipv4("10.10.100.254") is True
+    assert is_private_rfc1918_ipv4("192.168.0.7") is True
+    assert is_private_rfc1918_ipv4("172.16.0.1") is True
+    assert is_private_rfc1918_ipv4("8.8.8.8") is False
+    assert is_private_rfc1918_ipv4("1.1.1.1") is False
+    assert is_private_rfc1918_ipv4("example.com") is False
+    assert is_private_rfc1918_ipv4("127.0.0.1") is False
+    assert is_private_rfc1918_ipv4("127.0.0.1", allow_loopback=True) is True
+
+    # 2. Active Wi-Fi subnet prioritizes PUSR AP .254 first, excludes self IP, includes factory defaults
+    cands = build_direct_ap_candidates("10.10.100.100", saved_host="192.168.50.254")
+    hosts = [c["host"] for c in cands]
+    assert hosts[0] == "10.10.100.254"
+    assert "10.10.100.100" not in hosts
+    assert "192.168.0.7" in hosts
+    assert "192.168.50.254" in hosts
+    assert len(hosts) == len(set(hosts))
+
+    # 3. Direct TCP probe strictly refuses :5502 and public WAN hosts
+    bad_port = probe_tcp_port("10.10.100.254", port=5502)
+    assert bad_port["reachable"] is False and bad_port["error_code"] == "PROTOCOL_MISMATCH"
+    bad_wan = probe_tcp_port("8.8.8.8", port=502)
+    assert bad_wan["reachable"] is False and bad_wan["error_code"] == "WAN_HOST_BLOCKED"
+
+    # 4. Live loopback MBAP stub discovered cleanly via discover_direct_pusr_ap
+    srv, host, port, _ = start_mbap_test_gateway(mode="nominal", temp_c=23.9, humidity_rh=49.5)
+    try:
+        disc = discover_direct_pusr_ap(
+            port=port,
+            timeout_s=0.35,
+            wifi_ip_override="",
+            extra_hosts=[host],
+            allow_loopback_extra=True,
+        )
+        assert disc["ok"] is True
+        assert disc["found"] is True
+        assert disc["recommended_host"] == host
+        assert disc["recommended_topology"] == "ap_direct"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    # 5. FastAPI /api/modbus/gateway/discover blocks :5502 and /api/modbus/gateway preserves topology
+    with TestClient(app) as client:
+        bad_disc = client.post("/api/modbus/gateway/discover", json={"port": 5502})
+        assert bad_disc.status_code == 400
+        assert bad_disc.json()["error_code"] == "PROTOCOL_MISMATCH"
+
+        ok_ap = client.post(
+            "/api/modbus/gateway",
+            json={"host": "10.10.100.254", "port": 502, "topology": "ap_direct", "activate": False},
+        )
+        assert ok_ap.status_code == 200
+        assert ok_ap.json()["gateway"]["topology"] == "ap_direct"
+        st_ap = client.get("/api/status").json()
+        assert st_ap["pusr_gateway"]["host"] == "10.10.100.254"
+        assert st_ap["pusr_gateway"]["topology"] == "ap_direct"
+
+        ok_sta = client.post(
+            "/api/modbus/gateway",
+            json={"host": "192.168.1.44", "port": 502, "topology": "sta_lan", "activate": False},
+        )
+        assert ok_sta.status_code == 200
+        assert ok_sta.json()["gateway"]["topology"] == "sta_lan"
+
+        # Clean up gateway after test
+        client.post("/api/modbus/gateway", json={"host": "", "port": 502, "topology": "ap_direct", "activate": False})
+
+        # 6. /api/modbus/gateway/auto_setup strictly blocks :5502 and UDP helper blocks public WAN IPs
+        from fieldscan.modbus_tcp import auto_provision_pusr_gateway, send_pusr_udp_command
+
+        bad_auto = client.post("/api/modbus/gateway/auto_setup", json={"port": 5502})
+        assert bad_auto.status_code == 400
+        assert bad_auto.json()["error_code"] == "PROTOCOL_MISMATCH"
+
+        auto_5502 = auto_provision_pusr_gateway(target_port=5502)
+        assert auto_5502["ok"] is False and auto_5502["error_code"] == "PROTOCOL_MISMATCH"
+
+        rep, sip, uerr = send_pusr_udp_command("8.8.8.8", "www.usr.cn")
+        assert rep is None and sip is None and uerr == "WAN_HOST_BLOCKED"

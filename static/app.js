@@ -582,6 +582,10 @@ const cad = {
   catalogGlbGroup: null,
   catalogPartNodes: {},
   catalogPartsMeta: {},
+  catalogCenterOffset: new THREE.Vector3(0, 0, 0),
+  catalogBoundsRadius: 0,
+  pmremGenerator: null,
+  envRenderTarget: null,
 
   anchorDimLength: new THREE.Vector3(0, -18.5, 0),
   anchorDimDia: new THREE.Vector3(0, 0, 77.5),
@@ -649,6 +653,11 @@ function reset3DCamera() {
   state.guidedZone = null;
   state.guidedTitle = '';
   state.guidedBody = '';
+  if (state.sceneOrigin === 'catalog_glb' && cad.catalogBoundsRadius > 0) {
+    const dist = Math.max(115, Math.min(360, cad.catalogBoundsRadius * 2.55));
+    flyCameraTo(dist * 0.25, dist * 0.34, dist * 0.92, 0, 0, 0);
+    return;
+  }
   flyCameraTo(16, 48, 185, 0, -4, 0);
 }
 
@@ -1309,8 +1318,54 @@ function initCadStudio() {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
+  renderer.toneMappingExposure = 1.12;
   cad.renderer = renderer;
+
+  // Offline procedural studio environment map for glTF 2.0 PBR metallic reflections (0 external HDR files)
+  try {
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    const envScene = new THREE.Scene();
+    envScene.background = new THREE.Color(0x162032);
+    const softboxTop = new THREE.Mesh(
+      new THREE.PlaneGeometry(18, 18),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
+    );
+    softboxTop.position.set(0, 9, 0);
+    softboxTop.rotation.x = Math.PI / 2;
+    envScene.add(softboxTop);
+
+    const keyPanel = new THREE.Mesh(
+      new THREE.PlaneGeometry(12, 10),
+      new THREE.MeshBasicMaterial({ color: 0xfff7ed, side: THREE.DoubleSide })
+    );
+    keyPanel.position.set(10, 4, 8);
+    keyPanel.lookAt(0, 0, 0);
+    envScene.add(keyPanel);
+
+    const rimPanel = new THREE.Mesh(
+      new THREE.PlaneGeometry(12, 8),
+      new THREE.MeshBasicMaterial({ color: 0x7dd3fc, side: THREE.DoubleSide })
+    );
+    rimPanel.position.set(-10, 3, -9);
+    rimPanel.lookAt(0, 0, 0);
+    envScene.add(rimPanel);
+
+    const fillPanel = new THREE.Mesh(
+      new THREE.PlaneGeometry(10, 8),
+      new THREE.MeshBasicMaterial({ color: 0xe2e8f0, side: THREE.DoubleSide })
+    );
+    fillPanel.position.set(-8, -3, 9);
+    fillPanel.lookAt(0, 0, 0);
+    envScene.add(fillPanel);
+
+    const envRT = pmrem.fromScene(envScene, 0.04);
+    scene.environment = envRT.texture;
+    cad.pmremGenerator = pmrem;
+    cad.envRenderTarget = envRT;
+  } catch (_envErr) {
+    // Graceful fallback if WebGL PMREM is unavailable
+  }
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -2225,6 +2280,39 @@ function setRenderMode(mode) {
     }
     mat.needsUpdate = true;
   }
+
+  // Also apply X-Ray / Solid mode cleanly to any active Cloud Catalog `.glb` twin
+  if (cad.catalogGlbGroup) {
+    Object.entries(cad.catalogPartNodes).forEach(([pid, node]) => {
+      const pidLow = String(pid || '').toLowerCase();
+      const isInternalPart =
+        pidLow.includes('dip') ||
+        pidLow.includes('pcb') ||
+        pidLow.includes('probe') ||
+        pidLow.includes('sht') ||
+        pidLow.includes('pin');
+      node.traverse((ch) => {
+        if (!ch.isMesh || !ch.material) return;
+        const mats = Array.isArray(ch.material) ? ch.material : [ch.material];
+        mats.forEach((m) => {
+          if (m.userData && m.userData.baseOpacity === undefined) {
+            m.userData.baseOpacity = m.opacity ?? 1.0;
+            m.userData.baseTransparent = Boolean(m.transparent);
+          }
+          if (isInternalPart) {
+            m.wireframe = false;
+            m.transparent = Boolean(m.userData?.baseTransparent);
+            m.opacity = m.userData?.baseOpacity ?? 1.0;
+          } else {
+            m.wireframe = isWire;
+            m.transparent = isWire ? true : Boolean(m.userData?.baseTransparent);
+            m.opacity = isWire ? 0.3 : m.userData?.baseOpacity ?? 1.0;
+          }
+          m.needsUpdate = true;
+        });
+      });
+    });
+  }
 }
 
 function setDipPipVisibility(visible, { userDismissed = false } = {}) {
@@ -2248,6 +2336,22 @@ function setExplodedState(exploded, { manualTrigger = false, zoomDip = false } =
   }
   state.exploded = Boolean(exploded);
   dom.btnToggleExplode.classList.toggle('active', state.exploded);
+
+  if (state.sceneOrigin === 'catalog_glb' && cad.catalogGlbGroup) {
+    const views = state.activeCatalogDescriptor?.twin?.views || [];
+    const explodeView =
+      views.find((v) => v.exploded_offsets_m && Object.keys(v.exploded_offsets_m).length > 0) ||
+      views.find((v) => v.view_id === 'open_dip') ||
+      null;
+    const defaultView = views.find((v) => v.view_id === 'default_overview' || v.view_id === 'isometric_home') || null;
+    highlightCatalogGlbPart(null, {
+      viewId: state.exploded ? explodeView?.view_id || 'open_dip' : defaultView?.view_id || 'default_overview',
+    });
+    if (!state.exploded) {
+      reset3DCamera();
+    }
+    return;
+  }
 
   if (state.exploded) {
     if (!state.dipPipDismissed || manualTrigger || zoomDip) {
@@ -2593,10 +2697,22 @@ function highlightCatalogGlbPart(partId, { calloutTitle = '', calloutBody = '', 
       }
     }
     node.traverse((child) => {
-      if (child.isMesh && child.material && child.material.emissive) {
-        child.material.emissive.setHex(active ? 0x0284c7 : 0x000000);
-        child.material.emissiveIntensity = active ? 0.65 : 0.0;
-      }
+      if (!child.isMesh || !child.material) return;
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      mats.forEach((m) => {
+        if (!m || !m.emissive) return;
+        if (m.userData && m.userData.baseEmissiveHex === undefined) {
+          m.userData.baseEmissiveHex = m.emissive.getHex();
+          m.userData.baseEmissiveIntensity = m.emissiveIntensity ?? 1.0;
+        }
+        if (active) {
+          m.emissive.setHex(0x0284c7);
+          m.emissiveIntensity = 0.65;
+        } else {
+          m.emissive.setHex(m.userData?.baseEmissiveHex ?? 0x000000);
+          m.emissiveIntensity = m.userData?.baseEmissiveIntensity ?? 0.0;
+        }
+      });
     });
   });
 
@@ -2617,15 +2733,31 @@ function highlightCatalogGlbPart(partId, { calloutTitle = '', calloutBody = '', 
     dom.faultCalloutText.textContent = calloutBody || meta?.summary || '';
   }
 
-  if (viewCfg && Array.isArray(viewCfg.camera_pos_mm) && Array.isArray(viewCfg.target_mm)) {
+  const selectedNode = partId ? cad.catalogPartNodes[partId] : null;
+  if (selectedNode) {
+    cad.catalogGlbGroup?.updateMatrixWorld(true);
+    const pBox = new THREE.Box3().setFromObject(selectedNode);
+    const pCenter = new THREE.Vector3();
+    const pSphere = new THREE.Sphere();
+    pBox.getCenter(pCenter);
+    pBox.getBoundingSphere(pSphere);
+    const focusDist = Math.max(58, Math.min(180, pSphere.radius * 3.4));
     flyCameraTo(
-      viewCfg.camera_pos_mm[0],
-      viewCfg.camera_pos_mm[1],
-      viewCfg.camera_pos_mm[2],
-      viewCfg.target_mm[0],
-      viewCfg.target_mm[1],
-      viewCfg.target_mm[2]
+      pCenter.x + focusDist * 0.28,
+      pCenter.y + focusDist * 0.36,
+      pCenter.z + focusDist * 0.9,
+      pCenter.x,
+      pCenter.y,
+      pCenter.z
     );
+  } else if (viewCfg && Array.isArray(viewCfg.camera_pos_mm) && Array.isArray(viewCfg.target_mm)) {
+    const off = cad.catalogCenterOffset || new THREE.Vector3(0, 0, 0);
+    // Transform local mm view coordinates through the same Y=+90deg rotation + centering offset
+    const camLocal = new THREE.Vector3(viewCfg.camera_pos_mm[0], viewCfg.camera_pos_mm[1], viewCfg.camera_pos_mm[2]);
+    const tgtLocal = new THREE.Vector3(viewCfg.target_mm[0], viewCfg.target_mm[1], viewCfg.target_mm[2]);
+    camLocal.applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2).sub(off);
+    tgtLocal.applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2).sub(off);
+    flyCameraTo(camLocal.x, camLocal.y, camLocal.z, tgtLocal.x, tgtLocal.y, tgtLocal.z);
   }
 }
 
@@ -2753,6 +2885,18 @@ async function loadCatalogSceneFromDescriptor(descriptor, generation) {
       const offstageRoot = gltf.scene;
       offstageRoot.scale.set(scaleMm, scaleMm, scaleMm);
       offstageRoot.rotation.y = Math.PI / 2;
+      offstageRoot.updateMatrixWorld(true);
+
+      // Universal Box3 centering & framing for ANY Cloud GLB regardless of origin/dimensions
+      const initBox = new THREE.Box3().setFromObject(offstageRoot);
+      const initCenter = new THREE.Vector3();
+      const initSize = new THREE.Vector3();
+      const initSphere = new THREE.Sphere();
+      initBox.getCenter(initCenter);
+      initBox.getSize(initSize);
+      initBox.getBoundingSphere(initSphere);
+      offstageRoot.position.sub(initCenter);
+      offstageRoot.updateMatrixWorld(true);
 
       const partNodes = {};
       const partsMeta = {};
@@ -2767,7 +2911,16 @@ async function loadCatalogSceneFromDescriptor(descriptor, generation) {
         }
         found.traverse((ch) => {
           if (ch.isMesh && ch.material) {
-            ch.material = ch.material.clone();
+            if (Array.isArray(ch.material)) {
+              ch.material = ch.material.map((m) => {
+                const cloned = m.clone();
+                cloned.envMapIntensity = 1.15;
+                return cloned;
+              });
+            } else {
+              ch.material = ch.material.clone();
+              ch.material.envMapIntensity = 1.15;
+            }
             ch.castShadow = true;
             ch.receiveShadow = true;
           }
@@ -2787,7 +2940,11 @@ async function loadCatalogSceneFromDescriptor(descriptor, generation) {
       cad.catalogGlbGroup = offstageRoot;
       cad.catalogPartNodes = partNodes;
       cad.catalogPartsMeta = partsMeta;
+      cad.catalogCenterOffset = initCenter.clone();
+      cad.catalogBoundsRadius = initSphere.radius || 70;
       cad.scene.add(offstageRoot);
+      setRenderMode(state.renderMode || 'solid');
+      reset3DCamera();
 
       if (dom.assemblyTreePills) {
         dom.assemblyTreePills.innerHTML = '';
@@ -2797,20 +2954,29 @@ async function loadCatalogSceneFromDescriptor(descriptor, generation) {
           btn.className = 'part-chip';
           btn.dataset.partId = p.part_id;
           btn.textContent = `${idx + 1}. ${p.label || p.part_id}`;
-          btn.addEventListener('click', () =>
+          btn.addEventListener('click', () => {
             highlightCatalogGlbPart(p.part_id, {
               calloutTitle: String(p.label || p.part_id).toUpperCase(),
               calloutBody: p.summary || '',
-              viewId: p.part_id.includes('dip') ? 'open_dip' : p.part_id.includes('rear') ? 'rear_connector' : 'isometric_home',
-            })
-          );
+              viewId: p.part_id.includes('dip') ? 'open_dip' : p.part_id.includes('rear') ? 'rear_connector' : 'default_overview',
+            });
+            if (Number(p.page) >= 1) {
+              setManualPage(Number(p.page), { flash: true });
+            }
+          });
           dom.assemblyTreePills.appendChild(btn);
         });
       }
 
       const dims = twin.reference_dimensions_mm || {};
-      if (dom.labelDimLength && dims.length) dom.labelDimLength.textContent = `${Number(dims.length).toFixed(1)} MM`;
-      if (dom.labelDimDia && dims.outer_diameter) dom.labelDimDia.textContent = `Ø${Number(dims.outer_diameter).toFixed(1)} MM`;
+      const maxSpanMm = Math.max(initSize.x, initSize.y, initSize.z);
+      const minSpanMm = Math.min(initSize.x, initSize.y, initSize.z);
+      if (dom.labelDimLength) {
+        dom.labelDimLength.textContent = `${Number(dims.length || maxSpanMm || 140).toFixed(1)} MM`;
+      }
+      if (dom.labelDimDia) {
+        dom.labelDimDia.textContent = `Ø${Number(dims.outer_diameter || minSpanMm || 16).toFixed(1)} MM`;
+      }
       if (dom.twinMatchBadge) {
         dom.twinMatchBadge.textContent = `VERIFIED GLB TWIN · SEQ #${descriptor?.context?.publication_seq || 1}`;
       }

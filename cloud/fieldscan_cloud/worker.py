@@ -608,8 +608,23 @@ def process_single_job(
         query = build_technical_query(manufacturer, model, variant)
         include_domains = sorted(ALLOWED_OEM_DOMAINS.get(mfr_norm, set())) or None
         search_res = client.search(query=query, include_domains=include_domains)
-        classified = [classify_search_candidate(c, manufacturer_norm=mfr_norm) for c in search_res.candidates]
+        merged_candidates = list(search_res.candidates)
+        vendor_request_ids = [search_res.vendor_request_id] if search_res.vendor_request_id else []
+
+        # Budget of max 2 searches/job (§8.2 step 2): if domain-scoped search yielded no direct PDF, run 1 broader search
+        if include_domains and not any(c.url.lower().endswith(".pdf") for c in merged_candidates):
+            broad_res = client.search(query=query, include_domains=None)
+            if broad_res.vendor_request_id:
+                vendor_request_ids.append(broad_res.vendor_request_id)
+            seen_urls = {c.url for c in merged_candidates}
+            for cand_item in broad_res.candidates:
+                if cand_item.url not in seen_urls:
+                    merged_candidates.append(cand_item)
+                    seen_urls.add(cand_item.url)
+
+        classified = [classify_search_candidate(c, manufacturer_norm=mfr_norm) for c in merged_candidates]
         classified.sort(key=lambda c: c.score, reverse=True)
+        oem_hits = [c for c in classified if c.origin_kind == "oem_official"]
 
         record_source_event(
             conn,
@@ -617,11 +632,43 @@ def process_single_job(
             event_type="context_search_completed",
             detail={
                 "query": search_res.query,
-                "vendor_request_id": search_res.vendor_request_id,
+                "vendor_request_id": vendor_request_ids[0] if vendor_request_ids else None,
+                "vendor_request_ids": vendor_request_ids,
                 "result_count": len(classified),
+                "oem_candidate_urls": [c.url for c in oem_hits[:10]],
                 "urls": [c.url for c in classified[:10]],
             },
         )
+
+        # Register detected OEM reference pages as candidate sources without inferring applicability (CL-SRC-01)
+        if oem_hits:
+            ts_cand = now_ts()
+            with immediate_tx(conn):
+                for oc in oem_hits[:5]:
+                    cand_src_id = f"cand_{mfr_norm}_{normalize_token(oc.url)[-16:]}"
+                    conn.execute(
+                        """
+                        INSERT INTO sources (
+                          id, product_id, variant_id, origin_kind, canonical_url, final_url,
+                          allowed_domain, source_class, permission_policy, decision_evidence,
+                          created_at, updated_at
+                        ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(canonical_url, source_class) DO UPDATE SET
+                          updated_at = excluded.updated_at;
+                        """,
+                        (
+                            cand_src_id,
+                            oc.origin_kind,
+                            oc.url,
+                            oc.url,
+                            oc.domain,
+                            oc.source_class,
+                            oc.permission_policy,
+                            f"Detected via Context.dev search ({search_res.query}); applicability unverified.",
+                            ts_cand,
+                            ts_cand,
+                        ),
+                    )
 
         # Attempt defensive download only on allowlisted OEM PDF candidates (§8.3)
         allowed_domains = ALLOWED_OEM_DOMAINS.get(mfr_norm, set())
@@ -648,7 +695,11 @@ def process_single_job(
                 )
 
         if downloaded_doc is None:
-            reasons = download_errors or ["NO_ALLOWLISTED_OEM_SOURCE_FOUND"]
+            reasons = list(download_errors)
+            if oem_hits:
+                reasons.append("OEM_REFERENCE_CANDIDATES_DETECTED")
+            if not reasons:
+                reasons.append("NO_ALLOWLISTED_OEM_SOURCE_FOUND")
             complete_job(
                 conn,
                 job_id=job_id,

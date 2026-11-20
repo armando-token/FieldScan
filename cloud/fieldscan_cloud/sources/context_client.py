@@ -134,6 +134,9 @@ class ContextSearchClient:
         if not isinstance(raw_results, list):
             raise ContextSearchError("CONTEXT_INVALID_SCHEMA", "Context.dev response missing results list", transient=False)
 
+        if data.get("request_id"):
+            vendor_req_id = str(data["request_id"])
+
         candidates: list[SearchCandidate] = []
         for item in raw_results[:limit]:
             if not isinstance(item, dict):
@@ -147,7 +150,7 @@ class ContextSearchClient:
                     url=url,
                     domain=domain,
                     title=str(item.get("title", "")).strip(),
-                    snippet=str(item.get("snippet") or item.get("text") or "").strip()[:400],
+                    snippet=str(item.get("description") or item.get("snippet") or item.get("text") or "").strip()[:400],
                 )
             )
         return ContextSearchResult(

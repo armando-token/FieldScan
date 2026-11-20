@@ -3,6 +3,7 @@ import CryptoKit
 import Security
 #if canImport(UIKit)
 import UIKit
+import UniformTypeIdentifiers
 import WebKit
 
 /// Fullscreen Landscape Widescreen HMI Controller for FieldScan CAD v2.1 on iPad Air M4 (12 GB RAM).
@@ -14,7 +15,7 @@ import WebKit
 ///   Mac tether by pinning the SHA-256 DER digest; rejects silent certificate replacement until operator reconfirms.
 /// - **Canonical Share Sheet Allowlist (`EXP-05`)**: Only shares verified files inside `Documents/exports/`
 ///   and preserves all session records if Share Sheet is cancelled.
-public final class FieldScanWebViewController: UIViewController, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
+public final class FieldScanWebViewController: UIViewController, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler, UIDocumentPickerDelegate {
 
     private var webView: WKWebView!
     private let floatingPill = UIView()
@@ -77,6 +78,11 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
             getDeviceMemoryInfo: function() {
                 window.webkit.messageHandlers.fieldscanNative.postMessage({
                     command: "getDeviceMemoryInfo"
+                });
+            },
+            presentPackageImporter: function() {
+                window.webkit.messageHandlers.fieldscanNative.postMessage({
+                    command: "presentPackageImporter"
                 });
             }
         };
@@ -209,6 +215,10 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
 
         sheet.addAction(UIAlertAction(title: "Share Verified Dossier Files (Documents/exports)", style: .default) { [weak self] _ in
             self?.presentExportDirectoryShareSheet()
+        })
+
+        sheet.addAction(UIAlertAction(title: "Import Signed FieldScan Package (.zip / Folder)...", style: .default) { [weak self] _ in
+            self?.presentSignedPackageDocumentPicker()
         })
 
         sheet.addAction(UIAlertAction(title: "Start Native Camera Bridge (UVC / Built-In)", style: .default) { _ in
@@ -462,8 +472,44 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
                 self.webView.evaluateJavaScript(js, completionHandler: nil)
             }
 
+        case "presentPackageImporter":
+            presentSignedPackageDocumentPicker()
+
         default:
             break
+        }
+    }
+
+    private func presentSignedPackageDocumentPicker() {
+        var types: [UTType] = [.zip, .folder]
+        if let fspkg = UTType(filenameExtension: "fspkg") {
+            types.append(fspkg)
+        }
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+        picker.delegate = self
+        picker.allowsMultipleSelection = false
+        present(picker, animated: true)
+    }
+
+    public func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let pickedURL = urls.first else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let payload: [String: Any]
+            do {
+                let pkg = try FieldScanPackageStore.shared.importPackage(from: pickedURL)
+                payload = ["ok": true, "package": pkg]
+            } catch let cerr as FieldScanCatalogError {
+                payload = cerr.toDictionary()
+            } catch {
+                payload = ["ok": false, "error_code": "INVALID_ENVELOPE", "message": error.localizedDescription]
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: payload),
+               let jsonStr = String(data: data, encoding: .utf8) {
+                DispatchQueue.main.async {
+                    let js = "window.dispatchEvent(new CustomEvent('fieldscan:packageImported', { detail: \(jsonStr) }));"
+                    self?.webView.evaluateJavaScript(js, completionHandler: nil)
+                }
+            }
         }
     }
 

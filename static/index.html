@@ -13,7 +13,7 @@
   <title>FIELDSCAN CAD · DIGITAL TWIN — TZ THT-02 Industrial SCADA &amp; Repair HMI</title>
   <link rel="stylesheet" href="/static/vendor/open-props.min.css" />
   <link rel="stylesheet" href="/static/vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="/static/styles.css?v=20261119e" />
+  <link rel="stylesheet" href="/static/styles.css?v=20261119f" />
 </head>
 <body>
   <!-- =====================================================================
@@ -42,7 +42,17 @@
           title="Verify local 9-page PDF datasheet and 1:1 metrology specification"
         >
           <i data-lucide="cpu"></i>
-          <span>TZ THT-02 · 140×Ø16 mm</span>
+          <span id="sensorPillLabel">TZ THT-02 · 140×Ø16 mm</span>
+        </button>
+        <button
+          type="button"
+          class="sensor-spec-pill catalog-pill-btn"
+          id="btnOpenCatalogModal"
+          title="Manage Ed25519-signed local packages, multi-variant selection, and optional HTTPS Cloud Catalog sync"
+        >
+          <i data-lucide="package-check"></i>
+          <span id="catalogOriginLabel">Bundled V1.1</span>
+          <span class="catalog-update-dot" id="catalogUpdateDot" hidden title="Newer signed package ready for next session"></span>
         </button>
       </div>
 
@@ -346,6 +356,16 @@
       <div class="canvas-stage" id="canvasStage">
         <canvas id="cadCanvas"></canvas>
 
+        <!-- Clean Partial-Package Overlay when 3D Twin is Unavailable (`M4-3D-04`) -->
+        <div class="twin-no3d-overlay" id="twinNo3dOverlay" hidden>
+          <div class="twin-no3d-card">
+            <strong id="twinNo3dTitle">3D DIGITAL TWIN UNAVAILABLE FOR THIS VARIANT</strong>
+            <p id="twinNo3dBody">
+              Verified product documentation and procedures are active in the manual drawer. Interactive 3D geometry was not published in this signed package.
+            </p>
+          </div>
+        </div>
+
         <!-- Projected 3D->2D Engineering Dimension & Twin Deviation Badges -->
         <div class="overlay-layer" id="overlayLayer">
           <div class="dim-badge" id="labelDimLength">140.0 MM</div>
@@ -610,6 +630,12 @@
           </button>
 
           <div class="manual-nav-controls">
+            <select
+              id="manualDocSelect"
+              class="manual-doc-select"
+              aria-label="Select Manual Document"
+              hidden
+            ></select>
             <button type="button" class="btn-icon-mini" id="manualPrevBtn" title="Previous page" aria-label="Previous page">
               <i data-lucide="chevron-left"></i>
             </button>
@@ -639,6 +665,12 @@
 
           <div class="manual-viewer-box" id="manualViewerBox" title="Click to inspect full-resolution 2D blueprint">
             <img id="manualPageImg" src="/assets/manual_pages/page_1.png" alt="TZ THT-02 Technical Manual Page 1" />
+            <iframe
+              id="manualPdfFallbackFrame"
+              class="manual-pdf-fallback"
+              title="Verified Manual PDF Page Viewer"
+              hidden
+            ></iframe>
             <div class="manual-caption-bar">
               <span id="manualPageCaption">Page 1 · Component Overview &amp; SHT30 Probe</span>
               <span class="zoom-hint">TAP TO ENLARGE</span>
@@ -702,6 +734,12 @@
       <div class="lightbox-section-banner" id="lightboxSectionBanner" hidden></div>
       <div class="lightbox-body">
         <img id="lightboxImg" src="/assets/manual_pages/page_1.png" alt="Enlarged TZ THT-02 manual schematic" />
+        <iframe
+          id="lightboxPdfFallbackFrame"
+          class="lightbox-pdf-fallback"
+          title="Enlarged Verified Manual PDF Viewer"
+          hidden
+        ></iframe>
       </div>
     </div>
   </div>
@@ -848,8 +886,89 @@
     </div>
   </div>
 
+  <!-- =====================================================================
+       MODAL 4: SIGNED PACKAGE STORE & OPTIONAL HTTPS CLOUD CATALOG (`MEGAPLAN`)
+       ===================================================================== -->
+  <div class="modal-backdrop" id="catalogModal" hidden>
+    <div
+      class="modal-dialog modal-catalog"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Signed Package Store and Cloud Catalog"
+    >
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="modal-kicker">ED25519 VERIFIED STORE · SESSION-PINNED PROVENANCE</span>
+          <h2>FieldScan Signed Package Store &amp; Cloud Catalog</h2>
+        </div>
+        <button type="button" class="btn-close" id="catalogCloseBtn" aria-label="Close catalog modal">✕</button>
+      </div>
+
+      <div class="catalog-modal-body">
+        <div class="catalog-policy-bar">
+          <div class="catalog-policy-left">
+            <label class="catalog-toggle-label" for="toggleCloudSync">
+              <input type="checkbox" id="toggleCloudSync" />
+              <span>Enable HTTPS Cloud Catalog Sync</span>
+            </label>
+            <span class="meta-badge" id="catalogEgressBadge">Strict Local Only · 0 HTTPS reqs</span>
+          </div>
+          <div class="catalog-policy-actions">
+            <button type="button" class="chip-btn" id="btnImportSignedPackage">Import Signed Package (.zip)</button>
+            <input type="file" id="packageZipInput" accept=".zip,.fspkg,application/zip" hidden />
+            <button type="button" class="chip-btn" id="btnResetBundledContext">Use Bundled TZ THT-02 V1.1</button>
+          </div>
+        </div>
+
+        <div class="catalog-update-notice" id="catalogSessionPinNotice" hidden></div>
+
+        <div class="catalog-grid">
+          <div class="catalog-cloud-pane">
+            <h3>1. Cloud Catalog Endpoint &amp; Lookup</h3>
+            <div class="catalog-form-row">
+              <input
+                type="url"
+                id="inputCloudEndpoint"
+                class="catalog-input"
+                placeholder="Authorized HTTPS catalog endpoint"
+                autocomplete="off"
+              />
+              <input
+                type="password"
+                id="inputCloudToken"
+                class="catalog-input catalog-input-sm"
+                placeholder="Bearer token (Keychain)"
+                autocomplete="off"
+              />
+              <button type="button" class="chip-btn" id="btnSaveSyncConfig">Save</button>
+              <button type="button" class="chip-btn" id="btnCheckCloudHealth">Health</button>
+            </div>
+
+            <form id="catalogResolveForm" class="catalog-resolve-form">
+              <input type="text" id="inputResolveMfg" class="catalog-input" placeholder="Manufacturer (e.g. TZONE)" />
+              <input type="text" id="inputResolveModel" class="catalog-input" placeholder="Model (e.g. THT-02)" required />
+              <input type="text" id="inputResolveVariant" class="catalog-input" placeholder="Variant / Connector (optional)" />
+              <button type="submit" class="chip-btn chip-btn-cv active" id="btnResolveCatalog">Search Cloud</button>
+            </form>
+
+            <div class="catalog-status-box" id="catalogCloudResultBox">
+              Cloud sync is OFF by default on startup (zero unsolicited WAN requests). Local signed packages and the bundled TZ THT-02 twin work 100% offline.
+            </div>
+          </div>
+
+          <div class="catalog-installed-pane">
+            <h3>2. Verified Local Packages (Application Support)</h3>
+            <div class="catalog-packages-list" id="catalogPackagesList">
+              <!-- Populated dynamically by app.js -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/vendor/lucide.min.js"></script>
   <script src="/static/vendor/uPlot.iife.min.js"></script>
-  <script type="module" src="/static/app.js?v=20261119e"></script>
+  <script type="module" src="/static/app.js?v=20261119f"></script>
 </body>
 </html>

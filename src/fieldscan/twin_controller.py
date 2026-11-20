@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+import uuid
 
 _DIP_WEIGHTS: tuple[int, ...] = (128, 64, 32, 16, 8, 4, 2, 1)
 
@@ -277,3 +278,312 @@ def resolve_twin_action(
         }
 
     return None
+
+
+_WORD_PIN_MAP: dict[str, int] = {
+    "1": 1,
+    "one": 1,
+    "2": 2,
+    "two": 2,
+    "3": 3,
+    "three": 3,
+    "4": 4,
+    "four": 4,
+    "5": 5,
+    "five": 5,
+    "6": 6,
+    "six": 6,
+    "7": 7,
+    "seven": 7,
+    "8": 8,
+    "eight": 8,
+}
+
+_SINGLE_PIN_RE = re.compile(
+    r"\bpin\s*#?\s*(1|2|3|4|5|6|7|8|one|two|three|four|five|six|seven|eight)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_single_pin_reference(query: str) -> int | None:
+    m = _SINGLE_PIN_RE.search(query or "")
+    if not m:
+        return None
+    return _WORD_PIN_MAP.get(m.group(1).lower())
+
+
+def prepare_visual_action(
+    query: str,
+    *,
+    descriptor: dict[str, Any] | None = None,
+    zone_hint: str | None = None,
+    current_dip_address: int = 1,
+    scene_generation: int = 1,
+    turn_id: str | None = None,
+) -> dict[str, Any]:
+    """Resolve `twin_action_v1` with pin-ambiguity protection and turn/scene fencing (`M4-VOICE-01..03`)."""
+    q = (query or "").strip().lower()
+    tid = turn_id or f"turn-{uuid.uuid4().hex[:10]}"
+    ctx = (descriptor or {}).get("context") or {}
+    manifest_sha = str(ctx.get("manifest_sha256") or "bundle-tzone-tht02-v2.1")
+    scene_origin = str((descriptor or {}).get("scene_origin") or "bundled_parametric")
+
+    if scene_origin == "docs_only_no_3d":
+        return {
+            "ambiguous": False,
+            "clarification_required": False,
+            "clarification_prompt": None,
+            "candidate_part_ids": [],
+            "twin_action": None,
+            "twin_action_v1": None,
+            "turn_id": tid,
+            "scene_generation": int(scene_generation),
+            "manifest_sha256": manifest_sha,
+        }
+
+    has_dip_qualifier = any(k in q for k in ("dip", "switch", "switches", "sw1", "rocker", "slave", "address", "binary"))
+    has_rear_qualifier = any(
+        k in q for k in ("rear", "connector", "m12", "plug", "cable", "wire", "wiring", "terminal", "gland", "back")
+    )
+
+    if scene_origin == "catalog_glb" and isinstance((descriptor or {}).get("twin"), dict):
+        twin = descriptor["twin"]
+        parts = list(twin.get("parts") or [])
+        actions = list(twin.get("actions") or [])
+
+        # 1. Ambiguous single-pin check (`M4-VOICE-03`: e.g. `dip.pin_1` vs `rear.pin_1`)
+        pin_num = _extract_single_pin_reference(q)
+        if pin_num is not None:
+            group_key = f"pin_{pin_num}"
+            matching_pin_parts = [
+                p
+                for p in parts
+                if p.get("ambiguous_group") == group_key or str(p.get("part_id") or "").endswith(f".pin_{pin_num}")
+            ]
+            if len(matching_pin_parts) > 1 and not has_dip_qualifier and not has_rear_qualifier:
+                labels = [f"{p.get('label', '')} ({p.get('part_id', '')})" for p in matching_pin_parts]
+                cands = [str(p["part_id"]) for p in matching_pin_parts if p.get("part_id")]
+                return {
+                    "ambiguous": True,
+                    "clarification_required": True,
+                    "clarification_prompt": (
+                        f"Ambiguous component reference for Pin {pin_num}. "
+                        f"Please specify which Pin {pin_num} to highlight: {' or '.join(labels)}?"
+                    ),
+                    "candidate_part_ids": cands,
+                    "twin_action": None,
+                    "twin_action_v1": None,
+                    "turn_id": tid,
+                    "scene_generation": int(scene_generation),
+                    "manifest_sha256": manifest_sha,
+                }
+            if matching_pin_parts:
+                chosen = None
+                if has_dip_qualifier:
+                    chosen = next((p for p in matching_pin_parts if "dip" in str(p.get("part_id") or "")), matching_pin_parts[0])
+                elif has_rear_qualifier:
+                    chosen = next((p for p in matching_pin_parts if "rear" in str(p.get("part_id") or "")), matching_pin_parts[0])
+                elif len(matching_pin_parts) == 1:
+                    chosen = matching_pin_parts[0]
+
+                if chosen is not None:
+                    pid = str(chosen["part_id"])
+                    lbl = str(chosen.get("label") or pid)
+                    summary = str(chosen.get("summary") or "")
+                    view_id = "open_dip" if "dip" in pid else ("rear_connector" if "rear" in pid else "isometric_home")
+                    v1 = {
+                        "schema": "twin_action_v1",
+                        "kind": "highlight_part",
+                        "part_id": pid,
+                        "view_id": view_id,
+                        "citation_id": chosen.get("citation_id"),
+                        "simulated_state": None,
+                        "callout_title": lbl.upper(),
+                        "callout_body": summary,
+                        "turn_id": tid,
+                        "scene_generation": int(scene_generation),
+                        "manifest_sha256": manifest_sha,
+                        "requires_scene_ready": True,
+                    }
+                    legacy = {
+                        "action": "focus_part",
+                        "part_id": pid,
+                        "view_id": view_id,
+                        "explode_pcb": view_id == "open_dip",
+                        "callout_title": lbl.upper(),
+                        "callout_body": summary,
+                    }
+                    return {
+                        "ambiguous": False,
+                        "clarification_required": False,
+                        "clarification_prompt": None,
+                        "candidate_part_ids": [],
+                        "twin_action": legacy,
+                        "twin_action_v1": v1,
+                        "turn_id": tid,
+                        "scene_generation": int(scene_generation),
+                        "manifest_sha256": manifest_sha,
+                    }
+
+        # 2. Match explicit `twin.actions.json` triggers
+        for act in actions:
+            triggers = [str(t).lower() for t in act.get("triggers", [])]
+            pid = act.get("part_id")
+            if any(t in q for t in triggers) or (pid and str(pid).lower() in q):
+                kind = str(act.get("kind") or "focus_part")
+                vid = str(act.get("view_id") or "isometric_home")
+                matched_part = next((p for p in parts if p.get("part_id") == pid), None)
+                lbl = str((matched_part or {}).get("label") or pid or vid)
+                summary = str((matched_part or {}).get("summary") or "Verified 3D catalog twin inspection view.")
+                v1 = {
+                    "schema": "twin_action_v1",
+                    "kind": kind,
+                    "part_id": pid,
+                    "view_id": vid,
+                    "citation_id": act.get("citation_id"),
+                    "simulated_state": None,
+                    "callout_title": lbl.upper(),
+                    "callout_body": summary,
+                    "turn_id": tid,
+                    "scene_generation": int(scene_generation),
+                    "manifest_sha256": manifest_sha,
+                    "requires_scene_ready": True,
+                }
+                legacy = {
+                    "action": "reset_view" if kind == "reset_view" else "focus_part",
+                    "part_id": pid,
+                    "view_id": vid,
+                    "explode_pcb": vid == "open_dip",
+                    "callout_title": lbl.upper(),
+                    "callout_body": summary,
+                }
+                return {
+                    "ambiguous": False,
+                    "clarification_required": False,
+                    "clarification_prompt": None,
+                    "candidate_part_ids": [],
+                    "twin_action": legacy,
+                    "twin_action_v1": v1,
+                    "turn_id": tid,
+                    "scene_generation": int(scene_generation),
+                    "manifest_sha256": manifest_sha,
+                }
+
+        # 3. Direct part_id / label match in `twin.parts.json`
+        for p in parts:
+            pid = str(p.get("part_id") or "")
+            lbl = str(p.get("label") or pid)
+            if pid and (pid.lower() in q or lbl.lower() in q):
+                vid = (
+                    "open_dip"
+                    if "dip" in pid
+                    else ("rear_connector" if "rear" in pid else ("probe_tip" if "probe" in pid else "isometric_home"))
+                )
+                summary = str(p.get("summary") or "")
+                v1 = {
+                    "schema": "twin_action_v1",
+                    "kind": "focus_part",
+                    "part_id": pid,
+                    "view_id": vid,
+                    "citation_id": p.get("citation_id"),
+                    "simulated_state": None,
+                    "callout_title": lbl.upper(),
+                    "callout_body": summary,
+                    "turn_id": tid,
+                    "scene_generation": int(scene_generation),
+                    "manifest_sha256": manifest_sha,
+                    "requires_scene_ready": True,
+                }
+                legacy = {
+                    "action": "focus_part",
+                    "part_id": pid,
+                    "view_id": vid,
+                    "explode_pcb": vid == "open_dip",
+                    "callout_title": lbl.upper(),
+                    "callout_body": summary,
+                }
+                return {
+                    "ambiguous": False,
+                    "clarification_required": False,
+                    "clarification_prompt": None,
+                    "candidate_part_ids": [],
+                    "twin_action": legacy,
+                    "twin_action_v1": v1,
+                    "turn_id": tid,
+                    "scene_generation": int(scene_generation),
+                    "manifest_sha256": manifest_sha,
+                }
+
+    # Bundled parametric path: check ambiguous single-pin ("show me pin one") first (`M4-VOICE-03`)
+    pin_num = _extract_single_pin_reference(q)
+    if pin_num in (1, 2, 3, 4) and not has_dip_qualifier and not has_rear_qualifier:
+        return {
+            "ambiguous": True,
+            "clarification_required": True,
+            "clarification_prompt": (
+                f"Ambiguous reference for Pin {pin_num}. Do you want to highlight "
+                f"SW1 DIP-8 Switch Pin {pin_num} (dip.pin_{pin_num}) or Rear 4-Wire Lead #{pin_num} (rear.pin_{pin_num})?"
+            ),
+            "candidate_part_ids": [f"dip.pin_{pin_num}", f"rear.pin_{pin_num}"],
+            "twin_action": None,
+            "twin_action_v1": None,
+            "turn_id": tid,
+            "scene_generation": int(scene_generation),
+            "manifest_sha256": manifest_sha,
+        }
+
+    legacy = resolve_twin_action(query, zone_hint=zone_hint, current_dip_address=current_dip_address)
+    if legacy is None:
+        return {
+            "ambiguous": False,
+            "clarification_required": False,
+            "clarification_prompt": None,
+            "candidate_part_ids": [],
+            "twin_action": None,
+            "twin_action_v1": None,
+            "turn_id": tid,
+            "scene_generation": int(scene_generation),
+            "manifest_sha256": manifest_sha,
+        }
+
+    act_type = str(legacy.get("action") or "focus_zone")
+    kind = (
+        "reset_view"
+        if act_type == "reset_view"
+        else ("simulate_state" if act_type == "configure_dip" else ("show_view" if act_type == "xray_view" else "focus_part"))
+    )
+    mp = legacy.get("manual_page")
+    sim_state = (
+        {
+            "visual_dip_address": legacy.get("target_slave_id", current_dip_address),
+            "dip_bits": legacy.get("dip_bits", []),
+            "bus_target_mutated": False,
+        }
+        if act_type == "configure_dip"
+        else None
+    )
+    v1 = {
+        "schema": "twin_action_v1",
+        "kind": kind,
+        "part_id": legacy.get("focus_zone"),
+        "view_id": str(legacy.get("camera_pose") or "overview"),
+        "citation_id": f"tht02_manual_v1_1:p{mp}:{mp}.1" if mp else None,
+        "simulated_state": sim_state,
+        "callout_title": legacy.get("callout_title", ""),
+        "callout_body": legacy.get("callout_body", ""),
+        "turn_id": tid,
+        "scene_generation": int(scene_generation),
+        "manifest_sha256": manifest_sha,
+        "requires_scene_ready": False,
+    }
+    return {
+        "ambiguous": False,
+        "clarification_required": False,
+        "clarification_prompt": None,
+        "candidate_part_ids": [],
+        "twin_action": legacy,
+        "twin_action_v1": v1,
+        "turn_id": tid,
+        "scene_generation": int(scene_generation),
+        "manifest_sha256": manifest_sha,
+    }

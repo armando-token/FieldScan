@@ -1,6 +1,6 @@
 {
   "contract_version": "2.1.0",
-  "file_count": 26,
+  "file_count": 31,
   "files": {
     "assets/THT02_Users_Manual_v1.1.pdf": {
       "sha256": "fe5be7370ac42ad80d0e43c32c2b61d5f971a33ea9175c8405398d0fde4932cb",
@@ -50,6 +50,18 @@
       "sha256": "d1b34e86bc9e2b0887f5d67ff61869be83264513fb6a3782c7f39b841a7fc863",
       "size_bytes": 22304
     },
+    "knowledge/fixtures/cloud_catalog_v1/api_mock_vectors_v1.json": {
+      "sha256": "fd64d917c939a36be6d1d3952aa161335ede7fe12f6438dc244c03071ad2283e",
+      "size_bytes": 3940
+    },
+    "knowledge/fixtures/cloud_catalog_v1/reference_full_m12_seq10.zip": {
+      "sha256": "7153b7604aa971c8e7618ba251bb9c677d7c78a71f072da0f70e44fbb5c133f1",
+      "size_bytes": 11589
+    },
+    "knowledge/fixtures/cloud_catalog_v1/reference_partial_no3d_seq10.zip": {
+      "sha256": "fe1270e61c9d0372989a87070d6eefc2a1889c795e639be990e5551a66f3ff97",
+      "size_bytes": 8720
+    },
     "knowledge/fixtures/golden_contracts_v2_1.json": {
       "sha256": "0b9ecafa37e4575b9e8300a0f414c70dc1b84fb0a98e20427a2c3215ec7c09d5",
       "size_bytes": 6829
@@ -67,16 +79,24 @@
       "size_bytes": 3189
     },
     "static/app.js": {
-      "sha256": "cbcb203d37f7be00e3620e2fc3b56f72aa14f7b6c7326cd71ad550ac01f4a61f",
-      "size_bytes": 209802
+      "sha256": "2ecaf5317babf606491fc1ce8e548d5888db26f2480514b1ccbf1d28e809614f",
+      "size_bytes": 245010
     },
     "static/index.html": {
-      "sha256": "2e42258c89788e38c23eec4127bbeb5ea28a026317d48b100ec24eb210bea14f",
-      "size_bytes": 39911
+      "sha256": "bf1dd0be03a4faa99c4a0935c91999127017c914e758c39cf0c5c565f4408531",
+      "size_bytes": 45398
     },
     "static/styles.css": {
-      "sha256": "1c907cafbab3d67e579355d9f0d0db280ed507e68f318ce30817557bc845432f",
-      "size_bytes": 62808
+      "sha256": "1250e6c3eb67301ed8dbf3a9ab5bbb7fa60511500da469ffe9d14ee522971198",
+      "size_bytes": 67286
+    },
+    "static/vendor/BufferGeometryUtils.js": {
+      "sha256": "448c8dc2e08075d2e7ab9c915075fcdaf95b39e3875d6aedd97c4e38d9c2d9dd",
+      "size_bytes": 31879
+    },
+    "static/vendor/GLTFLoader.js": {
+      "sha256": "14804a88b6a9be322996dd6ff5932f1b0a247c84aeeea2dcd90f9155af41f312",
+      "size_bytes": 110377
     },
     "static/vendor/OrbitControls.js": {
       "sha256": "6f3052dd8860a60fe6999260d50558ff54609523724c6e374326228e5590cf55",
@@ -108,5 +128,5 @@
     }
   },
   "schema_version": 1,
-  "tree_sha256": "0bbdae70f4db781b692e45ed4a1dde36b878627b64b22b37b3000afe6bb5507b"
+  "tree_sha256": "587c0c83fa28ce2b710fcd286ed631cf11812062a0e43847a6d6b8dc90c09d8c"
 }

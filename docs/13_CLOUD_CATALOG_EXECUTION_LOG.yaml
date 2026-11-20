@@ -1,0 +1,201 @@
+# FieldScan CAD v2.1 — Section 7 Cloud Catalog Integration Structured Execution Log
+# Records automated Python + compiled Swift verification and separates pending physical bench / live cloud items.
+
+schema_version: 1
+contract_version: "2.1.0"
+baseline_commit: "8e6a06504f916cc40e0e7c85177efb7cffa16d04"
+toolchain:
+  xcode_version: "27.2 (27B52)"
+  target_sdk: "arm64-apple-ios17.0"
+  python_version: "3.12.15"
+target_device:
+  model: "iPad Air 11-inch (M4, 12 GB Unified Memory)"
+  bundle_id: "com.fieldscan.tht02.ipadm4"
+  udid: "00008132-000C79663C8BC01C"
+reference_fixtures:
+  signing_key_id: "demo-1"
+  public_key_b64: "dY3z2CiJZsOxQuwsAHq4jGNIfYDzRWQ4U1yAV3IMsb0="
+  full_package_archive: "knowledge/fixtures/cloud_catalog_v1/reference_full_m12_seq10.zip"
+  partial_package_archive: "knowledge/fixtures/cloud_catalog_v1/reference_partial_no3d_seq10.zip"
+  api_mock_vectors: "knowledge/fixtures/cloud_catalog_v1/api_mock_vectors_v1.json"
+summary_counts:
+  baseline_tests_preserved: 38
+  new_cloud_catalog_matrix_cases: 42
+  total_automated_tests: 80
+  automated_passed: 80
+  automated_failed: 0
+  pending_external_dependencies:
+    - id: "LIVE-CLOUD-URL"
+      condition: "Requires production HTTPS Cloud Catalog base URL, bearer token, and production Ed25519 key_id"
+    - id: "PHYSICAL-MODBUS-BENCH"
+      condition: "Requires physical PUSR USR-DR164 (:502) or FT2232HL RS-485 bus connected to powered TZ THT-02"
+matrix_executions:
+  - id: M4-BASE-01
+    data_origin: bundled_offline
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_base_01_launch_offline_zero_wan_requests"
+    result: PASS
+  - id: M4-BASE-02
+    data_origin: bundled_and_fixture_manifest
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_base_02_manifest_audit_and_swift_python_baseline"
+    result: PASS
+  - id: M4-BASE-03
+    data_origin: dual_mode_telemetry
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_base_03_mac_assisted_and_bundled_offline_modes"
+    result: PASS
+  - id: M4-ID-01
+    data_origin: local_catalog_resolver
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_id_01_exact_alias_unknown_variant_and_foreign_model"
+    result: PASS
+  - id: M4-ID-02
+    data_origin: multi_variant_signed_fixtures
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_id_02_two_plausible_variants_discriminant_without_mutating_open_session"
+    result: PASS
+  - id: M4-ID-03
+    data_origin: signed_fixture_and_bundle
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_id_03_create_session_for_selected_variant_and_preserve_bundle"
+    result: PASS
+  - id: M4-WAN-01
+    data_origin: mock_https_cloud_transport
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_wan_01_resolve_cached_200_and_async_202_job"
+    result: PASS
+  - id: M4-WAN-02
+    data_origin: mock_https_cloud_transport
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_wan_02_deduplicate_job_and_fence_stale_ui_attempt"
+    result: PASS
+  - id: M4-WAN-03
+    data_origin: mock_https_cloud_transport
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_wan_03_http_304_401_403_429_and_5xx_preserving_cache"
+    result: PASS
+  - id: M4-WAN-04
+    data_origin: mock_https_cloud_transport_and_swift_urlprotocol
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_wan_04_block_cross_origin_redirect_and_cancel_on_sync_disable"
+    result: PASS
+  - id: M4-WAN-05
+    data_origin: mock_https_cloud_transport
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_wan_05_truncated_blob_rejected_and_reload_succeeds"
+    result: PASS
+  - id: M4-WAN-06
+    data_origin: offline_socket_guard_and_telemetry_audit
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_wan_06_authorized_egress_only_and_zero_secret_or_evidence_leak"
+    result: PASS
+  - id: M4-PKG-01
+    data_origin: signed_zip_fixture_offline
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_pkg_01_import_signed_fixture_offline_from_files"
+    result: PASS
+  - id: M4-PKG-02
+    data_origin: adversarial_tampered_envelopes
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_pkg_02_tampered_manifest_signature_key_id_and_pdf_hash_rejected"
+    result: PASS
+  - id: M4-PKG-03
+    data_origin: adversarial_duplicate_keys_and_blobs
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_pkg_03_unexpected_incomplete_duplicate_key_and_invalid_role_rejected"
+    result: PASS
+  - id: M4-PKG-04
+    data_origin: simulated_crash_recovery
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_pkg_04_crash_recovery_before_and_after_move_consistent"
+    result: PASS
+  - id: M4-PKG-05
+    data_origin: concurrent_revisions
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_pkg_05_concurrent_two_revisions_publishes_newest_seq"
+    result: PASS
+  - id: M4-PKG-06
+    data_origin: sequence_ordering_fixtures
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_pkg_06_anti_rollback_blocks_older_seq_and_allows_higher_seq_revert"
+    result: PASS
+  - id: M4-PKG-07
+    data_origin: disk_and_size_budget_simulation
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_pkg_07_disk_full_and_budget_exceeded_preserve_active_install"
+    result: PASS
+  - id: M4-PKG-08
+    data_origin: partial_and_broken_capability_fixtures
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_pkg_08_partial_package_accepted_and_broken_complete_package_rejected"
+    result: PASS
+  - id: M4-PKG-09
+    data_origin: adversarial_zip_archives
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_pkg_09_archive_entry_limit_path_traversal_symlink_and_exec_rejected"
+    result: PASS
+  - id: M4-DOC-01
+    data_origin: signed_12p_and_4p_pdfs
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_doc_01_twelve_page_manual_and_two_docs_same_page_numbers"
+    result: PASS
+  - id: M4-DOC-02
+    data_origin: signed_12p_pdf_fallback
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_doc_02_out_of_range_page_blocked_and_missing_crop_falls_back_to_pdf"
+    result: PASS
+  - id: M4-DOC-03
+    data_origin: adversarial_html_script_markdown
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_doc_03_html_script_and_markdown_sanitized_preserving_origin"
+    result: PASS
+  - id: M4-3D-01
+    data_origin: signed_binary_glb_fixture
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_3d_01_compatible_glb_import_open_cap_focus_dip_and_reset"
+    result: PASS
+  - id: M4-3D-02
+    data_origin: adversarial_glb_external_uri_and_missing_node
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_3d_02_duplicate_part_missing_node_and_external_uri_rejected"
+    result: PASS
+  - id: M4-3D-03
+    data_origin: scene_swap_and_byte_range_streaming
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_3d_03_repeated_scene_swaps_generation_fencing_and_byte_range_streaming"
+    result: PASS
+  - id: M4-3D-04
+    data_origin: binary_glb_meter_to_mm_bounds
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_3d_04_glb_units_axes_bounds_and_140x16mm_correspondence"
+    result: PASS
+  - id: M4-3D-05
+    data_origin: cad_export_capability_guard
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_3d_05_cad_export_guard_for_downloaded_glb_vs_bundled_model"
+    result: PASS
+  - id: M4-VOICE-01
+    data_origin: signed_catalog_turn_fencing
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_voice_01_text_and_ptt_show_dip_bank_with_turn_and_citation"
+    result: PASS
+  - id: M4-VOICE-02
+    data_origin: barge_in_generation_fencing
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_voice_02_handsfree_barge_in_cancels_stale_turn_generation"
+    result: PASS
+  - id: M4-VOICE-03
+    data_origin: dual_pin_1_ambiguity_fixture
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_voice_03_ambiguous_pin_one_requests_clarification_without_selecting"
+    result: PASS
+  - id: M4-VOICE-04
+    data_origin: vlm_offline_deterministic_fallback
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_voice_04_vlm_provider_offline_deterministic_fallback_preserves_viewer"
+    result: PASS
+  - id: M4-CAM-01
+    data_origin: synthetic_and_variant_camera_telemetry
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_cam_01_supported_occluded_and_catalog_variant_evidence_states"
+    result: PASS
+  - id: M4-BUS-01
+    data_origin: simulated_dip_isolation_gate
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_bus_01_simulated_dip_via_text_and_voice_never_mutates_bus_target"
+    result: PASS
+  - id: M4-BUS-02
+    data_origin: local_mbap_gateway_stub_and_confirmed_target
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_bus_02_authorized_confirmed_target_slave_and_isolated_mbap_read"
+    notes: "Automated stub verified; physical PUSR USR-DR164 hardware bench tracked separately under PENDING-MODBUS-BENCH"
+    result: PASS
+  - id: M4-BUS-03
+    data_origin: unhomologated_catalog_profile
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_bus_03_unhomologated_catalog_profile_blocks_bus_polling"
+    result: PASS
+  - id: M4-SESSION-01
+    data_origin: mid_session_package_upgrade
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_session_01_mid_session_install_keeps_open_session_pinned"
+    result: PASS
+  - id: M4-SESSION-02
+    data_origin: historical_session_reopen_and_purged_source
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_session_02_reopen_historical_session_or_report_historical_source_unavailable"
+    result: PASS
+  - id: M4-SESSION-03
+    data_origin: exported_pdf_and_json_dossier
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_session_03_export_pdf_and_json_dossier_preserves_catalog_provenance"
+    result: PASS
+  - id: M4-REVOKE-01
+    data_origin: signed_revocation_publication
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_revoke_01_synced_revocation_labels_history_and_blocks_next_execution"
+    result: PASS
+  - id: M4-END-01
+    data_origin: end_to_end_mock_cloud_to_offline_relaunch
+    evidence: "tests/test_cloud_catalog_megaplan_matrix.py::test_m4_end_01_full_end_to_end_https_download_offline_relaunch_voice_and_export"
+    result: PASS

@@ -69,6 +69,8 @@ public final class FieldScanRuntimeConfig {
     private let kMacTetherHTTPSPort = "fieldscan.mac.https_port"
     private let kMacTetherHTTPPort = "fieldscan.mac.http_port"
     private let kPinnedTLSFingerprint = "fieldscan.tls.pinned_sha256"
+    private let kCloudCatalogBaseURL = "fieldscan.cloud.base_url"
+    private let kCloudCatalogSyncEnabled = "fieldscan.cloud.sync_enabled"
 
     public let bundleIdentifier = "com.fieldscan.tht02.ipadm4"
     public let localBackendURL = URL(string: "http://127.0.0.1:8088")!
@@ -115,6 +117,18 @@ public final class FieldScanRuntimeConfig {
         set { defaults.set(newValue, forKey: kPinnedTLSFingerprint) }
     }
 
+    /// Cloud Catalog HTTPS URL (accessed exclusively by `FieldScanCatalogClient`, NEVER trusted as a WKWebView HMI origin).
+    public var cloudCatalogBaseURL: String {
+        get { defaults.string(forKey: kCloudCatalogBaseURL) ?? "" }
+        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: kCloudCatalogBaseURL) }
+    }
+
+    /// Separate preference for Cloud Catalog synchronization; defaults to `false` so startup is 100% offline (`M4-BASE-01`).
+    public var cloudCatalogSyncEnabled: Bool {
+        get { defaults.bool(forKey: kCloudCatalogSyncEnabled) }
+        set { defaults.set(newValue, forKey: kCloudCatalogSyncEnabled) }
+    }
+
     public var usbTetherHTTPSURL: URL {
         return URL(string: "https://\(macTetherHost):\(macHTTPSPort)") ?? localBackendURL
     }
@@ -147,10 +161,14 @@ public final class FieldScanRuntimeConfig {
 
     private init() {}
 
-    /// Returns trusted WebView hosts strictly allowed to access native bridges (`OFF-05`).
+    /// Returns trusted WebView hosts strictly allowed to access native bridges (`OFF-05`, `M4-WAN-06`).
     public func isTrustedHMIHost(_ rawHost: String?) -> Bool {
         guard let h = rawHost?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !h.isEmpty else {
             return true // local `file://` bundle URLs have empty host
+        }
+        // Never grant native WebView bridge privileges to the external Cloud Catalog origin (`M4-WAN-06`)
+        if let cloudHost = URL(string: cloudCatalogBaseURL)?.host?.lowercased(), !cloudHost.isEmpty, h == cloudHost {
+            return false
         }
         if h == "127.0.0.1" || h == "localhost" || h == "::1" {
             return true

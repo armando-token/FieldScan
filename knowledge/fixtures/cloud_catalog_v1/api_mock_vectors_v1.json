@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.1.0",
+  "signing_key_info": {
+    "key_id": "demo-1",
+    "issuer": "fieldscan-demo",
+    "algorithm": "Ed25519",
+    "public_key_hex": "758df3d8288966c3b142ec2c007ab88c63487d80f3456438535c8057720cb1bd",
+    "public_key_b64": "dY3z2CiJZsOxQuwsAHq4jGNIfYDzRWQ4U1yAV3IMsb0=",
+    "scope": "labeled_test_fixture_only"
+  },
+  "reference_packages": {
+    "full_m12_seq10": {
+      "archive": "reference_full_m12_seq10.zip",
+      "manifest_sha256": "3f33e2de500026bf7b5cba3653a4781b3116dec4fb0448738f0fe0505e0c3831",
+      "product_id": "tzone_tht02",
+      "variant_id": "m12_4pin_rev2",
+      "publication_seq": 10
+    },
+    "partial_no3d_seq10": {
+      "archive": "reference_partial_no3d_seq10.zip",
+      "manifest_sha256": "b1d4b6b0e06929a77f3a76495d204ace16ef5c06ba21e0439c573c6ded696abc",
+      "product_id": "tzone_tht02",
+      "variant_id": "wall_lcd_partial",
+      "publication_seq": 10
+    }
+  },
+  "api_scenarios": {
+    "cache_hit_200": {
+      "http_status": 200,
+      "body": {
+        "job_state": "ready",
+        "availability": "complete",
+        "product_id": "tzone_tht02",
+        "variant_id": "m12_4pin_rev2",
+        "title": "TZ THT-02 (m12_4pin_rev2)",
+        "publication_seq": 10,
+        "manifest_sha256": "3f33e2de500026bf7b5cba3653a4781b3116dec4fb0448738f0fe0505e0c3831"
+      }
+    },
+    "job_queued_202": {
+      "http_status": 202,
+      "body": {
+        "job_id": "job-tht02-m12-001",
+        "job_state": "queued",
+        "availability": "pending",
+        "poll_after_s": 2
+      }
+    },
+    "job_ready_complete": {
+      "http_status": 200,
+      "body": {
+        "job_id": "job-tht02-m12-001",
+        "job_state": "ready",
+        "availability": "complete",
+        "product_id": "tzone_tht02",
+        "variant_id": "m12_4pin_rev2",
+        "publication_seq": 10,
+        "manifest_sha256": "3f33e2de500026bf7b5cba3653a4781b3116dec4fb0448738f0fe0505e0c3831",
+        "capabilities": {
+          "documentation": true,
+          "interactive_twin": true,
+          "procedures": true
+        }
+      }
+    },
+    "job_ready_partial": {
+      "http_status": 200,
+      "body": {
+        "job_id": "job-tht02-wall-002",
+        "job_state": "ready",
+        "availability": "partial",
+        "product_id": "tzone_tht02",
+        "variant_id": "wall_lcd_partial",
+        "publication_seq": 10,
+        "manifest_sha256": "b1d4b6b0e06929a77f3a76495d204ace16ef5c06ba21e0439c573c6ded696abc",
+        "capabilities": {
+          "documentation": true,
+          "interactive_twin": false,
+          "procedures": true
+        },
+        "reason_codes": [
+          "INTERNAL_GEOMETRY_UNCONFIRMED"
+        ]
+      }
+    },
+    "ambiguous_identity": {
+      "http_status": 200,
+      "body": {
+        "job_state": "ready",
+        "availability": "ambiguous",
+        "discriminant_field": "connector_type",
+        "discriminant_prompt": "Confirm physical rear connector before selecting package.",
+        "candidates": [
+          {
+            "product_id": "tzone_tht02",
+            "variant_id": "m12_4pin_rev2",
+            "title": "TZ THT-02 M12 4-Pin Variant",
+            "discriminant_hint": "Rear M12 A-coded 4-pin plug"
+          },
+          {
+            "product_id": "tzone_tht02",
+            "variant_id": "pigtail_1m_rev2",
+            "title": "TZ THT-02 1m Shielded Pigtail Variant",
+            "discriminant_hint": "Integrated 1m 4-wire cable gland"
+          }
+        ]
+      }
+    },
+    "rate_limited_429": {
+      "http_status": 429,
+      "headers": {
+        "Retry-After": "7"
+      },
+      "body": {
+        "error_code": "HTTP_RATE_LIMITED",
+        "message": "Too many catalog synthesis requests"
+      }
+    },
+    "temporary_failure_503": {
+      "http_status": 503,
+      "body": {
+        "error_code": "HTTP_SERVER_ERROR",
+        "message": "Upstream synthesis worker unavailable"
+      }
+    }
+  }
+}

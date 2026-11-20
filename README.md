@@ -30,6 +30,9 @@ A **100% On-Device / Offline (Airplane Mode)** industrial field engineering, int
    - Exports `.PDF` + `.JSON` maintenance dossiers (with `public_demo` serial masking), AutoCAD R12 `.DXF`, binary `.STL`, and 4-angle `.ZIP`/`.EML` sign-off bundles.
 7. **Permanent System-Wide Anti-Regression & Dependency Audit Gate**:
    - `scripts/audit_no_regressions.py` + `tests/test_system_integrity_audit.py` run automatically inside `scripts/build_ipad_m4_app.sh` and `pytest`, enforcing acyclic module dependencies, 100% English-only source files, PTT/Barge-In/3D-Twin/Manual invariants, CoreAudio serial-queue isolation, and 100% SHA-256 `BundleResources` parity.
+8. **Ed25519 Signed Package Store, Multi-Doc/GLB Adapter & Opt-In HTTPS Cloud Catalog (`docs/12_CLOUD_CATALOG_CONTRACT_AND_RUNBOOK.md`)**:
+   - Launches 100% offline (`sync_enabled = false`, `0` WAN requests, iPadOS `NWListener` bound strictly to `127.0.0.1:8088`).
+   - Verifies detached Ed25519 manifest envelopes (`CryptoKit.Curve25519` on iPadOS + RFC 8032 in Python), blocks duplicate JSON keys, rollbacks, unsafe paths, and external GLB URIs, and serves verified `.pdf` (`12+` multi-document pages) and self-contained `.glb` 3D twins via local `206` Byte-Range streaming with immutable `catalog_context` session pinning.
 
 ---
 
@@ -104,13 +107,14 @@ FieldScan/
 │   ├── build_ipad_m4_app.sh                   # Full iPad Air M4 verification, Xcode build & USB-C deployment script
 │   └── run_swift_contract_tests.swift         # Native Swift CLI contract, MBAP, grounding, 3D Twin & vision test runner
 │
-├── tests/                                     # Automated Python + Swift Anti-Regression Suite (38 Tests)
+├── tests/                                     # Automated Python + Swift Anti-Regression Suite (80 Tests)
 │   ├── test_system_integrity_audit.py         # Runs `audit_no_regressions.py` inside pytest
 │   ├── test_modular_ai_manual_vision.py       # Tests English intent router, `twin_action`, manual lookup & carpet vision
 │   ├── test_megaplan_contracts_and_matrix.py  # Tests Contract v2.1.0, MBAP TCP, SQLite sessions & Swift parity binary
+│   ├── test_cloud_catalog_megaplan_matrix.py  # Tests all 42 Cloud Catalog cases (`M4-BASE-01` .. `M4-END-01`)
 │   └── test_fieldscan_glue.py                 # Tests 100% English repo gate, CAD DXF/STL, Modbus CRC-16 & repair loop
 │
-└── docs/                                      # Hardware, AI, CAD, Modbus & iPad Air M4 Engineering Guides (01..11)
+└── docs/                                      # Hardware, AI, CAD, Modbus, iPad M4 & Cloud Catalog Guides (01..13)
     ├── 01_HARDWARE_USB_CAMERA_GLUE.md
     ├── 02_LIQUID_LFM3_LLAMA_CPP_GLUE.md
     ├── 03_PDF_TO_THREEJS_CAD_GLUE.md

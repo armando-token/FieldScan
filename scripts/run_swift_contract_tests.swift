@@ -406,11 +406,183 @@ func runSwiftContractSuite() throws {
     check(sensorRes.dipFocusPoint != nil && abs(Double(sensorRes.dipFocusPoint![0]) - 395.0) < 28.0, "VisionDetector: must lock onto SW1 DIP-8 8-pin comb")
     check(visionMs < 25.0, "VisionDetector: single-frame analysis must complete in < 25 ms (got \(visionMs) ms)")
 
+    // 10. Cloud Catalog Integration Parity (`M4-ID`, `M4-PKG`, `M4-DOC`, `M4-3D`, `M4-VOICE`, `M4-WAN`, `M4-SESSION`, `M4-REVOKE`)
+    let catDir = tmpDir.appendingPathComponent("catalog_store", isDirectory: true)
+    let pkgStore = FieldScanPackageStore(catalogRoot: catDir, bundleRoot: repoRoot)
+    let catSessionEngine = FieldScanSessionEngine(
+        baseDirectory: tmpDir.appendingPathComponent("cat_sessions", isDirectory: true),
+        bundleRoot: repoRoot,
+        packageStore: pkgStore
+    )
+
+    // 10a. Cross-language Ed25519 (`Python RFC 8032` -> `Apple CryptoKit`) + Deflate `.zip` import (`M4-PKG-01`, `M4-PKG-08`)
+    let refFullZip = repoRoot.appendingPathComponent("knowledge/fixtures/cloud_catalog_v1/reference_full_m12_seq10.zip")
+    let refPartialZip = repoRoot.appendingPathComponent("knowledge/fixtures/cloud_catalog_v1/reference_partial_no3d_seq10.zip")
+    let fullPkg = try pkgStore.importPackage(from: refFullZip)
+    let fullSha = fullPkg["manifest_sha256"] as! String
+    check((fullPkg["publication_seq"] as? Int) == 10 && (fullPkg["variant_id"] as? String) == "m12_4pin_rev2", "M4-PKG-01: Swift CryptoKit verified Python-signed reference_full_m12_seq10.zip")
+
+    let partPkg = try pkgStore.importPackage(from: refPartialZip)
+    let partSha = partPkg["manifest_sha256"] as! String
+    let partCtx = try pkgStore.selectContextForNextSession(manifestSha256: partSha)
+    let partDesc = try pkgStore.buildSceneAndManualDescriptor(context: partCtx)
+    check((partDesc["scene_origin"] as? String) == "docs_only_no_3d", "M4-PKG-08: Partial package must declare docs_only_no_3d")
+
+    // 10b. Duplicate JSON key & tampered signature rejection (`M4-PKG-02`, `M4-PKG-03`)
+    var dupRejected = false
+    do {
+        _ = try FieldScanCatalogContract.parseJSONStrictNoDuplicateKeys(Data("{\"a\":1,\"a\":2}".utf8))
+    } catch let ce as FieldScanCatalogError {
+        dupRejected = (ce.code == "DUPLICATE_JSON_KEYS")
+    }
+    check(dupRejected, "M4-PKG-03: Swift raw UTF-8 duplicate-key scanner must reject duplicate keys")
+
+    let fullPkgDir = URL(fileURLWithPath: fullPkg["package_dir"] as! String)
+    let validEnvData = try Data(contentsOf: fullPkgDir.appendingPathComponent("manifest.envelope.json"))
+    var validEnvObj = try JSONSerialization.jsonObject(with: validEnvData) as! [String: Any]
+    validEnvObj["key_id"] = "untrusted-key-99"
+    var badKeyRejected = false
+    do {
+        _ = try FieldScanCatalogContract.verifyAndDecodeManifestEnvelope(try JSONSerialization.data(withJSONObject: validEnvObj))
+    } catch let ce as FieldScanCatalogError {
+        badKeyRejected = (ce.code == "UNTRUSTED_KEY_ID")
+    }
+    check(badKeyRejected, "M4-PKG-02: Untrusted key_id must be rejected before installation")
+
+    // 10c. Local Byte-Range (`206`, `416`, `HEAD`) streaming (`M4-3D-03`)
+    let arts = fullPkg["artifacts"] as! [[String: Any]]
+    let glbArt = arts.first(where: { ($0["role"] as? String) == "twin_glb" })!
+    let glbSha = glbArt["sha256"] as! String
+    let headRes = try pkgStore.readObjectRange(manifestSha256: fullSha, objectSha256: glbSha, rangeHeader: nil, headOnly: true)
+    check(headRes.statusCode == 200 && headRes.body.isEmpty && headRes.headers["Content-Length"] == "\(glbArt["byte_count"]!)", "M4-3D-03: HEAD must return empty body + Content-Length")
+    let rangeRes = try pkgStore.readObjectRange(manifestSha256: fullSha, objectSha256: glbSha, rangeHeader: "bytes=0-19", headOnly: false)
+    check(rangeRes.statusCode == 206 && rangeRes.body.count == 20 && String(data: rangeRes.body.prefix(4), encoding: .ascii) == "glTF", "M4-3D-03: Range bytes=0-19 must return 206 glTF header")
+    var range416 = false
+    do {
+        _ = try pkgStore.readObjectRange(manifestSha256: fullSha, objectSha256: glbSha, rangeHeader: "bytes=99999999-999999999", headOnly: false)
+    } catch let ce as FieldScanCatalogError {
+        range416 = (ce.statusCode == 416)
+    }
+    check(range416, "M4-3D-03: Out-of-bounds Range must return 416")
+
+    // 10d. Strict asset identity (`M4-ID-01..02`)
+    let foreignRes = pkgStore.resolveAssetQuery("Siemens QFA2060")
+    check((foreignRes["matched"] as? Bool) == false && (foreignRes["sensor_id"] is NSNull), "M4-ID-01: Foreign model must NOT match THT-02")
+    let famAmb = pkgStore.resolveAssetQuery("THT")
+    check((famAmb["resolution"] as? String) == "ambiguous", "M4-ID-02: Family query must request discriminant")
+
+    // 10e. 12-page multi-document manual + `twin_action_v1` + `"pin one"` ambiguity (`M4-DOC-01..02`, `M4-VOICE-01..03`)
+    let fullCtx = try pkgStore.selectContextForNextSession(manifestSha256: fullSha)
+    let fullDesc = try pkgStore.buildSceneAndManualDescriptor(context: fullCtx)
+    let doc12Hit = FieldScanManualNavigator.lookupManualInDescriptor(query: "Show extended calibration drift appendix", descriptor: fullDesc)
+    check((doc12Hit["matched"] as? Bool) == true && (doc12Hit["manual_page"] as? Int) == 12 && (doc12Hit["printed_page"] as? String) == "A-12", "M4-DOC-01: Swift 12-page manual lookup")
+    let docTbHit = FieldScanManualNavigator.lookupManualInDescriptor(query: "Open page 4", descriptor: fullDesc, preferredDocumentId: "wiring_bulletin_tb204")
+    check((docTbHit["matched"] as? Bool) == true && (docTbHit["document_id"] as? String) == "wiring_bulletin_tb204" && (docTbHit["printed_page"] as? String) == "B-4", "M4-DOC-01: Multi-doc disambiguation")
+    let outRangeHit = FieldScanManualNavigator.lookupManualInDescriptor(query: "Open page 99", descriptor: fullDesc, preferredDocumentId: "fixture_manual_12p")
+    check((outRangeHit["matched"] as? Bool) == false && (outRangeHit["error_code"] as? String) == "PAGE_OUT_OF_RANGE", "M4-DOC-02: Page 99 out-of-range blocked")
+
+    let dipAct = FieldScanTwinController.prepareVisualAction(query: "Show me the DIP bank", descriptor: fullDesc, sceneGeneration: 4, turnId: "swift-turn-1")
+    let dipV1 = dipAct["twin_action_v1"] as? [String: Any]
+    check((dipV1?["part_id"] as? String) == "dip.bank" && (dipV1?["citation_id"] as? String) == "fixture_manual_12p:p5:5.1", "M4-VOICE-01: Swift twin_action_v1 dip.bank")
+    let pinAmb = FieldScanTwinController.prepareVisualAction(query: "Show me pin one", descriptor: fullDesc, sceneGeneration: 4, turnId: "swift-turn-2")
+    check((pinAmb["ambiguous"] as? Bool) == true && (pinAmb["twin_action_v1"] is NSNull), "M4-VOICE-03: Swift ambiguous pin one must ask clarification")
+
+    // 10f. Session `catalog_context` pinning & `"Historical source unavailable"` (`M4-SESSION-01..03`)
+    let pinnedSes = try catSessionEngine.createSession(payload: ["catalog_context": fullCtx.toDictionary(), "serial_number": "SWIFT-M12-01"])
+    let pinnedSid = pinnedSes["session_id"] as! String
+    check(((pinnedSes["catalog_context"] as? [String: Any])?["manifest_sha256"] as? String) == fullSha, "M4-SESSION-01: Swift session pins catalog_context")
+    let pinnedExp = try catSessionEngine.exportSessionDossier(sessionId: pinnedSid, payload: ["audience": "private_bench"])
+    let pinnedJson = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: pinnedExp["json_path"] as! String))) as! [String: Any]
+    check(((pinnedJson["catalog_context"] as? [String: Any])?["manifest_sha256"] as? String) == fullSha, "M4-SESSION-03: Swift exported dossier embeds catalog_context")
+
+    // 10g. `FieldScanCatalogClient` offline default + `URLProtocol` mock cloud (`202` dedup, `304`, redirect block) (`M4-WAN-01..04`)
+    final class MockCloudURLProtocol: URLProtocol {
+        static var envData: Data = Data()
+        static var blobs: [String: Data] = [:]
+        static var redirectMode: Bool = false
+
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        override func startLoading() {
+            guard let url = request.url else { return }
+            if Self.redirectMode {
+                let redirResp = HTTPURLResponse(url: url, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: ["Location": "https://evil.invalid/steal"])!
+                let nextReq = URLRequest(url: URL(string: "https://evil.invalid/steal")!)
+                client?.urlProtocol(self, wasRedirectedTo: nextReq, redirectResponse: redirResp)
+                return
+            }
+            let path = url.path
+            var status = 200
+            var headers: [String: String] = ["Content-Type": "application/json"]
+            var body = Data("{}".utf8)
+            if path == "/healthz" {
+                body = Data("{\"status\":\"ok\"}".utf8)
+            } else if path == "/v1/catalog/resolve" {
+                status = 202
+                body = Data("{\"job_id\":\"swift-job-1\",\"job_state\":\"queued\",\"availability\":\"pending\"}".utf8)
+            } else if path == "/v1/jobs/swift-job-1" {
+                body = Data("{\"job_id\":\"swift-job-1\",\"job_state\":\"ready\",\"availability\":\"complete\",\"product_id\":\"tzone_tht02\",\"variant_id\":\"m12_4pin_rev2\"}".utf8)
+            } else if path.hasSuffix("/manifest") {
+                if request.value(forHTTPHeaderField: "If-None-Match") == "\"swift-etag-10\"" {
+                    status = 304
+                    headers["ETag"] = "\"swift-etag-10\""
+                    body = Data()
+                } else {
+                    headers["ETag"] = "\"swift-etag-10\""
+                    body = Self.envData
+                }
+            } else if path.contains("/v1/catalog/blobs/") {
+                let sha = url.lastPathComponent
+                if let b = Self.blobs[sha] {
+                    headers["Content-Type"] = "application/octet-stream"
+                    body = b
+                } else {
+                    status = 404
+                }
+            }
+            let resp = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+            client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
+            if !body.isEmpty { client?.urlProtocol(self, didLoad: body) }
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        override func stopLoading() {}
+    }
+
+    MockCloudURLProtocol.envData = validEnvData
+    for a in arts {
+        let s = a["sha256"] as! String
+        let p = a["path"] as! String
+        MockCloudURLProtocol.blobs[s] = try Data(contentsOf: fullPkgDir.appendingPathComponent(p))
+    }
+    let cloudStore = FieldScanPackageStore(catalogRoot: tmpDir.appendingPathComponent("cloud_store", isDirectory: true), bundleRoot: repoRoot)
+    let cloudClient = FieldScanCatalogClient(store: cloudStore, syncEnabled: false, customProtocolClasses: [MockCloudURLProtocol.self])
+    check((cloudClient.getSyncTelemetry()["https_requests_emitted"] as? Int) == 0, "M4-BASE-01: Swift client emits 0 HTTPS requests when syncEnabled=false")
+    _ = try cloudClient.configureEndpoint(baseURL: "https://catalog.fieldscan.internal", syncEnabled: true, authToken: "swift-tok", persistInKeychain: false)
+    let cj1 = try cloudClient.resolveCatalog(manufacturer: "TZONE", model: "THT-02", variant: "m12")
+    let cj2 = try cloudClient.resolveCatalog(manufacturer: "tzone", model: "tht-02", variant: "M12")
+    check((cj2["reused_existing_job"] as? Bool) == true, "M4-WAN-02: Swift client deduplicates in-flight job")
+    let cpoll = try cloudClient.pollJob(jobId: "swift-job-1")
+    check((cpoll["job_state"] as? String) == "ready", "M4-WAN-01: Swift job poll ready")
+    let cinst = try cloudClient.fetchAndInstallVariant(productId: "tzone_tht02", variantId: "m12_4pin_rev2")
+    check((cinst["status"] as? String) == "installed", "M4-WAN-01: Swift cloud blob download & CryptoKit install")
+    let c304 = try cloudClient.fetchAndInstallVariant(productId: "tzone_tht02", variantId: "m12_4pin_rev2")
+    check((c304["status"] as? String) == "not_modified_304", "M4-WAN-03: Swift If-None-Match ETag 304")
+
+    MockCloudURLProtocol.redirectMode = true
+    var redirBlocked = false
+    do {
+        _ = try cloudClient.resolveCatalog(manufacturer: "TZONE", model: "REDIR-TEST")
+    } catch let ce as FieldScanCatalogError {
+        redirBlocked = (ce.code == "REDIRECT_BLOCKED")
+    }
+    check(redirBlocked, "M4-WAN-04: Swift URLSessionTaskDelegate must block cross-origin redirect")
+
     let summary: [String: Any] = [
         "swift_contract_suite": "PASS",
         "contract_version": FieldScanSessionEngine.contractVersion,
         "manifest_verified": true,
         "pilot_writes_blocked": true,
+        "cloud_catalog_swift_parity": "PASS",
         "golden_mbap_vectors_passed": mbapPassed,
         "golden_voice_en_passed": enPassed,
         "golden_voice_es_passed": esPassed,

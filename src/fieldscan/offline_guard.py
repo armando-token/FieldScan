@@ -16,6 +16,21 @@ from typing import Any
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}
 _AUTHORIZED_BENCH_GATEWAYS: set[str] = set()
+_AUTHORIZED_CLOUD_CATALOG_HOSTS: set[str] = set()
+
+
+def set_authorized_cloud_catalog_host(host: str | None) -> None:
+    """Permit ONLY the configured HTTPS Cloud Catalog host while `catalog_sync_enabled=True` (`Section 5.8`)."""
+    _AUTHORIZED_CLOUD_CATALOG_HOSTS.clear()
+    if not host:
+        return
+    clean = host.strip().lower()
+    if clean:
+        _AUTHORIZED_CLOUD_CATALOG_HOSTS.add(clean)
+
+
+def get_authorized_cloud_catalog_hosts() -> list[str]:
+    return sorted(_AUTHORIZED_CLOUD_CATALOG_HOSTS)
 
 
 def set_authorized_bench_gateway(host: str | None) -> None:
@@ -64,6 +79,9 @@ def is_allowed_local_host(host: str) -> bool:
         return True
 
     if clean in get_authorized_bench_gateways():
+        return True
+
+    if clean in _AUTHORIZED_CLOUD_CATALOG_HOSTS:
         return True
 
     if os.environ.get("FIELDSCAN_ALLOW_LAN", "0") == "1":
@@ -156,6 +174,8 @@ class OfflineSocketGuard:
             "usb_tether_connections": self.usb_tether_connections,
             "bench_gateway_connections": self.bench_gateway_connections,
             "authorized_bench_gateways": get_authorized_bench_gateways(),
+            "authorized_cloud_catalog_hosts": get_authorized_cloud_catalog_hosts(),
+            "egress_policy": "catalog_https_authorized" if _AUTHORIZED_CLOUD_CATALOG_HOSTS else "strict_local_only",
             "usb_tether_allowed": is_allowed_local_host("169.254.37.69"),
             "verified_at": self.verified_at,
         }

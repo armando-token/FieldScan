@@ -507,9 +507,12 @@ class LFMEngine:
         zone_hint: str | None = None,
         dip_address: int | None = None,
         raw_frame_jpeg: bytes | None = None,
+        catalog_descriptor: dict[str, Any] | None = None,
+        scene_generation: int = 1,
+        turn_id: str | None = None,
     ) -> dict[str, Any]:
-        """Interactive Bilingual (EN/ES) AI Engineer: natural chat, scene vision, datasheet navigation, and fault diagnosis."""
-        from fieldscan.manual_navigator import lookup_manual_for_query
+        """Interactive English AI Engineer: natural chat, scene vision, multi-doc datasheet navigation, and 3D twin diagnosis."""
+        from fieldscan.manual_navigator import lookup_manual_for_query, lookup_manual_in_descriptor
         from fieldscan.profiles_and_manual import resolve_device_profile, verify_and_resolve_citations
         from fieldscan.scene_and_chat_router import (
             analyze_scene_environment,
@@ -518,7 +521,7 @@ class LFMEngine:
             evaluate_simple_math,
         )
         from fieldscan.session_engine import apply_deterministic_grounding_filter
-        from fieldscan.twin_controller import resolve_twin_action
+        from fieldscan.twin_controller import prepare_visual_action
 
         t0 = time.perf_counter()
         intent_info = classify_conversation_intent(query, zone_hint)
@@ -561,16 +564,75 @@ class LFMEngine:
         manual_section: dict[str, Any] | None = None
         scene_info: dict[str, Any] | None = None
         manual_res: dict[str, Any] | None = None
-        twin_action: dict[str, Any] | None = (
-            resolve_twin_action(
+        prepared_visual = (
+            prepare_visual_action(
                 query,
+                descriptor=catalog_descriptor,
                 zone_hint=zone_hint,
-                current_dip_address=dip_address,
-                vision_telemetry=tel,
+                current_dip_address=int(dip_address or 1),
+                scene_generation=int(scene_generation),
+                turn_id=turn_id,
             )
             if intent in ("sensor_diagnostics", "manual_lookup")
-            else None
+            else {
+                "ambiguous": False,
+                "clarification_required": False,
+                "clarification_prompt": None,
+                "candidate_part_ids": [],
+                "twin_action": None,
+                "twin_action_v1": None,
+                "turn_id": turn_id or f"turn-{int(time.time() * 1000)}",
+                "scene_generation": int(scene_generation),
+                "manifest_sha256": ((catalog_descriptor or {}).get("context") or {}).get("manifest_sha256")
+                or "bundle-tzone-tht02-v2.1",
+            }
         )
+
+        # Ambiguous single-pin / part reference guard (`M4-VOICE-03`): ask for clarification in English & never highlight randomly!
+        if prepared_visual.get("ambiguous") and prepared_visual.get("clarification_prompt"):
+            prompt_txt = str(prepared_visual["clarification_prompt"])
+            elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+            self._record_chat_turn(query, prompt_txt)
+            audio_b64 = self.synthesize_speech_b64(prompt_txt)
+            return {
+                "diagnosis": prompt_txt,
+                "assistant_message": prompt_txt,
+                "query_mode": intent,
+                "intent": intent,
+                "language": "en",
+                "clarification_required": True,
+                "candidate_part_ids": prepared_visual.get("candidate_part_ids", []),
+                "provider_id": "local_rules_v2",
+                "grounding_corrected": False,
+                "grounding_reasons": [],
+                "probable_causes": [],
+                "recommended_actions": [],
+                "highlighted_zone": None,
+                "fault_zone": None,
+                "explode_pcb": False,
+                "focus_dip": False,
+                "dip_bits": None,
+                "twin_action": None,
+                "twin_action_v1": None,
+                "turn_id": prepared_visual["turn_id"],
+                "scene_generation": prepared_visual["scene_generation"],
+                "manifest_sha256": prepared_visual["manifest_sha256"],
+                "open_manual": False,
+                "open_manual_lightbox": False,
+                "manual_page": None,
+                "manual_section": None,
+                "citations": [],
+                "manual_citations": [],
+                "inference_ms": elapsed_ms,
+                "latency_ms": elapsed_ms,
+                "tokens_per_s": None,
+                "tokens_per_sec": None,
+                "model": "Deterministic Ambiguity Guard · On-Device",
+                "audio_wav_b64": audio_b64,
+            }
+
+        twin_action: dict[str, Any] | None = prepared_visual.get("twin_action")
+        twin_action_v1: dict[str, Any] | None = prepared_visual.get("twin_action_v1")
 
         # Map intent to legacy query_mode label for observability while keeping strict separation
         mode = intent
@@ -632,35 +694,47 @@ class LFMEngine:
             max_tokens = 140
 
         elif intent == "manual_lookup":
-            manual_res = lookup_manual_for_query(query, lang=lang)
-            open_manual = bool(manual_res["open_manual"])
-            open_manual_lightbox = bool(manual_res["open_manual_lightbox"])
-            primary_page = manual_res["manual_page"]
-            cited_pages = list(manual_res["cited_pages"])
-            manual_section = manual_res["manual_section"]
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        f"You are FieldScan AI, an expert on the TZ THT-02 User's Manual V1.1. "
-                        f"Respond strictly in clear, natural {lang_name} (2 to 4 concise sentences). "
-                        f"Explicitly tell the user the exact Page number and Section number where the information is located, "
-                        f"confirm that you are opening the datasheet viewer to that page right now, and summarize the verified excerpt accurately. "
-                        f"Never invent registers or calibration claims beyond the verified manual excerpt."
-                    ),
-                },
-                *history_msgs[-6:],
-                {
-                    "role": "user",
-                    "content": (
-                        f"Verified Manual Lookup Result:\n{manual_res['answer']}\n\n"
-                        f"User question: {query}\n"
-                        f"Answer directly in {lang_name} citing the exact page and section:"
-                    ),
-                },
-            ]
-            temperature = 0.15
-            max_tokens = 165
+            manual_res = (
+                lookup_manual_in_descriptor(query, catalog_descriptor)
+                if catalog_descriptor is not None
+                else lookup_manual_for_query(query, lang=lang)
+            )
+            open_manual = bool(manual_res.get("open_manual"))
+            open_manual_lightbox = bool(manual_res.get("open_manual_lightbox"))
+            primary_page = manual_res.get("manual_page")
+            cited_pages = list(manual_res.get("cited_pages") or [])
+            manual_section = manual_res.get("manual_section")
+            if manual_res.get("page_out_of_range"):
+                messages = []
+                temperature = 0.0
+                max_tokens = 64
+                vlm_override_answer = str(manual_res.get("answer") or "Requested page is out of range.")
+            else:
+                vlm_override_answer = ""
+                doc_label = str(manual_res.get("document_title") or "TZ THT-02 User's Manual V1.1")
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            f"You are FieldScan AI, an expert on {doc_label}. "
+                            f"Respond strictly in clear, natural {lang_name} (2 to 4 concise sentences). "
+                            f"Explicitly tell the user the exact Page number and Section number where the information is located, "
+                            f"confirm that you are opening the datasheet viewer to that page right now, and summarize the verified excerpt accurately. "
+                            f"Never invent registers or calibration claims beyond the verified manual excerpt."
+                        ),
+                    },
+                    *history_msgs[-6:],
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Verified Manual Lookup Result:\n{manual_res['answer']}\n\n"
+                            f"User question: {query}\n"
+                            f"Answer directly in {lang_name} citing the exact page and section:"
+                        ),
+                    },
+                ]
+                temperature = 0.15
+                max_tokens = 165
 
         else:
             # `sensor_diagnostics` — explicit sensor status, fault, DIP-8, wiring, or Modbus query
@@ -801,10 +875,13 @@ class LFMEngine:
             "chat_template_kwargs": {"enable_thinking": False},
         }
 
-        vlm_text = ""
+        vlm_text = locals().get("vlm_override_answer", "") or ""
         tokens_per_s: float | None = None
         model_used = "Local VLM · Mac Mini"
         provider_id = "mac_assisted_llm"
+        if vlm_text:
+            provider_id = "local_rules_v2"
+            model_used = "Verified Manual Navigator · On-Device"
 
         # Fast-path deterministic arithmetic so voice feels instantaneous
         fast_math = evaluate_simple_math(query) if intent == "general_chat" else None
@@ -864,10 +941,16 @@ class LFMEngine:
                 )
 
         active_prof = resolve_device_profile("tzone_tht02")
+        max_doc_pages = (
+            max((int(d.get("page_count") or 1) for d in (catalog_descriptor or {}).get("documents", [])), default=None)
+            if catalog_descriptor is not None
+            else None
+        )
         grounding = apply_deterministic_grounding_filter(
             vlm_text,
             profile=active_prof,
             verified_telemetry=mb,
+            max_page_count=max_doc_pages,
         )
         vlm_text = grounding["text"]
 
@@ -879,7 +962,9 @@ class LFMEngine:
         self.last_model_label = model_used
 
         citations: list[dict[str, Any]] = []
-        if cited_pages:
+        if manual_res and manual_res.get("citations") and catalog_descriptor is not None and catalog_descriptor.get("scene_origin") != "bundled_parametric":
+            citations = list(manual_res["citations"])
+        elif cited_pages:
             cit_check = verify_and_resolve_citations(active_prof, [int(p) for p in cited_pages])
             citations = (
                 cit_check["citations"]
@@ -887,7 +972,7 @@ class LFMEngine:
                 else [
                     {"page": int(p), "label": MANUAL_PAGE_TITLES.get(int(p), f"Page {p} · Manual V1.1")}
                     for p in cited_pages
-                    if 1 <= int(p) <= 9
+                    if 1 <= int(p) <= max(9, int(max_doc_pages or 9))
                 ]
             )
         audio_b64 = self.synthesize_speech_b64(vlm_text) if lang == "en" else None
@@ -905,6 +990,7 @@ class LFMEngine:
             "query_mode": mode,
             "intent": intent,
             "language": "en",
+            "clarification_required": False,
             "provider_id": provider_id,
             "grounding_corrected": grounding["grounding_corrected"],
             "grounding_reasons": grounding["reasons"],
@@ -916,6 +1002,12 @@ class LFMEngine:
             "focus_dip": focus_dip_out,
             "dip_bits": dip_bits_out,
             "twin_action": twin_action,
+            "twin_action_v1": twin_action_v1,
+            "turn_id": prepared_visual["turn_id"],
+            "scene_generation": prepared_visual["scene_generation"],
+            "manifest_sha256": prepared_visual["manifest_sha256"],
+            "document_id": (manual_res or {}).get("document_id"),
+            "printed_page": (manual_res or {}).get("printed_page"),
             "open_manual": open_manual,
             "open_manual_lightbox": open_manual_lightbox,
             "manual_page": primary_page,

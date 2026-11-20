@@ -15,6 +15,7 @@ import base64
 from dataclasses import dataclass
 from io import BytesIO
 import json
+import logging
 from pathlib import Path
 import re
 from typing import Any
@@ -25,6 +26,8 @@ from PIL import Image, UnidentifiedImageError
 
 from fieldscan_cloud.documents.pipeline import DocumentBuildOutput
 from fieldscan_cloud.sources.image_harvester import HarvestedImage
+
+logger = logging.getLogger("fieldscan_cloud.vlm")
 
 SUPPORTED_PRIMITIVE_KINDS: frozenset[str] = frozenset(
     {
@@ -191,6 +194,41 @@ class VlmClient:
         self.api_key = api_key.strip()
         self.timeout_sec = timeout_sec
         self._transport = transport
+        self.call_count: int = 0
+        self.total_prompt_tokens: int = 0
+        self.total_completion_tokens: int = 0
+        self.total_tokens: int = 0
+        self.last_usage: dict[str, int] | None = None
+
+    def usage_summary(self) -> dict[str, int]:
+        return {
+            "calls": self.call_count,
+            "prompt_tokens": self.total_prompt_tokens,
+            "completion_tokens": self.total_completion_tokens,
+            "total_tokens": self.total_tokens,
+        }
+
+    def _record_usage(self, result: dict[str, Any], *, json_mode: bool) -> dict[str, Any]:
+        self.call_count += 1
+        usage = result.get("usage")
+        self.last_usage = usage if isinstance(usage, dict) else None
+        if isinstance(usage, dict):
+            pt = int(usage.get("prompt_tokens", 0))
+            ct = int(usage.get("completion_tokens", 0))
+            tt = int(usage.get("total_tokens", pt + ct))
+            self.total_prompt_tokens += pt
+            self.total_completion_tokens += ct
+            self.total_tokens += tt
+            logger.info(
+                "VLM call ok provider=%s model=%s json_mode=%s prompt_tokens=%d completion_tokens=%d total_tokens=%d",
+                self.provider,
+                result.get("model", self.model),
+                json_mode,
+                pt,
+                ct,
+                tt,
+            )
+        return result
 
     def generate_json(
         self,
@@ -249,53 +287,68 @@ class VlmClient:
         json_mode: bool,
     ) -> dict[str, Any]:
         if self.provider == "bedrock_mantle" and self.model.lower().startswith("anthropic."):
-            return self._call_anthropic(
-                system_prompt,
-                user_prompt,
-                history,
-                encoded_images,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                api_url=_resolve_mantle_anthropic_url(self.api_url),
-                use_bearer_auth=True,
+            return self._record_usage(
+                self._call_anthropic(
+                    system_prompt,
+                    user_prompt,
+                    history,
+                    encoded_images,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    api_url=_resolve_mantle_anthropic_url(self.api_url),
+                    use_bearer_auth=True,
+                ),
+                json_mode=json_mode,
             )
         if self.provider in {"openai_compatible", "bedrock_mantle"}:
-            return self._call_openai_compatible(
-                system_prompt,
-                user_prompt,
-                history,
-                encoded_images,
-                max_tokens=max_tokens,
-                temperature=temperature,
+            return self._record_usage(
+                self._call_openai_compatible(
+                    system_prompt,
+                    user_prompt,
+                    history,
+                    encoded_images,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    json_mode=json_mode,
+                ),
                 json_mode=json_mode,
             )
         if self.provider == "bedrock":
-            return self._call_bedrock_converse(
-                system_prompt,
-                user_prompt,
-                history,
-                encoded_images,
-                max_tokens=max_tokens,
-                temperature=temperature,
+            return self._record_usage(
+                self._call_bedrock_converse(
+                    system_prompt,
+                    user_prompt,
+                    history,
+                    encoded_images,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                ),
+                json_mode=json_mode,
             )
         if self.provider == "gemini":
-            return self._call_gemini(
-                system_prompt,
-                user_prompt,
-                history,
-                encoded_images,
-                max_tokens=max_tokens,
-                temperature=temperature,
+            return self._record_usage(
+                self._call_gemini(
+                    system_prompt,
+                    user_prompt,
+                    history,
+                    encoded_images,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    json_mode=json_mode,
+                ),
                 json_mode=json_mode,
             )
         if self.provider == "anthropic":
-            return self._call_anthropic(
-                system_prompt,
-                user_prompt,
-                history,
-                encoded_images,
-                max_tokens=max_tokens,
-                temperature=temperature,
+            return self._record_usage(
+                self._call_anthropic(
+                    system_prompt,
+                    user_prompt,
+                    history,
+                    encoded_images,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                ),
+                json_mode=json_mode,
             )
         raise VlmSynthesisError("VLM_UNSUPPORTED_PROVIDER", f"Unsupported VLM provider: {self.provider!r}")
 

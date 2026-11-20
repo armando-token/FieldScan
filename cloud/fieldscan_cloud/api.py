@@ -116,6 +116,24 @@ def _format_pub_status(pub_row: sqlite3.Row) -> JobStatusResponse:
     )
 
 
+def _etag_matches_if_none_match(if_none_match: str | None, current_etag: str) -> bool:
+    """RFC 9110 §13.1.2 weak comparison for If-None-Match (handles Cloudflare/Caddy W/ gzip ETags)."""
+    if not if_none_match:
+        return False
+    norm_cur = current_etag.strip()
+    if norm_cur.startswith("W/"):
+        norm_cur = norm_cur[2:].strip()
+    for part in if_none_match.split(","):
+        cand = part.strip()
+        if cand == "*":
+            return True
+        if cand.startswith("W/"):
+            cand = cand[2:].strip()
+        if cand == norm_cur:
+            return True
+    return False
+
+
 def _parse_single_byte_range(range_header: str, total_size: int) -> tuple[int, int]:
     """Parse RFC 9110 single byte range; raise ValueError for invalid or unsatisfiable ranges."""
     m = _RANGE_RE.match(range_header.strip())
@@ -475,7 +493,7 @@ def create_app(config: ApiConfig | None = None) -> FastAPI:
                 raise ApiAppError(404, "PUBLICATION_NOT_FOUND", "No active publication for this product variant")
 
             etag = str(pub_row["envelope_etag"])
-            if if_none_match and if_none_match.strip() == etag:
+            if _etag_matches_if_none_match(if_none_match, etag):
                 return Response(
                     status_code=304,
                     headers={"ETag": etag, "Cache-Control": "private, must-revalidate"},

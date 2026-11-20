@@ -144,18 +144,22 @@ class FieldScanCatalogClient:
             return
 
         dev_id = device_id or f"station-{uuid.getnode():012x}"
-        status, _hdrs, body = self._request_bytes(
+        resp = self._request(
             "POST",
             "/v1/devices/enroll",
             json_body={"device_id": dev_id, "platform": "macos", "app_version": "2.1"},
         )
         try:
-            payload = json.loads(body.decode("utf-8"))
+            payload = resp.json()
         except Exception as exc:
             raise CatalogDomainError("AUTO_ENROLL_FAILED", "Invalid JSON from /v1/devices/enroll") from exc
         tok = str(payload.get("access_token") or "").strip()
-        if status != 200 or not tok:
-            raise CatalogDomainError("AUTO_ENROLL_FAILED", "Server did not return an enrollment access_token", status_code=status)
+        if resp.status_code != 200 or not tok:
+            raise CatalogDomainError(
+                "AUTO_ENROLL_FAILED",
+                "Server did not return an enrollment access_token",
+                status_code=resp.status_code,
+            )
         self.configure_endpoint(target_base, sync_enabled=True, auth_token=tok)
 
     def download_latest_package(

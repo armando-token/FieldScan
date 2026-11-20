@@ -40,14 +40,23 @@ class DocumentBuildOutput:
 
 
 def _run_tool(argv: list[str], *, timeout: int = 30) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        argv,
-        shell=False,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    try:
+        return subprocess.run(
+            argv,
+            shell=False,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError as exc:
+        tool_name = argv[0] if argv else "<unknown>"
+        return subprocess.CompletedProcess(
+            args=argv,
+            returncode=127,
+            stdout="",
+            stderr=f"Tool not found: {tool_name} ({exc})",
+        )
 
 
 def inspect_pdf_pages(pdf_path: Path) -> tuple[int, dict[str, str]]:

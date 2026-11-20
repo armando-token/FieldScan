@@ -47,11 +47,19 @@ _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
 
 class ApiAppError(Exception):
-    def __init__(self, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.headers = headers
 
 
 def _request_id(request: Request) -> str:
@@ -62,14 +70,24 @@ def _request_id(request: Request) -> str:
     return rid
 
 
-def _error_response(request: Request, status_code: int, code: str, message: str) -> JSONResponse:
+def _error_response(
+    request: Request,
+    status_code: int,
+    code: str,
+    message: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
+    resp_headers = {"X-Request-Id": _request_id(request)}
+    if headers:
+        resp_headers.update(headers)
     return JSONResponse(
         status_code=status_code,
         content={
             "error": {"code": code, "message": message},
             "request_id": _request_id(request),
         },
-        headers={"X-Request-Id": _request_id(request)},
+        headers=resp_headers,
     )
 
 
@@ -181,7 +199,13 @@ def create_app(config: ApiConfig | None = None) -> FastAPI:
 
     @app.exception_handler(ApiAppError)
     async def handle_api_error(request: Request, exc: ApiAppError):
-        return _error_response(request, exc.status_code, exc.code, exc.message)
+        return _error_response(
+            request,
+            exc.status_code,
+            exc.code,
+            exc.message,
+            headers=exc.headers,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, _exc: RequestValidationError):
@@ -317,7 +341,12 @@ def create_app(config: ApiConfig | None = None) -> FastAPI:
                     max_active_jobs=max_jobs,
                 )
             except PermissionError:
-                raise ApiAppError(429, "RATE_LIMITED", "Too many concurrent catalog jobs for this credential")
+                raise ApiAppError(
+                    429,
+                    "RATE_LIMITED",
+                    "Too many concurrent catalog jobs for this credential",
+                    headers={"Retry-After": "5"},
+                )
 
             accepted = ResolveAcceptedResponse(
                 job_id=str(job_row["id"]),

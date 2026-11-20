@@ -175,3 +175,22 @@ def test_healthz_and_auth_and_resolve_and_blobs(api_config, worker_config, env_p
         # Unsatisfiable Range 416
         b_416 = client.get(blob_url, headers={**auth_hdr, "Range": f"bytes={pdf_art['byte_count'] + 10}-"})
         assert b_416.status_code == 416
+
+        # M4-WAN-03: 429 RATE_LIMITED includes HTTP Retry-After header alongside JSON error body
+        # First active job (ACME Sensor-9000) is already queued; fill remaining slots up to max_active_jobs=5
+        for idx in range(2, 6):
+            r_fill = client.post(
+                "/v1/catalog/resolve",
+                headers=auth_hdr,
+                json={"manufacturer": "ACME", "model": f"Sensor-Fill-{idx}", "variant": None, "hardware_revision": None},
+            )
+            assert r_fill.status_code == 202
+
+        r_429 = client.post(
+            "/v1/catalog/resolve",
+            headers=auth_hdr,
+            json={"manufacturer": "ACME", "model": "Sensor-Overflow", "variant": None, "hardware_revision": None},
+        )
+        assert r_429.status_code == 429
+        assert r_429.headers.get("Retry-After") == "5"
+        assert r_429.json()["error"]["code"] == "RATE_LIMITED"

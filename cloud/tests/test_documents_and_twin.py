@@ -141,3 +141,36 @@ def test_end_to_end_editorial_pdf_update_reuses_glb(worker_config, tmp_path: Pat
     finally:
         conn.close()
 
+
+def test_run_tool_handles_missing_ocr_binary_without_raising(monkeypatch, tmp_path: Path):
+    """Defensive fallback when pdftoppm/tesseract binaries are unavailable in minimal test environments."""
+    import subprocess
+    from fieldscan_cloud.documents import pipeline
+
+    res = pipeline._run_tool(["__fieldscan_nonexistent_ocr_binary__"])
+    assert res.returncode == 127
+    assert "Tool not found" in res.stderr
+
+    # Simulate pdftoppm/tesseract missing during process_pdf_document while pdfinfo works
+    real_run = subprocess.run
+
+    def _fake_run(argv, *args, **kwargs):
+        if argv and argv[0] in {"pdftoppm", "tesseract"}:
+            raise FileNotFoundError(f"No such file or directory: {argv[0]}")
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(pipeline.subprocess, "run", _fake_run)
+    pdf_src = FIXTURES_DIR / "tht02_v1_1" / "THT02_Users_Manual_v1.1.pdf"
+    doc_out = pipeline.process_pdf_document(
+        pdf_src,
+        work_dir=tmp_path / "ocr_missing",
+        document_id="tht02_missing_ocr",
+        revision_label="V1.1",
+        title="Missing OCR Test",
+        run_ocr=True,
+        max_ocr_pages=2,
+    )
+    assert doc_out.page_count == 9
+    assert len(doc_out.pages) == 9
+
+

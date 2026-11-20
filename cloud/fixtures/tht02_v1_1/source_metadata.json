@@ -13,7 +13,15 @@
     "TZ THT-02",
     "THT-02",
     "THT02",
-    "TZ-THT-02"
+    "TZ-THT-02",
+    "THT 02",
+    "THT-002",
+    "THT002",
+    "THT 002",
+    "TZ THT-002",
+    "TZ-THT-002",
+    "TZONE THT-02",
+    "TZONE THT-002"
   ],
   "origin_kind": "test_fixture",
   "canonical_url": "https://www.tzonedigital.com/en/product/details/31.aspx#manual-v1.1-fixture",

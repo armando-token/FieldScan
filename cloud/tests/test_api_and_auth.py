@@ -414,3 +414,46 @@ def test_remote_assistant_status_and_chat_bedrock_mantle(api_config, api_token, 
         r_502 = client.post("/v1/assistant/chat", headers=auth_hdr, json={"user_text": "TRIGGER_500"})
         assert r_502.status_code == 502
         assert "bedrock-secret-key-xyz" not in r_502.text
+
+
+def test_force_refresh_asr_aliases_and_variantless_resolve(api_config, worker_config, api_token):
+    # Seed BOTH v1_1_rs485 (full 3D ready) and v1_0_partial (docs only)
+    conn = connect_sqlite(worker_config.db_path, expected_journal_mode="DELETE")
+    try:
+        for idx, fix in enumerate(("tht02_v1_1", "tht02_partial")):
+            stage = worker_config.data_dir / "staging" / f"seed_alias_{idx}"
+            stage.mkdir(parents=True, exist_ok=True)
+            _build_fixture_artifacts(
+                conn,
+                config=worker_config,
+                fixture_dir=FIXTURES_DIR / fix,
+                staging_dir=stage,
+                tenant_id="pilot",
+                run_ocr=False,
+            )
+    finally:
+        conn.close()
+
+    auth_hdr = {"Authorization": f"Bearer {api_token}"}
+    with TestClient(create_app(api_config)) as client:
+        # CL-SRC-02 preserved when force_refresh=False and variant omitted -> needs_identification with 2 candidates
+        r_amb = client.post(
+            "/v1/catalog/resolve",
+            headers=auth_hdr,
+            json={"manufacturer": "TZONE", "model": "TZ THT-02", "force_refresh": False},
+        )
+        assert r_amb.status_code == 200
+        assert r_amb.json()["availability"] == "needs_identification"
+        assert len(r_amb.json()["candidates"]) == 2
+
+        # With force_refresh=True and no variant, all ASR spellings resolve cleanly to 202 Accepted (v1_1_rs485)
+        for spoken_model in ("THT-002", "THT 02", "THT-02", "TZ-THT-02", "TZ THT-02"):
+            r_ref = client.post(
+                "/v1/catalog/resolve",
+                headers=auth_hdr,
+                json={"manufacturer": "TZONE", "model": spoken_model, "force_refresh": True},
+            )
+            assert r_ref.status_code == 202, f"Expected 202 for {spoken_model!r}, got {r_ref.status_code}: {r_ref.text}"
+            body = r_ref.json()
+            assert body["job_state"] == "queued"
+            assert body["cached_publication"]["variant_id"] == "v1_1_rs485"

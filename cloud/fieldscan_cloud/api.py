@@ -369,6 +369,27 @@ def create_app(
             )
 
             # Case 1: Multiple plausible variants in catalog -> needs_identification (§6.2)
+            # Exception for live force_refresh onboarding when operator spoke brand+model without variant:
+            # if exactly one variant has a full ready 3D twin publication, resolve directly to it instead of dead-ending.
+            effective_req_payload = req.model_dump()
+            if len(matches) > 1 and req.force_refresh and not req.variant and not req.hardware_revision:
+                full_matches = []
+                for cand_row in matches:
+                    cand_pub = get_current_publication(
+                        conn,
+                        tenant_id=tenant_id,
+                        channel=channel,
+                        product_id=str(cand_row["product_id"]),
+                        variant_id=str(cand_row["id"]),
+                    )
+                    if cand_pub is not None and bool(cand_pub["cap_interactive_twin"]):
+                        full_matches.append(cand_row)
+                if len(full_matches) == 1:
+                    matches = full_matches
+                    effective_req_payload["variant"] = str(full_matches[0]["id"])
+                    if full_matches[0]["hardware_revision"]:
+                        effective_req_payload["hardware_revision"] = str(full_matches[0]["hardware_revision"])
+
             if len(matches) > 1:
                 candidates = [
                     CandidateVariant(
@@ -431,7 +452,7 @@ def create_app(
                     conn,
                     tenant_id=tenant_id,
                     channel=channel,
-                    request_payload=req.model_dump(),
+                    request_payload=effective_req_payload,
                     purpose=purpose,
                     max_active_jobs=max_jobs,
                 )

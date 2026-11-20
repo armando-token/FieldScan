@@ -187,3 +187,59 @@ def test_worker_ambiguous_variant_and_partial_publication_and_lease_recovery(wor
         assert c2["lease_token"] != c1["lease_token"]
     finally:
         conn.close()
+
+
+def test_worker_emits_granular_phases_and_resolves_variantless_force_refresh(worker_config, monkeypatch):
+    from dataclasses import replace
+    import fieldscan_cloud.worker as worker_mod
+
+    observed_phases: list[str] = []
+    real_renew = worker_mod.renew_job_lease
+    real_complete = worker_mod.complete_job
+
+    def _spy_renew(*args, **kwargs):
+        if kwargs.get("phase"):
+            observed_phases.append(str(kwargs["phase"]))
+        return real_renew(*args, **kwargs)
+
+    def _spy_complete(*args, **kwargs):
+        if kwargs.get("phase"):
+            observed_phases.append(str(kwargs["phase"]))
+        return real_complete(*args, **kwargs)
+
+    monkeypatch.setattr(worker_mod, "renew_job_lease", _spy_renew)
+    monkeypatch.setattr(worker_mod, "complete_job", _spy_complete)
+
+    # Even with vlm_enabled=True, verified fixture THT-02 must compile deterministically without VLM regression
+    cfg_vlm_on = replace(worker_config, vlm_enabled=True, vlm_api_key="dummy-unused-for-verified-fixture", vlm_visual_review=True)
+    conn = connect_sqlite(cfg_vlm_on.db_path, expected_journal_mode="DELETE")
+    try:
+        ensure_default_tenant_and_credential(conn, tenant_id="pilot", channel="pilot")
+        j, _ = enqueue_or_get_active_job(
+            conn,
+            tenant_id="pilot",
+            channel="pilot",
+            purpose="refresh",
+            request_payload={"manufacturer": "TZONE", "model": "THT-002", "variant": None, "hardware_revision": None, "force_refresh": True},
+        )
+        claimed = claim_next_job(conn, lease_sec=120, max_attempts=3)
+        assert claimed is not None
+        process_single_job(conn, config=cfg_vlm_on, job_row=claimed)
+
+        done = conn.execute("SELECT state, phase, result_json FROM jobs WHERE id = ?;", (j["id"],)).fetchone()
+        assert done["state"] == "completed"
+        assert done["phase"] == "published"
+        res = json.loads(done["result_json"])
+        assert res["identity"] == {"product_id": "tzone_tht02", "variant_id": "v1_1_rs485", "resolution": "exact"}
+        assert res["capabilities"]["documentation"] == "available"
+        assert res["capabilities"]["interactive_twin"] == "available"
+        assert observed_phases == [
+            "matching_catalog",
+            "searching_oem_docs",
+            "extracting_manual_pdf",
+            "building_3d_twin",
+            "signing_package",
+            "published",
+        ]
+    finally:
+        conn.close()

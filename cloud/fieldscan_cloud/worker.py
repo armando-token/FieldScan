@@ -60,6 +60,7 @@ from fieldscan_cloud.sources.registry import (
     classify_search_candidate,
     document_confirms_model,
     filter_artifacts_by_permission,
+    get_allowed_oem_domains,
 )
 from fieldscan_cloud.twin.generator import build_twin_from_recipe
 from fieldscan_cloud.twin.synthesizer import VlmClient, select_key_datasheet_pages, synthesize_cad_recipe
@@ -261,6 +262,7 @@ def _run_generic_twin_pipeline(
     vlm_client: VlmClient | None = None,
     reuse_glb_artifact: ArtifactInput | None = None,
     allow_harvest: bool = True,
+    allow_vlm: bool = True,
     download_transport: httpx.BaseTransport | None = None,
     check_dns: bool = True,
 ) -> tuple[list[ArtifactInput], bool, bool, list[str]]:
@@ -272,8 +274,8 @@ def _run_generic_twin_pipeline(
     - Stage 5: Khronos `gltf_validator` + semantic checks + optional headless CPU 3-view VLM visual review (up to 1 retry).
     Returns `(twin_artifacts, cap_interactive_twin, cap_procedures, extra_reason_codes)`.
     """
-    active_vlm = vlm_client
-    if active_vlm is None and config.vlm_enabled and config.vlm_api_key:
+    active_vlm = vlm_client if allow_vlm else None
+    if allow_vlm and active_vlm is None and config.vlm_enabled and config.vlm_api_key:
         active_vlm = VlmClient(
             provider=config.vlm_provider,
             api_url=config.vlm_api_url,
@@ -497,6 +499,17 @@ def _build_fixture_artifacts(
     revision_label = str(meta["revision_label"])
     permission_policy = str(meta.get("permission_policy", "redistributable"))
 
+    def _set_phase(phase_name: str) -> None:
+        if job_id and lease_token:
+            renew_job_lease(
+                conn,
+                job_id=job_id,
+                lease_token=lease_token,
+                lease_sec=config.job_lease_sec,
+                phase=phase_name,
+            )
+
+    _set_phase("searching_oem_docs")
     upsert_product_and_variant(
         conn,
         product_id=product_id,
@@ -512,6 +525,7 @@ def _build_fixture_artifacts(
     )
 
     # Stage 1: Document rasterization (150 DPI PNGs) + text extraction + on-demand Tesseract OCR
+    _set_phase("extracting_manual_pdf")
     doc_stage = staging_dir / "docs"
     doc_out = process_pdf_document(
         pdf_path,
@@ -657,8 +671,9 @@ def _build_fixture_artifacts(
     cap_interactive_twin = False
     cap_procedures = False
 
-    # Stages 2-5: Generic Twin Pipeline
+    # Stages 2-5: Generic Twin Pipeline (verified declarative recipes compile deterministically to avoid regressions)
     if has_recipe:
+        _set_phase("building_3d_twin")
         existing_recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
         twin_arts, cap_interactive_twin, cap_procedures, twin_reasons = _run_generic_twin_pipeline(
             conn,
@@ -676,9 +691,10 @@ def _build_fixture_artifacts(
             actor=actor,
             existing_recipe=existing_recipe,
             context_client=context_client,
-            vlm_client=vlm_client,
+            vlm_client=None,
             reuse_glb_artifact=reuse_glb_artifact,
             allow_harvest=False,
+            allow_vlm=False,
         )
         artifacts.extend(twin_arts)
         reason_codes.extend(twin_reasons)
@@ -686,6 +702,7 @@ def _build_fixture_artifacts(
         if "INTERNAL_GEOMETRY_UNCONFIRMED" not in reason_codes:
             reason_codes.append("INTERNAL_GEOMETRY_UNCONFIRMED")
 
+    _set_phase("signing_package")
     private_key = load_private_key(config.signer_key_path)
     pub_result = publish_variant_atomically(
         conn,
@@ -807,6 +824,10 @@ def process_single_job(
 
         # Check fixtures first for deterministic E1/E2 support
         fixture_matches = _find_matching_fixtures(manufacturer, model, variant, hardware_revision)
+        if len(fixture_matches) > 1 and bool(req.get("force_refresh", False)) and not variant and not hardware_revision:
+            full_fixtures = [fm for fm in fixture_matches if fm[1].get("has_twin_recipe", True) is not False]
+            if len(full_fixtures) == 1:
+                fixture_matches = full_fixtures
         if len(fixture_matches) > 1:
             candidates = [
                 {
@@ -845,13 +866,6 @@ def process_single_job(
 
         if len(fixture_matches) == 1:
             fixture_dir, _meta = fixture_matches[0]
-            renew_job_lease(
-                conn,
-                job_id=job_id,
-                lease_token=lease_token,
-                lease_sec=config.job_lease_sec,
-                phase="building_package",
-            )
             _pub, result_payload = _build_fixture_artifacts(
                 conn,
                 config=config,
@@ -880,7 +894,7 @@ def process_single_job(
             job_id=job_id,
             lease_token=lease_token,
             lease_sec=config.job_lease_sec,
-            phase="context_search",
+            phase="searching_oem_docs",
         )
         client = context_client
         if client is None and config.context_enabled and config.context_api_key:
@@ -919,7 +933,7 @@ def process_single_job(
 
         mfr_norm = normalize_token(manufacturer)
         query = build_technical_query(manufacturer, model, variant)
-        include_domains = sorted(ALLOWED_OEM_DOMAINS.get(mfr_norm, set())) or None
+        include_domains = sorted(get_allowed_oem_domains(mfr_norm)) or None
         search_res = client.search(query=query, include_domains=include_domains)
         merged_candidates = list(search_res.candidates)
         vendor_request_ids = [search_res.vendor_request_id] if search_res.vendor_request_id else []
@@ -984,7 +998,7 @@ def process_single_job(
                     )
 
         # Attempt defensive download & model applicability verification on up to 3 allowlisted OEM PDFs (§8.2-§8.3)
-        allowed_domains = ALLOWED_OEM_DOMAINS.get(mfr_norm, set())
+        allowed_domains = get_allowed_oem_domains(mfr_norm)
         verified_doc: tuple[Any, Any, Path, DocumentBuildOutput] | None = None
         download_errors: list[str] = []
         checked_pdfs = 0
@@ -1012,6 +1026,13 @@ def process_single_job(
                 )
                 continue
 
+            renew_job_lease(
+                conn,
+                job_id=job_id,
+                lease_token=lease_token,
+                lease_sec=config.job_lease_sec,
+                phase="extracting_manual_pdf",
+            )
             cand_stage = staging_dir / f"cand_{checked_pdfs}"
             cand_stage.mkdir(parents=True, exist_ok=True)
             pdf_stage_file = cand_stage / "downloaded.pdf"
@@ -1084,7 +1105,7 @@ def process_single_job(
             job_id=job_id,
             lease_token=lease_token,
             lease_sec=config.job_lease_sec,
-            phase="synthesizing_package",
+            phase="extracting_manual_pdf",
         )
         cand, _dl, pdf_stage_file, doc_out = verified_doc
         product_id = f"{mfr_norm}_{normalize_token(model)}"
@@ -1171,6 +1192,13 @@ def process_single_job(
             )
 
         # Stages 2-5: Multi-angle ephemeral photo harvest + VLM CAD v2 synthesis + PBR GLB + Validation & Review
+        renew_job_lease(
+            conn,
+            job_id=job_id,
+            lease_token=lease_token,
+            lease_sec=config.job_lease_sec,
+            phase="building_3d_twin",
+        )
         twin_arts, cap_interactive_twin, cap_procedures, twin_reasons = _run_generic_twin_pipeline(
             conn,
             config=config,
@@ -1193,6 +1221,13 @@ def process_single_job(
             check_dns=check_dns,
         )
 
+        renew_job_lease(
+            conn,
+            job_id=job_id,
+            lease_token=lease_token,
+            lease_sec=config.job_lease_sec,
+            phase="signing_package",
+        )
         art_inputs = list(doc_artifacts) + list(twin_arts)
         all_reasons = sorted(set(perm_reasons + twin_reasons))
         private_key = load_private_key(config.signer_key_path)

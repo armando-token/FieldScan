@@ -4453,7 +4453,7 @@ function handleCopilotResponse(res) {
     populateEscalationModal(res.signoff_package);
   }
 
-  if (state.autoSpeak && !window.FIELDSCAN_IOS_NATIVE) {
+  if (state.autoSpeak && !isEmbeddedIosLoopbackHost()) {
     playDiagnosisAudio(audioB64, answerText);
   }
 }
@@ -4770,6 +4770,12 @@ function syncMicDeckIdleUi() {
   }
 }
 
+function isEmbeddedIosLoopbackHost() {
+  if (window.FIELDSCAN_IOS_NATIVE !== true) return false;
+  const h = String(window.location.hostname || '').toLowerCase();
+  return !h || h === '127.0.0.1' || h === 'localhost' || window.location.protocol === 'file:';
+}
+
 async function fetchNativeVoiceWithTimeout(url, options = {}, timeoutMs = 2200) {
   const ctrl = new AbortController();
   const timerId = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -4884,7 +4890,7 @@ async function toggleHandsFreeMode() {
     stopVoiceRecording();
   }
 
-  if (window.FIELDSCAN_IOS_NATIVE === true || !navigator.mediaDevices?.getUserMedia) {
+  if (isEmbeddedIosLoopbackHost() || !navigator.mediaDevices?.getUserMedia) {
     const ok = await startNativeIosHandsFreeMode();
     if (!ok) {
       appendChatMessage({
@@ -5106,7 +5112,7 @@ function disableHandsFreeMode() {
     nativeHfPollTimer = null;
   }
   nativeHfPollInFlight = false;
-  if (wasNativeHandsFree || window.FIELDSCAN_IOS_NATIVE === true) {
+  if (wasNativeHandsFree || isEmbeddedIosLoopbackHost()) {
     fetchNativeVoiceWithTimeout('/api/voice/handsfree_stop', { method: 'POST' }, 1500).catch(() => {});
   }
   hfSpeechActive = false;
@@ -5271,7 +5277,7 @@ async function toggleVoiceRecording() {
 
   stopActiveTtsPlayback();
 
-  if (window.FIELDSCAN_IOS_NATIVE || !navigator.mediaDevices?.getUserMedia) {
+  if (isEmbeddedIosLoopbackHost() || !navigator.mediaDevices?.getUserMedia) {
     const ok = await startNativeIosMicRecording();
     if (!ok) {
       appendChatMessage({
@@ -6349,7 +6355,7 @@ function bindWorkstationEvents() {
           text: `Generated ${manifest.export_profile} dossier (partial=${manifest.partial_report}, changes=${manifest.confirmed_changes_count ?? 0}): PDF (${manifest.pdf_url}) & JSON (${manifest.json_url}).`,
         });
         if (manifest.pdf_url) {
-          if (window.FIELDSCAN_IOS_NATIVE && window.fieldscanNativeBridge?.shareExportedFile) {
+          if (isEmbeddedIosLoopbackHost() && window.fieldscanNativeBridge?.shareExportedFile) {
             const pdfName = manifest.pdf_url.split('/').pop();
             window.fieldscanNativeBridge.shareExportedFile(pdfName, '', 'application/pdf');
           } else {
@@ -6558,7 +6564,7 @@ function bindCatalogModalEvents() {
   });
 
   dom.btnImportSignedPackage?.addEventListener('click', () => {
-    if (window.FIELDSCAN_IOS_NATIVE && window.fieldscanNativeBridge?.presentPackageImporter) {
+    if (isEmbeddedIosLoopbackHost() && window.fieldscanNativeBridge?.presentPackageImporter) {
       window.fieldscanNativeBridge.presentPackageImporter();
       return;
     }

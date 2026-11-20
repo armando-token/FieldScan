@@ -634,8 +634,8 @@ public final class FieldScanVisionDetector {
             bgGrainMean = grainDiffSum / Double(count)
         }
 
-        let (colES, colEN) = Self.describeSurfaceColor(r: bgRMean, g: bgGMean, b: bgBMean)
-        let (texES, texEN) = Self.describeSurfaceTexture(grain: bgGrainMean)
+        let colEN = Self.describeSurfaceColor(r: bgRMean, g: bgGMean, b: bgBMean)
+        let texEN = Self.describeSurfaceTexture(grain: bgGrainMean)
 
         let totalPx = Double(count)
         let meanLuma = ((lumaSum / totalPx) * 10.0).rounded() / 10.0
@@ -671,9 +671,9 @@ public final class FieldScanVisionDetector {
             dipAngleDeg: finalDipAng,
             dipQuadPoints: finalDipQuad,
             dipConfidence: finalDipConf,
-            surfaceColorES: colES,
+            surfaceColorES: colEN,
             surfaceColorEN: colEN,
-            surfaceTextureES: texES,
+            surfaceTextureES: texEN,
             surfaceTextureEN: texEN,
             grainScore: (bgGrainMean * 100.0).rounded() / 100.0
         )
@@ -866,16 +866,15 @@ public final class FieldScanVisionDetector {
         )
     }
 
-    /// Runs Apple Vision `VNClassifyImageRequest` + surface grain/color analysis for rich scene Q&A on iPad M4.
+    /// Runs Apple Vision `VNClassifyImageRequest` + surface grain/color analysis for rich English scene Q&A on iPad M4.
     public func describeSceneEnvironment(
         jpegData: Data?,
         latestTelemetry: [String: Any],
-        language: String
+        language: String = "en"
     ) -> String {
+        _ = language
         guard let data = jpegData, !data.isEmpty else {
-            return language == "es"
-                ? "La cámara está activa pero aún estoy esperando el primer cuadro de video."
-                : "The camera is active and waiting for the first live video frame."
+            return "The camera is active and waiting for the first live video frame."
         }
 
         var cgImgOpt: CGImage?
@@ -888,9 +887,7 @@ public final class FieldScanVisionDetector {
         #endif
 
         guard let cgImage = cgImgOpt else {
-            return language == "es"
-                ? "Recibo señal de cámara pero no pude leer los detalles del cuadro actual."
-                : "Camera feed is active, though I couldn't decode the current frame."
+            return "Camera feed is active, though I couldn't decode the current frame."
         }
 
         let live = analyzeCGImage(cgImage)
@@ -905,66 +902,52 @@ public final class FieldScanVisionDetector {
                 .map { $0.identifier.replacingOccurrences(of: "_", with: " ") }
         }
 
-        let col = language == "es" ? (live?.surfaceColorES ?? "neutro") : (live?.surfaceColorEN ?? "neutral")
-        let tex = language == "es" ? (live?.surfaceTextureES ?? "superficie uniforme") : (live?.surfaceTextureEN ?? "uniform surface")
+        let col = live?.surfaceColorEN ?? "neutral"
+        let tex = live?.surfaceTextureEN ?? "uniform surface"
         let luma = live?.meanBrightness ?? ((latestTelemetry["mean_brightness"] as? Double) ?? 120.0)
-        let lightStr: String
-        if language == "es" {
-            lightStr = luma < 65 ? "iluminación baja" : (luma > 190 ? "iluminación intensa" : "iluminación interior clara")
-        } else {
-            lightStr = luma < 65 ? "dim lighting" : (luma > 190 ? "bright lighting" : "clear indoor lighting")
-        }
+        let lightStr = luma < 65 ? "dim lighting" : (luma > 190 ? "bright lighting" : "clear indoor lighting")
 
         let sensorVisible = live?.sensorDetected ?? ((latestTelemetry["detected"] as? Bool) ?? false)
         let handVisible = live?.handDetected ?? ((latestTelemetry["hand_detected"] as? Bool) ?? false)
 
-        if language == "es" {
-            let tagsNote = visionLabels.isEmpty ? "" : " (rasgos visuales detectados: \(visionLabels.joined(separator: ", ")))"
-            var extra: [String] = []
-            if sensorVisible { extra.append("el cuerpo cilíndrico del sensor apoyado ahí") }
-            if handVisible { extra.append("tu mano en el encuadre") }
-            let extraClause = extra.isEmpty ? "" : " También veo \(extra.joined(separator: " y "))."
-            return "Sí, veo la superficie debajo: es de tono \(col) con \(tex), bajo \(lightStr)\(tagsNote).\(extraClause)"
-        } else {
-            let tagsNote = visionLabels.isEmpty ? "" : " (visual scene cues: \(visionLabels.joined(separator: ", ")))"
-            var extra: [String] = []
-            if sensorVisible { extra.append("the cylindrical sensor resting there") }
-            if handVisible { extra.append("your hand in frame") }
-            let extraClause = extra.isEmpty ? "" : " I also see \(extra.joined(separator: " and "))."
-            return "Yes, looking at the surface underneath, I see a \(col) surface with a \(tex) under \(lightStr)\(tagsNote).\(extraClause)"
-        }
+        let tagsNote = visionLabels.isEmpty ? "" : " (visual scene cues: \(visionLabels.joined(separator: ", ")))"
+        var extra: [String] = []
+        if sensorVisible { extra.append("the cylindrical sensor resting there") }
+        if handVisible { extra.append("your hand in frame") }
+        let extraClause = extra.isEmpty ? "" : " I also see \(extra.joined(separator: " and "))."
+        return "Yes, looking at the surface underneath, I see a \(col) surface with a \(tex) under \(lightStr)\(tagsNote).\(extraClause)"
     }
 
-    private static func describeSurfaceColor(r: Double, g: Double, b: Double) -> (es: String, en: String) {
+    private static func describeSurfaceColor(r: Double, g: Double, b: Double) -> String {
         let luma = 0.299 * r + 0.587 * g + 0.114 * b
         let maxC = max(r, max(g, b))
         let minC = min(r, min(g, b))
         let chroma = maxC - minC
 
-        if luma < 45 { return ("oscuro / carbón", "dark charcoal") }
-        if luma > 212 && chroma < 24 { return ("blanco claro", "bright white") }
+        if luma < 45 { return "dark charcoal" }
+        if luma > 212 && chroma < 24 { return "bright white" }
         if chroma < 20 {
-            if luma < 105 { return ("gris oscuro", "dark grey") }
-            if luma < 170 { return ("gris neutro", "neutral grey") }
-            return ("gris claro / beige suave", "light grey / soft beige")
+            if luma < 105 { return "dark grey" }
+            if luma < 170 { return "neutral grey" }
+            return "light grey / soft beige"
         }
         if r >= g && r >= b {
-            if g > b * 1.18 { return ("beige / marrón cálido", "warm beige / tan") }
-            return ("rojizo / terracota", "warm reddish / terracotta")
+            if g > b * 1.18 { return "warm beige / tan" }
+            return "warm reddish / terracotta"
         }
         if g >= r && g >= b {
-            return ("verde suave / gris verdoso", "muted green / sage")
+            return "muted green / sage"
         }
-        return ("azulado / gris frío", "cool blue-grey")
+        return "cool blue-grey"
     }
 
-    private static func describeSurfaceTexture(grain: Double) -> (es: String, en: String) {
+    private static func describeSurfaceTexture(grain: Double) -> String {
         if grain >= 2.8 {
-            return ("textura fibrosa/granulada tipo alfombra o tapete tejido", "fibrous/woven carpet or mat texture")
+            return "fibrous/woven carpet or mat texture"
         }
         if grain >= 1.4 {
-            return ("textura mate media", "moderately textured matte finish")
+            return "moderately textured matte finish"
         }
-        return ("superficie lisa y uniforme", "smooth uniform finish")
+        return "smooth uniform finish"
     }
 }

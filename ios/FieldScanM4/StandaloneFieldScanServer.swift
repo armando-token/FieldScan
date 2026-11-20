@@ -538,7 +538,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
                 let expectedBodyLength = Int(headers["content-length"] ?? "0") ?? 0
                 let currentBodyLength = buffer.count - bodyStart
-                if currentBodyLength < expectedBodyLength && !isComplete && error == nil && buffer.count < 16_777_216 {
+                if currentBodyLength < expectedBodyLength && !isComplete && error == nil && buffer.count < 136_314_880 {
                     self.receiveHTTPRequest(on: connection, accumulated: buffer)
                     return
                 }
@@ -563,7 +563,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 return
             }
 
-            if isComplete || error != nil || buffer.count > 16_777_216 {
+            if isComplete || error != nil || buffer.count > 136_314_880 {
                 connection.cancel()
                 return
             }
@@ -1042,7 +1042,13 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         if req.method == "GET" || req.method == "HEAD" {
             if let (fileData, mimeType) = resolveStaticOrExportedFile(path: path) {
                 let bodyToSend = req.method == "HEAD" ? Data() : fileData
-                sendHTTPResponse(on: connection, statusCode: 200, contentType: mimeType, body: bodyToSend)
+                sendHTTPResponse(
+                    on: connection,
+                    statusCode: 200,
+                    contentType: mimeType,
+                    body: bodyToSend,
+                    extraHeaders: ["Content-Length": "\(fileData.count)"]
+                )
                 return
             }
         }
@@ -1232,6 +1238,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         case "png": return "image/png"
         case "jpg", "jpeg": return "image/jpeg"
         case "pdf": return "application/pdf"
+        case "glb": return "model/gltf-binary"
         case "dxf": return "application/dxf"
         case "stl": return "application/sla"
         case "eml": return "message/rfc822"
@@ -4455,7 +4462,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let q = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return nil }
 
-        if q.hasSuffix("?") || q.hasPrefix("¿") || q.range(of: "^(hola|buenos|buenas|hello|hi|hey|good\\s+(morning|afternoon|evening)|what|which|how|why|where|who|when|can\\s+you|could\\s+you|explain|tell\\s+me|que|cual|como|por\\s+que|donde|en\\s+que|puedes|me\\s+escuchas|muestrame|dime|is\\s+the|are\\s+the|do\\s+i|does\\s+it)\\b", options: .regularExpression) != nil {
+        if q.hasSuffix("?") || q.hasPrefix("\u{00BF}") || q.range(of: "^(hello|hi|hey|good\\s+(morning|afternoon|evening)|what|which|how|why|where|who|when|can\\s+you|could\\s+you|explain|tell\\s+me|is\\s+the|are\\s+the|do\\s+i|does\\s+it)\\b", options: .regularExpression) != nil {
             return nil
         }
 
@@ -4800,7 +4807,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         #endif
     }
 
-    /// Uses Liquid AI `LFM3-Omni-2B-Q8_0` (`activeOmniBaseURL`) to transcribe 16 kHz mono WAV audio in Spanish or English.
+    /// Uses Liquid AI `LFM3-Omni-2B-Q8_0` (`activeOmniBaseURL`) to transcribe 16 kHz mono WAV audio strictly in English.
     private func queryLocalOmniASRIfAvailable(wavData: Data) -> String? {
         guard wavData.count > 1000 else { return nil }
         let bridge = LlamaServerBridge.shared
@@ -4821,7 +4828,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "messages": [
                 [
                     "role": "system",
-                    "content": "Perform ASR. Output only the exact spoken words verbatim in the language spoken (Spanish or English). Do not add quotes or explanations.",
+                    "content": "Perform English ASR. Output only the exact spoken English words verbatim. Do not add quotes or explanations.",
                 ],
                 [
                     "role": "user",
@@ -4961,16 +4968,16 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 do {
                     let session = LanguageModelSession(instructions: """
                     You are FieldScan AI, a friendly, natural, real-time conversational AI and industrial field engineer running locally on an iPad Air M4 (12 GB RAM).
-                    Respond concisely in 1 to 3 clear sentences in the same language the user spoke (Spanish or English).
+                    Respond concisely in 1 to 3 clear sentences strictly in English.
                     Never invent SCADA/PLC confirmations or unverified sensor readings; rely strictly on the provided live context: \(contextSummary)
                     """)
                     let resp = try await session.respond(to: query)
                     if Task.isCancelled { return }
                     let text = resp.content.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !text.isEmpty {
-                        boxLock.lock()
-                        outputText = text
-                        boxLock.unlock()
+                        boxLock.withLock {
+                            outputText = text
+                        }
                     }
                 } catch {
                     // Apple Intelligence may not be enabled or available on this device state
@@ -4980,10 +4987,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             if waitRes == .timedOut {
                 genTask.cancel()
             }
-            boxLock.lock()
-            let finalOut = outputText
-            boxLock.unlock()
-            return finalOut
+            return boxLock.withLock { outputText }
         }
         #endif
         return nil
@@ -6281,7 +6285,17 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 }
                 let bodyJSON = parseJSONBody(req.body)
                 if let srcPath = bodyJSON["path"] as? String, !srcPath.isEmpty {
-                    let pkg = try FieldScanPackageStore.shared.importPackage(from: URL(fileURLWithPath: srcPath))
+                    let candURL = URL(fileURLWithPath: srcPath).resolvingSymlinksInPath().standardizedFileURL
+                    let allowedRoots = [
+                        FieldScanPackageStore.shared.stagingDirURL,
+                        FileManager.default.temporaryDirectory,
+                        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+                        locateBundleRootDirectory()?.appendingPathComponent("knowledge/fixtures", isDirectory: true),
+                    ].compactMap { $0?.resolvingSymlinksInPath().standardizedFileURL.path }
+                    guard allowedRoots.contains(where: { candURL.path == $0 || candURL.path.hasPrefix($0 + "/") }) else {
+                        throw FieldScanCatalogError(code: "UNTRUSTED_IMPORT_PATH", message: "Direct path import is restricted to authorized fixture, Documents, or staging directories.", statusCode: 403)
+                    }
+                    let pkg = try FieldScanPackageStore.shared.importPackage(from: candURL)
                     sendJSONResponse(on: connection, statusCode: 200, payload: ["ok": true, "package": pkg])
                     return
                 }
@@ -6408,6 +6422,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                     "identity_status": resolved["identity_status"] ?? "identify_variant",
                     "sensor_id": NSNull(),
                     "resolved_model": NSNull(),
+                    "spec": NSNull(),
                     "discriminant_field": resolved["discriminant_field"] ?? "variant_id",
                     "discriminant_prompt": prompt,
                     "candidates": resolved["candidates"] ?? [],
@@ -6424,6 +6439,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 "identity_status": "unknown_pending_identity",
                 "sensor_id": NSNull(),
                 "resolved_model": NSNull(),
+                "spec": NSNull(),
                 "confidence": 0.0,
                 "can_query_cloud_catalog": true,
                 "suggested_cloud_query": resolved["suggested_cloud_query"] ?? [:],

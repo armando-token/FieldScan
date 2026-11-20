@@ -494,6 +494,7 @@ async def api_sensor_load(payload: dict[str, Any]) -> dict[str, Any]:
                 "identity_status": resolved.get("identity_status", "identify_variant"),
                 "sensor_id": None,
                 "resolved_model": None,
+                "spec": None,
                 "discriminant_field": resolved.get("discriminant_field"),
                 "discriminant_prompt": prompt,
                 "candidates": resolved.get("candidates", []),
@@ -1421,7 +1422,19 @@ async def api_catalog_import(request: Request) -> dict[str, Any]:
 
     body = await request.json()
     if body.get("path"):
-        pkg = await asyncio.to_thread(_CATALOG_STORE.import_package_from_path, Path(str(body["path"])))
+        cand_p = Path(str(body["path"])).resolve()
+        allowed_roots = [
+            _CATALOG_STORE.staging_dir.resolve(),
+            (PROJECT_ROOT / "knowledge" / "fixtures").resolve(),
+            Path(tempfile.gettempdir()).resolve(),
+        ]
+        if not any(cand_p == r or r in cand_p.parents for r in allowed_roots):
+            raise CatalogDomainError(
+                "UNTRUSTED_IMPORT_PATH",
+                "Direct path import is restricted to authorized fixture, temporary, or staging directories.",
+                status_code=403,
+            )
+        pkg = await asyncio.to_thread(_CATALOG_STORE.import_package_from_path, cand_p)
         return {"ok": True, "package": pkg}
     if body.get("archive_b64"):
         b64_s = str(body["archive_b64"])

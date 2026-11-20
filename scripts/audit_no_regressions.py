@@ -131,9 +131,9 @@ def audit_english_only_gate(errors: list[str]) -> int:
     for path in PROJECT_ROOT.rglob("*"):
         if any(part in skip_dirs for part in path.parts) or not path.is_file():
             continue
-        if path.name == "golden_contracts_v2_1.json":
+        if path.name == "golden_contracts_v2_1.json" or path.name.startswith("MEGAPLAN_"):
             continue
-        if path.suffix in {".py", ".html", ".css", ".js", ".json", ".sh"}:
+        if path.suffix in {".py", ".swift", ".md", ".html", ".css", ".js", ".json", ".sh"}:
             if path.name == "audit_no_regressions.py" or path.name == "test_fieldscan_glue.py":
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")

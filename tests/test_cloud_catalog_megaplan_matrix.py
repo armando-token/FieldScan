@@ -739,6 +739,12 @@ def test_m4_pkg_09_archive_entry_limit_path_traversal_symlink_and_exec_rejected(
         store.import_package_from_path(z_many)
     assert e_many.value.code == "ARCHIVE_LIMIT_EXCEEDED"
 
+    # 9e. Direct HTTP path import outside authorized fixture/staging directories blocked with 403 UNTRUSTED_IMPORT_PATH
+    with TestClient(srv.app) as http:
+        r_untrusted = http.post("/api/catalog/import", json={"path": "/etc/passwd"})
+        assert r_untrusted.status_code == 403
+        assert r_untrusted.json()["error_code"] == "UNTRUSTED_IMPORT_PATH"
+
 
 # ==============================================================================
 # 5. MULTI-DOCUMENT 12+ PAGE MANUALS & SANITIZATION (`M4-DOC-01..03`)

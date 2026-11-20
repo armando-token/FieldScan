@@ -119,10 +119,16 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         floatingPill.layer.borderColor = UIColor(red: 0.0, green: 0.78, blue: 0.96, alpha: 0.55).cgColor
 
         pillButton.translatesAutoresizingMaskIntoConstraints = false
-        pillButton.setTitle("M4 12GB · iPad Local · Bench Setup", for: .normal)
-        pillButton.setTitleColor(.white, for: .normal)
-        pillButton.titleLabel?.font = UIFont.monospacedSystemFont(ofSize: 11.5, weight: .semibold)
-        pillButton.contentEdgeInsets = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        var btnConfig = UIButton.Configuration.plain()
+        btnConfig.title = "M4 12GB · iPad Local · Bench Setup"
+        btnConfig.baseForegroundColor = .white
+        btnConfig.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+        btnConfig.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = UIFont.monospacedSystemFont(ofSize: 11.5, weight: .semibold)
+            return outgoing
+        }
+        pillButton.configuration = btnConfig
         pillButton.addTarget(self, action: #selector(presentOperatorControlSheet), for: .touchUpInside)
 
         floatingPill.addSubview(pillButton)
@@ -155,6 +161,7 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
             shortMode = "Assisted Host"
         }
         let label = String(format: "M4 %.0fGB · %@ · Share", mem.physicalMemoryGB, shortMode)
+        pillButton.configuration?.title = label
         pillButton.setTitle(label, for: .normal)
     }
 

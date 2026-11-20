@@ -84,6 +84,11 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
                 window.webkit.messageHandlers.fieldscanNative.postMessage({
                     command: "presentPackageImporter"
                 });
+            },
+            presentPusrGatewayConfig: function() {
+                window.webkit.messageHandlers.fieldscanNative.postMessage({
+                    command: "presentPusrGatewayConfig"
+                });
             }
         };
         """
@@ -272,9 +277,33 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         alert.addAction(UIAlertAction(title: "Save & Select PUSR", style: .default) { [weak self] _ in
             let host = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let port = Int(alert.textFields?.last?.text ?? "502") ?? 502
-            StandaloneFieldScanServer.shared.configurePusrGateway(host: host, port: port, activate: true)
+            if port == ModbusTCPClient.legacyRTUBridgePort {
+                let errAlert = UIAlertController(
+                    title: "Invalid MBAP Port (5502)",
+                    message: "Port 5502 is reserved for raw RTU-over-TCP framing. Configure PUSR USR-DR164 in Modbus TCP (MBAP) mode on port 502.",
+                    preferredStyle: .alert
+                )
+                errAlert.addAction(UIAlertAction(title: "OK", style: .default))
+                self?.present(errAlert, animated: true)
+                return
+            }
+            StandaloneFieldScanServer.shared.configurePusrGateway(host: host, port: port, activate: !host.isEmpty)
             if let self = self {
                 self.updatePillStatusLabel(mode: cfg.currentMode)
+                let payload: [String: Any] = ["ok": true, "host": host, "port": port, "activated": !host.isEmpty]
+                if let data = try? JSONSerialization.data(withJSONObject: payload),
+                   let jsonStr = String(data: data, encoding: .utf8) {
+                    let js = "window.dispatchEvent(new CustomEvent('fieldscan:gatewayConfigured', { detail: \(jsonStr) }));"
+                    self.webView.evaluateJavaScript(js, completionHandler: nil)
+                }
+            }
+        })
+        alert.addAction(UIAlertAction(title: "Clear Gateway", style: .destructive) { [weak self] _ in
+            StandaloneFieldScanServer.shared.configurePusrGateway(host: "", port: 502, activate: false)
+            if let self = self {
+                self.updatePillStatusLabel(mode: cfg.currentMode)
+                let js = "window.dispatchEvent(new CustomEvent('fieldscan:gatewayConfigured', { detail: { ok: true, host: '', port: 502, activated: false } }));"
+                self.webView.evaluateJavaScript(js, completionHandler: nil)
             }
         })
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
@@ -327,7 +356,7 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         present(activityVC, animated: true)
     }
 
-    // MARK: - WKUIDelegate (Grant Camera/Mic ONLY to Trusted Local HMI Origin, `OFF-05`)
+    // MARK: - WKUIDelegate (Trusted Local Origin Media & Native JS Dialogs, `OFF-05`)
 
     @available(iOS 15.0, *)
     public func webView(
@@ -342,6 +371,64 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         } else {
             decisionHandler(.deny)
         }
+    }
+
+    public func webView(
+        _ webView: WKWebView,
+        runJavaScriptAlertPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping () -> Void
+    ) {
+        guard FieldScanRuntimeConfig.shared.isTrustedHMIHost(frame.securityOrigin.host),
+              presentedViewController == nil else {
+            completionHandler()
+            return
+        }
+        let alert = UIAlertController(title: "FieldScan CAD", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
+        present(alert, animated: true)
+    }
+
+    public func webView(
+        _ webView: WKWebView,
+        runJavaScriptConfirmPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        guard FieldScanRuntimeConfig.shared.isTrustedHMIHost(frame.securityOrigin.host),
+              presentedViewController == nil else {
+            completionHandler(false)
+            return
+        }
+        let alert = UIAlertController(title: "FieldScan CAD", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
+        alert.addAction(UIAlertAction(title: "Confirm", style: .default) { _ in completionHandler(true) })
+        present(alert, animated: true)
+    }
+
+    public func webView(
+        _ webView: WKWebView,
+        runJavaScriptTextInputPanelWithPrompt prompt: String,
+        defaultText: String?,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping (String?) -> Void
+    ) {
+        guard FieldScanRuntimeConfig.shared.isTrustedHMIHost(frame.securityOrigin.host),
+              presentedViewController == nil else {
+            completionHandler(nil)
+            return
+        }
+        let alert = UIAlertController(title: "FieldScan Bench Input", message: prompt, preferredStyle: .alert)
+        alert.addTextField { tf in
+            tf.text = defaultText
+            tf.autocapitalizationType = .none
+            tf.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(nil) })
+        alert.addAction(UIAlertAction(title: "Save", style: .default) { _ in
+            completionHandler(alert.textFields?.first?.text)
+        })
+        present(alert, animated: true)
     }
 
     // MARK: - WKNavigationDelegate (Strict Origin Policy + TLS Pinning, `OFF-05`, `OFF-06`)
@@ -481,6 +568,9 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
 
         case "presentPackageImporter":
             presentSignedPackageDocumentPicker()
+
+        case "presentPusrGatewayConfig":
+            promptForPusrGateway()
 
         default:
             break

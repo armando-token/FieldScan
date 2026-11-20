@@ -799,7 +799,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             let bodyJSON = parseJSONBody(req.body)
             let host = ((bodyJSON["host"] as? String) ?? FieldScanRuntimeConfig.shared.pusrGatewayHost).trimmingCharacters(in: .whitespacesAndNewlines)
             let port = intFromAny(bodyJSON["port"]) ?? 502
-            let activate = boolFromAny(bodyJSON["activate"], defaultValue: true)
+            let activate = boolFromAny(bodyJSON["activate"] ?? bodyJSON["activate_mode"], defaultValue: !host.isEmpty)
             if port == ModbusTCPClient.legacyRTUBridgePort {
                 sendJSONResponse(on: connection, statusCode: 400, payload: [
                     "ok": false,
@@ -3050,6 +3050,12 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "fps": visionTel["fps"] ?? 25.0,
             "vision": visionTel,
             "modbus": modbusTel,
+            "pusr_gateway": [
+                "host": FieldScanRuntimeConfig.shared.pusrGatewayHost,
+                "port": FieldScanRuntimeConfig.shared.pusrGatewayPort,
+                "configured": !FieldScanRuntimeConfig.shared.pusrGatewayHost.isEmpty,
+                "protocol": "modbus_tcp_mbap",
+            ],
             "repair": repairState,
             "system": sysInfo,
             "offline": offlineInfo,

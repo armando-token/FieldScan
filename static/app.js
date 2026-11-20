@@ -3728,6 +3728,11 @@ function applyTelemetryPayload(data) {
 
   // 7. Live Bench Modbus Telemetry, Freshness & Action Gating
   const mb = data.modbus || {};
+  const gwInfo = data.pusr_gateway || data.diagnostics?.pusr_gateway || null;
+  if (gwInfo && typeof gwInfo === 'object') {
+    if (typeof gwInfo.host === 'string') state.pusrGatewayHost = gwInfo.host.trim();
+    if (Number(gwInfo.port) > 0) state.pusrGatewayPort = Number(gwInfo.port);
+  }
   const pollSeq = Number(mb.poll_seq || 0);
   if (pollSeq > 0 && pollSeq < state.lastPollSeq && mb.mode === dom.selectModbusMode?.value) {
     return; // Ignore out-of-order stale status packet
@@ -5854,7 +5859,11 @@ function bindWorkstationEvents() {
   });
 
   dom.selectModbusMode.addEventListener('change', (e) => {
-    switchModbusMode(e.target.value);
+    const nextMode = e.target.value;
+    switchModbusMode(nextMode);
+    if (nextMode === 'pusr_tcp' && !state.pusrGatewayHost) {
+      dom.btnConfigGateway?.click();
+    }
   });
 
   // Top 4 Color-Coded Guided Workflow Step Buttons
@@ -6235,42 +6244,71 @@ function bindWorkstationEvents() {
   }
 
   // Configure PUSR Modbus TCP Gateway (`BUS-02`)
+  async function openPusrGatewayConfigurator() {
+    if (isEmbeddedIosLoopbackHost() && window.fieldscanNativeBridge?.presentPusrGatewayConfig) {
+      window.fieldscanNativeBridge.presentPusrGatewayConfig();
+      return;
+    }
+    const currentTarget = state.pusrGatewayHost
+      ? `${state.pusrGatewayHost}:${state.pusrGatewayPort}`
+      : '192.168.0.7:502';
+    const entered = window.prompt(
+      'Enter isolated bench PUSR USR-DR164 Modbus TCP (MBAP) host:port (never use :5502 raw RTU bridge):',
+      currentTarget
+    );
+    if (!entered) return;
+    const parts = entered.trim().split(':');
+    const host = (parts[0] || '').trim();
+    const port = Number(parts[1] || 502) || 502;
+    if (!host) return;
+    state.pusrGatewayHost = host;
+    state.pusrGatewayPort = port;
+    try {
+      await fetchJsonWithFallback(['/api/modbus/gateway'], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host, port, activate: true, activate_mode: true }),
+      });
+      if (dom.selectModbusMode) dom.selectModbusMode.value = 'pusr_tcp';
+      appendChatMessage({
+        role: 'assistant',
+        author: 'BENCH GATEWAY CONFIG',
+        text: `Configured PUSR Modbus TCP (MBAP) endpoint to ${host}:${port}. Previous session link invalidated; reconfirm asset before closing.`,
+      });
+      pollTelemetry();
+    } catch (err) {
+      appendChatMessage({
+        role: 'assistant',
+        author: 'BENCH GATEWAY CONFIG',
+        text: `Failed to update gateway: ${err.message || err}`,
+      });
+    }
+  }
+
+  window.addEventListener('fieldscan:gatewayConfigured', (ev) => {
+    const detail = ev.detail || {};
+    state.pusrGatewayHost = String(detail.host || '').trim();
+    state.pusrGatewayPort = Number(detail.port || 502) || 502;
+    if (state.pusrGatewayHost && detail.activated) {
+      if (dom.selectModbusMode) dom.selectModbusMode.value = 'pusr_tcp';
+      appendChatMessage({
+        role: 'assistant',
+        author: 'BENCH GATEWAY CONFIG',
+        text: `Configured PUSR Modbus TCP (MBAP) endpoint to ${state.pusrGatewayHost}:${state.pusrGatewayPort}. Polling live registers...`,
+      });
+    } else {
+      appendChatMessage({
+        role: 'assistant',
+        author: 'BENCH GATEWAY CONFIG',
+        text: 'Cleared PUSR Modbus TCP gateway configuration. Select a simulator mode or configure a PUSR IP:502 to poll physical sensors.',
+      });
+    }
+    pollTelemetry();
+  });
+
   if (dom.btnConfigGateway) {
-    dom.btnConfigGateway.addEventListener('click', async () => {
-      const currentTarget = state.pusrGatewayHost
-        ? `${state.pusrGatewayHost}:${state.pusrGatewayPort}`
-        : '192.168.0.7:502';
-      const entered = window.prompt(
-        'Enter isolated bench PUSR USR-DR164 Modbus TCP (MBAP) host:port (never use :5502 raw RTU bridge):',
-        currentTarget
-      );
-      if (!entered) return;
-      const parts = entered.trim().split(':');
-      const host = (parts[0] || '').trim();
-      const port = Number(parts[1] || 502) || 502;
-      if (!host) return;
-      state.pusrGatewayHost = host;
-      state.pusrGatewayPort = port;
-      try {
-        await fetchJsonWithFallback(['/api/modbus/gateway'], {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ host, port, activate_mode: true }),
-        });
-        if (dom.selectModbusMode) dom.selectModbusMode.value = 'pusr_tcp';
-        appendChatMessage({
-          role: 'assistant',
-          author: 'BENCH GATEWAY CONFIG',
-          text: `Configured PUSR Modbus TCP (MBAP) endpoint to ${host}:${port}. Previous session link invalidated; reconfirm asset before closing.`,
-        });
-        pollTelemetry();
-      } catch (err) {
-        appendChatMessage({
-          role: 'assistant',
-          author: 'BENCH GATEWAY CONFIG',
-          text: `Failed to update gateway: ${err.message || err}`,
-        });
-      }
+    dom.btnConfigGateway.addEventListener('click', () => {
+      openPusrGatewayConfigurator();
     });
   }
 
@@ -6286,12 +6324,17 @@ function bindWorkstationEvents() {
         });
         if (res?.modbus) applyTelemetryPayload({ modbus: res.modbus });
         const m = res?.modbus || {};
+        const unconfiguredGw =
+          !m.online &&
+          (m.error_code === 'SOURCE_UNAVAILABLE' || String(m.status_label || '').includes('NOT CONFIGURED') || String(m.status_label || '').includes('NO PHYSICAL GATEWAY'));
         appendChatMessage({
           role: 'assistant',
           author: 'MODBUS READ-ONLY POLL',
           text: m.online
             ? `Sensor responded (${m.protocol || 'Modbus'}): Temp=${m.temp_c ?? 'FAULT'} °C, RH=${m.humidity_rh ?? 'FAULT'} %RH (Scope: ${m.scope || 'sensor_communication'}).`
-            : `No fresh sensor response (${m.error_code || 'READ_TIMEOUT'}): ${m.status_label || 'Timeout'}.`,
+            : unconfiguredGw
+              ? `No physical Modbus gateway configured (${m.status_label || 'OFFLINE'}). Tap the Network Gateway icon next to the Modbus selector to enter your PUSR USR-DR164 IP:502, or switch the Modbus dropdown to "Sim: Synthetic Nominal" to test without hardware.`
+              : `No fresh sensor response (${m.error_code || 'READ_TIMEOUT'}): ${m.status_label || 'Timeout'}.`,
         });
       } catch (_e) {}
     });

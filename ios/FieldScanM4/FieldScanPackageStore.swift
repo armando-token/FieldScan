@@ -1,5 +1,6 @@
 import Foundation
 import Compression
+import CryptoKit
 import SQLite3
 
 /// Native iPadOS Transactional Package Store (`Application Support/FieldScanCatalog/`).
@@ -61,6 +62,29 @@ public final class FieldScanPackageStore {
 
         openAndInitSQLite()
         _ = recoverOnBoot()
+    }
+
+    /// Registers an authorized Ed25519 signing public key (raw 32-byte Base64) for production/cloud verification.
+    @discardableResult
+    public func registerTrustedSigner(keyId: String, publicKeyBase64: String) throws -> [String: Any] {
+        let cleanId = keyId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanId.isEmpty else {
+            throw FieldScanCatalogError(code: "UNTRUSTED_KEY_ID", message: "Signer key_id cannot be empty")
+        }
+        guard let raw = Data(base64Encoded: publicKeyBase64.trimmingCharacters(in: .whitespacesAndNewlines)),
+              raw.count == 32 else {
+            throw FieldScanCatalogError(code: "UNTRUSTED_KEY_ID", message: "Ed25519 public key must be 32-byte Base64")
+        }
+        do {
+            _ = try Curve25519.Signing.PublicKey(rawRepresentation: raw)
+        } catch {
+            throw FieldScanCatalogError(code: "UNTRUSTED_KEY_ID", message: "Malformed Ed25519 public key for '\(cleanId)'")
+        }
+        lock.lock()
+        trustedKeys[cleanId] = raw
+        let allIds = Array(trustedKeys.keys).sorted()
+        lock.unlock()
+        return ["key_id": cleanId, "trusted_key_ids": allIds]
     }
 
     deinit {
@@ -227,9 +251,28 @@ public final class FieldScanPackageStore {
             guard let idxObj = try FieldScanCatalogContract.parseJSONStrictNoDuplicateKeys(idxData) as? [String: Any] else {
                 throw FieldScanCatalogError(code: "SEMANTIC_REFERENCE_BROKEN", message: "manual_index must be an object")
             }
-            for docEntry in ((idxObj["documents"] as? [[String: Any]]) ?? []) {
-                if let did = docEntry["document_id"] as? String, !did.isEmpty, docPageCounts[did] == nil {
-                    throw FieldScanCatalogError(code: "SEMANTIC_REFERENCE_BROKEN", message: "manual_index references unknown document_id '\(did)'")
+            let docEntries: [[String: Any]] = {
+                if let arr = idxObj["documents"] as? [[String: Any]] {
+                    return arr
+                }
+                if idxObj["document_id"] is String {
+                    return [idxObj]
+                }
+                return []
+            }()
+            let hasManualPdfs = !(byRole["manual_pdf"] ?? []).isEmpty
+            for docEntry in docEntries {
+                guard let did = docEntry["document_id"] as? String, !did.isEmpty else { continue }
+                if hasManualPdfs {
+                    if docPageCounts[did] == nil {
+                        throw FieldScanCatalogError(code: "SEMANTIC_REFERENCE_BROKEN", message: "manual_index references unknown document_id '\(did)'")
+                    }
+                } else {
+                    let pc = (docEntry["page_count"] as? Int) ?? ((docEntry["pages"] as? [[String: Any]])?.count ?? 0)
+                    guard pc >= 1 else {
+                        throw FieldScanCatalogError(code: "SEMANTIC_REFERENCE_BROKEN", message: "document_index '\(did)' has invalid page_count")
+                    }
+                    docPageCounts[did] = pc
                 }
             }
         }
@@ -254,16 +297,19 @@ public final class FieldScanPackageStore {
                   let partsList = partsObj["parts"] as? [[String: Any]], !partsList.isEmpty else {
                 throw FieldScanCatalogError(code: "SEMANTIC_REFERENCE_BROKEN", message: "twin.parts.json must declare non-empty parts[]")
             }
-            let units = (partsObj["units"] as? String) ?? "meters"
-            guard units == "meters" || units == "millimeters" else {
-                throw FieldScanCatalogError(code: "SEMANTIC_REFERENCE_BROKEN", message: "Unsupported twin units '\(units)'")
+            let rawUnits = ((partsObj["units"] as? String) ?? (partsObj["unit"] as? String) ?? "meters")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let validUnits: Set<String> = ["m", "meter", "meters", "mm", "millimeter", "millimeters"]
+            guard validUnits.contains(rawUnits) else {
+                throw FieldScanCatalogError(code: "SEMANTIC_REFERENCE_BROKEN", message: "Unsupported twin units '\(rawUnits)'")
             }
 
             for p in partsList {
                 let pid = ((p["part_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                let nname = ((p["node_name"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let nname = ((p["node_name"] as? String) ?? (p["node_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 if pid.isEmpty || nname.isEmpty {
-                    throw FieldScanCatalogError(code: "SEMANTIC_REFERENCE_BROKEN", message: "Every part requires part_id and node_name")
+                    throw FieldScanCatalogError(code: "SEMANTIC_REFERENCE_BROKEN", message: "Every part requires part_id and node_name/node_id")
                 }
                 if validPartIds.contains(pid) {
                     throw FieldScanCatalogError(code: "SEMANTIC_REFERENCE_BROKEN", message: "Duplicate part_id '\(pid)' in twin.parts.json")
@@ -754,7 +800,7 @@ public final class FieldScanPackageStore {
                     "product_id": pid,
                     "variant_id": vid,
                     "title": (mObj["title"] as? String) ?? "\(pid) (\(vid))",
-                    "manufacturer": (mObj["manufacturer"] as? String) ?? "TZONE",
+                    "manufacturer": (mObj["manufacturer"] as? String) ?? (mObj["issuer"] as? String) ?? "UNKNOWN",
                     "model": (mObj["model"] as? String) ?? pid,
                     "connector_type": mObj["connector_type"] ?? NSNull(),
                     "publication_seq": seq,
@@ -1058,6 +1104,7 @@ public final class FieldScanPackageStore {
 
         var pdfByDoc: [String: [String: Any]] = [:]
         var imgByPath: [String: [String: Any]] = [:]
+        var mdByPath: [String: [String: Any]] = [:]
         var idxArt: [String: Any]?
         for a in arts {
             let r = (a["role"] as? String) ?? ""
@@ -1066,6 +1113,8 @@ public final class FieldScanPackageStore {
                 pdfByDoc[did] = a
             } else if r == "manual_page_image", let p = a["path"] as? String {
                 imgByPath[p] = a
+            } else if r == "manual_markdown", let p = a["path"] as? String {
+                mdByPath[p] = a
             } else if r == "manual_index" || r == "document_index" {
                 idxArt = a
             }
@@ -1074,8 +1123,12 @@ public final class FieldScanPackageStore {
         var docsOut: [[String: Any]] = []
         if let ia = idxArt, let rel = ia["path"] as? String,
            let d = try? Data(contentsOf: pkgDir.appendingPathComponent(rel)),
-           let idxObj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
-           let docEntries = idxObj["documents"] as? [[String: Any]] {
+           let idxObj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
+            let docEntries: [[String: Any]] = {
+                if let arr = idxObj["documents"] as? [[String: Any]] { return arr }
+                if idxObj["document_id"] is String { return [idxObj] }
+                return []
+            }()
             for doc in docEntries {
                 let did = (doc["document_id"] as? String) ?? ""
                 let pdfA = pdfByDoc[did]
@@ -1085,24 +1138,35 @@ public final class FieldScanPackageStore {
                     let pnum = (pg["page"] as? Int) ?? 1
                     let imgRel = pg["image_path"] as? String
                     let imgURL = (imgRel != nil) ? (imgByPath[imgRel!]?["local_url"] as? String) : nil
+                    let mdRel = pg["markdown_path"] as? String
+                    let mdURL = (mdRel != nil) ? (mdByPath[mdRel!]?["local_url"] as? String) : nil
+                    let citRaw = (pg["citation_id"] as? String) ?? ""
+                    let citParts = citRaw.split(separator: ":").map(String.init)
+                    let secFromCit = (citParts.count >= 3) ? citParts[2] : nil
+                    let secId = FieldScanCatalogContract.sanitizeReferenceText((pg["section_id"] as? String) ?? secFromCit ?? "\(pnum).1")
+                    let excerptRaw = (pg["verified_excerpt"] as? String) ?? (pg["excerpt"] as? String) ?? ""
                     pagesOut.append([
                         "page": pnum,
                         "printed_page": FieldScanCatalogContract.sanitizeReferenceText("\(pg["printed_page"] ?? pnum)"),
                         "title": FieldScanCatalogContract.sanitizeReferenceText((pg["title"] as? String) ?? "Page \(pnum)"),
-                        "section_id": FieldScanCatalogContract.sanitizeReferenceText((pg["section_id"] as? String) ?? "\(pnum).1"),
-                        "verified_excerpt": FieldScanCatalogContract.sanitizeReferenceText((pg["verified_excerpt"] as? String) ?? ""),
+                        "section_id": secId,
+                        "citation_id": citRaw.isEmpty ? "\(did):p\(pnum):\(secId)" : citRaw,
+                        "verified_excerpt": FieldScanCatalogContract.sanitizeReferenceText(excerptRaw),
                         "image_url": imgURL ?? NSNull(),
+                        "markdown_url": mdURL ?? NSNull(),
                         "pdf_fallback_url": (pdfURL != nil) ? "\(pdfURL!)#page=\(pnum)" : NSNull(),
                         "keywords": ((pg["keywords"] as? [String]) ?? []).map { $0.lowercased() },
                     ])
                 }
+                let resolvedPdfShaStr = (pdfA?["sha256"] as? String) ?? (doc["pdf_sha256"] as? String)
+                let resolvedPdfSha: Any = resolvedPdfShaStr ?? NSNull()
                 docsOut.append([
                     "document_id": did,
                     "title": FieldScanCatalogContract.sanitizeReferenceText((doc["title"] as? String) ?? did),
-                    "revision": FieldScanCatalogContract.sanitizeReferenceText((doc["revision"] as? String) ?? "rev-1"),
+                    "revision": FieldScanCatalogContract.sanitizeReferenceText((doc["revision"] as? String) ?? (doc["revision_label"] as? String) ?? "rev-1"),
                     "page_count": pagesOut.isEmpty ? ((doc["page_count"] as? Int) ?? 1) : pagesOut.count,
                     "pdf_url": pdfURL ?? NSNull(),
-                    "pdf_sha256": (pdfA?["sha256"] as? String) ?? NSNull(),
+                    "pdf_sha256": resolvedPdfSha,
                     "pages": pagesOut,
                 ])
             }
@@ -1145,21 +1209,45 @@ public final class FieldScanPackageStore {
            let aData = try? Data(contentsOf: pkgDir.appendingPathComponent((actionsA["path"] as? String) ?? "")),
            let pObj = (try? JSONSerialization.jsonObject(with: pData)) as? [String: Any],
            let aObj = (try? JSONSerialization.jsonObject(with: aData)) as? [String: Any] {
-            let units = (pObj["units"] as? String) ?? "meters"
+            let rawUnits = ((pObj["units"] as? String) ?? (pObj["unit"] as? String) ?? "meters")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let isMeters = (rawUnits == "m" || rawUnits == "meter" || rawUnits == "meters")
+            let scaleMm = isMeters ? 1000.0 : 1.0
+
             var cleanParts: [[String: Any]] = []
             for var p in ((pObj["parts"] as? [[String: Any]]) ?? []) {
-                p["label"] = FieldScanCatalogContract.sanitizeReferenceText((p["label"] as? String) ?? "")
-                p["summary"] = FieldScanCatalogContract.sanitizeReferenceText((p["summary"] as? String) ?? "")
+                let nodeNm = ((p["node_name"] as? String) ?? (p["node_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let aliases = ((p["aliases"] as? [String]) ?? []).map { FieldScanCatalogContract.sanitizeReferenceText($0) }.filter { !$0.isEmpty }
+                p["node_name"] = nodeNm
+                p["node_id"] = nodeNm
+                p["aliases"] = aliases
+                let fallbackLabel = aliases.first ?? ((p["part_id"] as? String) ?? "")
+                p["label"] = FieldScanCatalogContract.sanitizeReferenceText((p["label"] as? String) ?? fallbackLabel)
+                let fallbackSummary = aliases.isEmpty ? "" : "Verified CAD component (\(aliases.prefix(3).joined(separator: ", ")))"
+                p["summary"] = FieldScanCatalogContract.sanitizeReferenceText((p["summary"] as? String) ?? fallbackSummary)
                 cleanParts.append(p)
             }
+
+            var normViews: [[String: Any]] = []
+            for var v in ((pObj["views"] as? [[String: Any]]) ?? []) {
+                if v["camera_pos_mm"] == nil, let camM = v["camera_offset_m"] as? [NSNumber], camM.count == 3 {
+                    v["camera_pos_mm"] = camM.map { (Double(truncating: $0) * scaleMm * 1000.0).rounded() / 1000.0 }
+                }
+                if v["target_mm"] == nil, let tgtM = v["target_m"] as? [NSNumber], tgtM.count == 3 {
+                    v["target_mm"] = tgtM.map { (Double(truncating: $0) * scaleMm * 1000.0).rounded() / 1000.0 }
+                }
+                normViews.append(v)
+            }
+
             twinDesc = [
                 "glb_url": glbA["local_url"] ?? "",
                 "glb_sha256": glbA["sha256"] ?? "",
-                "units": units,
-                "scale_to_studio_mm": units == "meters" ? 1000.0 : 1.0,
+                "units": isMeters ? "meters" : "millimeters",
+                "scale_to_studio_mm": scaleMm,
                 "reference_dimensions_mm": pObj["reference_dimensions_mm"] ?? [:],
                 "parts": cleanParts,
-                "views": pObj["views"] ?? [],
+                "views": normViews,
                 "actions": aObj["actions"] ?? [],
             ]
         }

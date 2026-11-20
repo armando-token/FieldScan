@@ -168,7 +168,7 @@ DEFAULT_TRUSTED_PUBLIC_KEYS: dict[str, bytes] = {
 # ==============================================================================
 
 MAX_ENVELOPE_BYTES = 512 * 1024
-MAX_ARTIFACTS_PER_PACKAGE = 64
+MAX_ARTIFACTS_PER_PACKAGE = 256
 MAX_SINGLE_ARTIFACT_BYTES = 50 * 1024 * 1024
 MAX_PACKAGE_TOTAL_BYTES = 120 * 1024 * 1024
 CURRENT_APP_BUILD = 210
@@ -617,14 +617,24 @@ def verify_and_decode_manifest_envelope(
     if not isinstance(caps, dict):
         raise CatalogDomainError("INVALID_ENVELOPE", "Missing capabilities object")
 
-    if caps.get("documentation") is True and "manual_pdf" not in roles_present:
-        raise CatalogDomainError("MISSING_CAPABILITY_DEPENDENCY", "documentation=true requires manual_pdf artifact")
+    has_doc_index_and_md = (
+        ("manual_index" in roles_present or "document_index" in roles_present)
+        and "manual_markdown" in roles_present
+    )
+    if caps.get("documentation") is True and "manual_pdf" not in roles_present and not has_doc_index_and_md:
+        raise CatalogDomainError(
+            "MISSING_CAPABILITY_DEPENDENCY",
+            "documentation=true requires manual_pdf or document_index + manual_markdown artifacts",
+        )
     if caps.get("interactive_twin") is True:
         for req_role in ("twin_glb", "twin_parts", "twin_actions"):
             if req_role not in roles_present:
                 raise CatalogDomainError("MISSING_CAPABILITY_DEPENDENCY", f"interactive_twin=true requires '{req_role}'")
-    if caps.get("procedures") is True and "procedures" not in roles_present:
-        raise CatalogDomainError("MISSING_CAPABILITY_DEPENDENCY", "procedures=true requires 'procedures' artifact")
+    if caps.get("procedures") is True and "procedures" not in roles_present and "twin_actions" not in roles_present:
+        raise CatalogDomainError(
+            "MISSING_CAPABILITY_DEPENDENCY",
+            "procedures=true requires 'procedures' or 'twin_actions' artifact",
+        )
 
     manifest_sha256 = sha256_bytes(raw_payload)
     return payload, manifest_sha256, raw_payload
@@ -660,6 +670,25 @@ class FieldScanPackageStore:
         self.packages_dir.mkdir(parents=True, exist_ok=True)
         self._init_db()
         self.recover_on_boot()
+
+    def register_trusted_signer(self, key_id: str, public_key_b64: str) -> dict[str, Any]:
+        """Register an authorized Ed25519 signing public key (raw 32-byte Base64) for production/cloud verification."""
+        clean_id = (key_id or "").strip()
+        if not clean_id:
+            raise CatalogDomainError("UNTRUSTED_KEY_ID", "Signer key_id cannot be empty")
+        try:
+            raw = base64.b64decode((public_key_b64 or "").strip(), validate=True)
+        except Exception as exc:
+            raise CatalogDomainError("UNTRUSTED_KEY_ID", "Invalid Base64 Ed25519 public key") from exc
+        if len(raw) != 32:
+            raise CatalogDomainError("UNTRUSTED_KEY_ID", f"Ed25519 public key must be 32 bytes (got {len(raw)})")
+        try:
+            _ed_decodepoint(raw)
+        except Exception as exc:
+            raise CatalogDomainError("UNTRUSTED_KEY_ID", f"Invalid Ed25519 curve point for '{clean_id}'") from exc
+        with self._lock:
+            self.trusted_keys[clean_id] = raw
+            return {"key_id": clean_id, "trusted_key_ids": sorted(self.trusted_keys.keys())}
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
@@ -815,10 +844,25 @@ class FieldScanPackageStore:
             idx_obj = _parse_json_strict_no_duplicate_keys(idx_path.read_bytes())
             if not isinstance(idx_obj, dict):
                 raise CatalogDomainError("SEMANTIC_REFERENCE_BROKEN", "manual_index must be a JSON object")
-            for doc_entry in idx_obj.get("documents", []):
+            doc_entries = (
+                idx_obj["documents"]
+                if isinstance(idx_obj.get("documents"), list)
+                else ([idx_obj] if idx_obj.get("document_id") else [])
+            )
+            has_manual_pdfs = "manual_pdf" in artifacts_by_role
+            for doc_entry in doc_entries:
                 did = str(doc_entry.get("document_id") or "")
-                if did and did not in doc_page_counts:
-                    raise CatalogDomainError("SEMANTIC_REFERENCE_BROKEN", f"manual_index references unknown document_id '{did}'")
+                if not did:
+                    continue
+                if has_manual_pdfs:
+                    if did not in doc_page_counts:
+                        raise CatalogDomainError("SEMANTIC_REFERENCE_BROKEN", f"manual_index references unknown document_id '{did}'")
+                else:
+                    # PR #4 reference_only OEM packages strip manual_pdf and derive verified page counts from document_index
+                    pc = int(doc_entry.get("page_count") or len(doc_entry.get("pages") or []))
+                    if pc < 1:
+                        raise CatalogDomainError("SEMANTIC_REFERENCE_BROKEN", f"document_index '{did}' has invalid page_count")
+                    doc_page_counts[did] = pc
 
         glb_meta: dict[str, Any] | None = None
         valid_part_ids: set[str] = set()
@@ -836,9 +880,9 @@ class FieldScanPackageStore:
             if not isinstance(parts_obj, dict):
                 raise CatalogDomainError("SEMANTIC_REFERENCE_BROKEN", "twin.parts.json must be an object")
 
-            units = str(parts_obj.get("units") or "meters")
-            if units not in ("meters", "millimeters"):
-                raise CatalogDomainError("SEMANTIC_REFERENCE_BROKEN", f"Unsupported twin units '{units}'")
+            raw_units = str(parts_obj.get("units") or parts_obj.get("unit") or "meters").strip().lower()
+            if raw_units not in ("m", "meter", "meters", "mm", "millimeter", "millimeters"):
+                raise CatalogDomainError("SEMANTIC_REFERENCE_BROKEN", f"Unsupported twin units '{raw_units}'")
 
             parts_list = parts_obj.get("parts")
             if not isinstance(parts_list, list) or not parts_list:
@@ -846,9 +890,9 @@ class FieldScanPackageStore:
 
             for p in parts_list:
                 pid = str(p.get("part_id") or "").strip()
-                nname = str(p.get("node_name") or "").strip()
+                nname = str(p.get("node_name") or p.get("node_id") or "").strip()
                 if not pid or not nname:
-                    raise CatalogDomainError("SEMANTIC_REFERENCE_BROKEN", "Every part requires part_id and node_name")
+                    raise CatalogDomainError("SEMANTIC_REFERENCE_BROKEN", "Every part requires part_id and node_name/node_id")
                 if pid in valid_part_ids:
                     raise CatalogDomainError("SEMANTIC_REFERENCE_BROKEN", f"Duplicate part_id '{pid}' in twin.parts.json")
                 if nname not in glb_nodes:
@@ -878,7 +922,7 @@ class FieldScanPackageStore:
                 if cit:
                     self._validate_citation_id_format(str(cit), doc_page_counts)
 
-        if manifest["capabilities"].get("procedures") is True:
+        if manifest["capabilities"].get("procedures") is True and "procedures" in artifacts_by_role:
             proc_path = stage_pkg_dir / artifacts_by_role["procedures"][0]["path"]
             proc_obj = _parse_json_strict_no_duplicate_keys(proc_path.read_bytes())
             if not isinstance(proc_obj, dict) or not isinstance(proc_obj.get("steps"), list):
@@ -1163,7 +1207,7 @@ class FieldScanPackageStore:
                         "product_id": str(r["product_id"]),
                         "variant_id": str(r["variant_id"]),
                         "title": manifest.get("title") or f"{r['product_id']} ({r['variant_id']})",
-                        "manufacturer": manifest.get("manufacturer", "TZONE"),
+                        "manufacturer": manifest.get("manufacturer") or manifest.get("issuer") or "UNKNOWN",
                         "model": manifest.get("model", str(r["product_id"])),
                         "connector_type": manifest.get("connector_type"),
                         "publication_seq": int(r["publication_seq"]),
@@ -1397,10 +1441,16 @@ class FieldScanPackageStore:
             if a["role"] == "manual_pdf"
         }
         img_arts = {a["path"]: a for a in arts if a["role"] == "manual_page_image"}
+        md_arts = {a["path"]: a for a in arts if a["role"] == "manual_markdown"}
 
         if idx_art is not None:
             idx_json = json.loads((pkg_dir / idx_art["path"]).read_text(encoding="utf-8"))
-            for d in idx_json.get("documents", []):
+            doc_entries = (
+                idx_json["documents"]
+                if isinstance(idx_json.get("documents"), list)
+                else ([idx_json] if idx_json.get("document_id") else [])
+            )
+            for d in doc_entries:
                 did = str(d.get("document_id") or "")
                 pdf_a = pdf_arts.get(did)
                 pdf_url = pdf_a["local_url"] if pdf_a else None
@@ -1409,14 +1459,24 @@ class FieldScanPackageStore:
                     pnum = int(pg["page"])
                     img_rel = pg.get("image_path")
                     img_url = img_arts[img_rel]["local_url"] if (img_rel and img_rel in img_arts) else None
+                    md_rel = pg.get("markdown_path")
+                    md_url = md_arts[md_rel]["local_url"] if (md_rel and md_rel in md_arts) else None
+                    cit_raw = str(pg.get("citation_id") or "")
+                    sec_from_cit = cit_raw.split(":")[2] if len(cit_raw.split(":")) >= 3 else None
+                    sec_id = sanitize_reference_text(str(pg.get("section_id") or sec_from_cit or f"{pnum}.1"))
+                    excerpt_raw = pg.get("verified_excerpt")
+                    if excerpt_raw is None:
+                        excerpt_raw = pg.get("excerpt") or ""
                     pages_out.append(
                         {
                             "page": pnum,
                             "printed_page": sanitize_reference_text(str(pg.get("printed_page") or pnum)),
                             "title": sanitize_reference_text(str(pg.get("title") or f"Page {pnum}")),
-                            "section_id": sanitize_reference_text(str(pg.get("section_id") or f"{pnum}.1")),
-                            "verified_excerpt": sanitize_reference_text(str(pg.get("verified_excerpt") or "")),
+                            "section_id": sec_id,
+                            "citation_id": cit_raw or f"{did}:p{pnum}:{sec_id}",
+                            "verified_excerpt": sanitize_reference_text(str(excerpt_raw)),
                             "image_url": img_url,
+                            "markdown_url": md_url,
                             "pdf_fallback_url": f"{pdf_url}#page={pnum}" if pdf_url else None,
                             "keywords": [str(k).lower() for k in pg.get("keywords", [])],
                         }
@@ -1425,10 +1485,10 @@ class FieldScanPackageStore:
                     {
                         "document_id": did,
                         "title": sanitize_reference_text(str(d.get("title") or did)),
-                        "revision": sanitize_reference_text(str(d.get("revision") or "rev-1")),
+                        "revision": sanitize_reference_text(str(d.get("revision") or d.get("revision_label") or "rev-1")),
                         "page_count": len(pages_out) or int(d.get("page_count") or 1),
                         "pdf_url": pdf_url,
-                        "pdf_sha256": pdf_a["sha256"] if pdf_a else None,
+                        "pdf_sha256": pdf_a["sha256"] if pdf_a else d.get("pdf_sha256"),
                         "pages": pages_out,
                     }
                 )
@@ -1469,18 +1529,41 @@ class FieldScanPackageStore:
             actions_a = next(a for a in arts if a["role"] == "twin_actions")
             parts_json = json.loads((pkg_dir / parts_a["path"]).read_text(encoding="utf-8"))
             actions_json = json.loads((pkg_dir / actions_a["path"]).read_text(encoding="utf-8"))
-            # Sanitize part labels/summaries before sending to HMI (`M4-DOC-03`)
+            raw_units = str(parts_json.get("units") or parts_json.get("unit") or "meters").strip().lower()
+            is_meters = raw_units in ("m", "meter", "meters")
+            scale_mm = 1000.0 if is_meters else 1.0
+            # Sanitize part labels/summaries and normalize PR #4 (`node_id`, `aliases`) <-> PR #5 (`node_name`, `label`)
+            norm_parts: list[dict[str, Any]] = []
             for p in parts_json.get("parts", []):
-                p["label"] = sanitize_reference_text(str(p.get("label") or p.get("part_id") or ""))
-                p["summary"] = sanitize_reference_text(str(p.get("summary") or ""))
+                p_copy = dict(p)
+                aliases = [sanitize_reference_text(str(al)) for al in (p.get("aliases") or []) if str(al).strip()]
+                node_nm = str(p.get("node_name") or p.get("node_id") or "").strip()
+                p_copy["node_name"] = node_nm
+                p_copy["node_id"] = node_nm
+                p_copy["aliases"] = aliases
+                fallback_lbl = aliases[0] if aliases else str(p.get("part_id") or "")
+                p_copy["label"] = sanitize_reference_text(str(p.get("label") or fallback_lbl))
+                fallback_sum = f"Verified CAD component ({', '.join(aliases[:3])})" if aliases else ""
+                p_copy["summary"] = sanitize_reference_text(str(p.get("summary") or fallback_sum))
+                norm_parts.append(p_copy)
+
+            norm_views: list[dict[str, Any]] = []
+            for v in parts_json.get("views", []):
+                v_copy = dict(v)
+                if "camera_pos_mm" not in v_copy and isinstance(v_copy.get("camera_offset_m"), list) and len(v_copy["camera_offset_m"]) == 3:
+                    v_copy["camera_pos_mm"] = [round(float(c) * scale_mm, 3) for c in v_copy["camera_offset_m"]]
+                if "target_mm" not in v_copy and isinstance(v_copy.get("target_m"), list) and len(v_copy["target_m"]) == 3:
+                    v_copy["target_mm"] = [round(float(c) * scale_mm, 3) for c in v_copy["target_m"]]
+                norm_views.append(v_copy)
+
             twin_desc = {
                 "glb_url": glb_a["local_url"],
                 "glb_sha256": glb_a["sha256"],
-                "units": parts_json.get("units", "meters"),
-                "scale_to_studio_mm": 1000.0 if parts_json.get("units", "meters") == "meters" else 1.0,
+                "units": "meters" if is_meters else "millimeters",
+                "scale_to_studio_mm": scale_mm,
                 "reference_dimensions_mm": parts_json.get("reference_dimensions_mm", {}),
-                "parts": parts_json.get("parts", []),
-                "views": parts_json.get("views", []),
+                "parts": norm_parts,
+                "views": norm_views,
                 "actions": actions_json.get("actions", []),
             }
 

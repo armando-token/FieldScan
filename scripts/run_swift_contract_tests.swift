@@ -555,9 +555,21 @@ func runSwiftContractSuite() throws {
         MockCloudURLProtocol.blobs[s] = try Data(contentsOf: fullPkgDir.appendingPathComponent(p))
     }
     let cloudStore = FieldScanPackageStore(catalogRoot: tmpDir.appendingPathComponent("cloud_store", isDirectory: true), bundleRoot: repoRoot)
+    let signerReg = try cloudStore.registerTrustedSigner(keyId: "prod-cloud-test", publicKeyBase64: FieldScanCatalogContract.demo1PublicKeyBase64)
+    check(((signerReg["trusted_key_ids"] as? [String]) ?? []).contains("prod-cloud-test"), "PR4-INTEROP: Swift registerTrustedSigner must register 32-byte Ed25519 key")
     let cloudClient = FieldScanCatalogClient(store: cloudStore, syncEnabled: false, customProtocolClasses: [MockCloudURLProtocol.self])
     check((cloudClient.getSyncTelemetry()["https_requests_emitted"] as? Int) == 0, "M4-BASE-01: Swift client emits 0 HTTPS requests when syncEnabled=false")
-    _ = try cloudClient.configureEndpoint(baseURL: "https://catalog.fieldscan.internal", syncEnabled: true, authToken: "swift-tok", persistInKeychain: false)
+    _ = try cloudClient.configureEndpoint(
+        baseURL: "https://catalog.fieldscan.internal",
+        syncEnabled: true,
+        authToken: "swift-tok",
+        boatPortAuthToken: "swift-boat-gate",
+        persistInKeychain: false
+    )
+    let swiftTel = cloudClient.getSyncTelemetry()
+    check((swiftTel["has_boat_gate_cookie"] as? Bool) == true, "PR4-INTEROP: Swift client tracks Boat private gate cookie without exposing secret")
+    let swiftTelJSON = String(data: try JSONSerialization.data(withJSONObject: swiftTel), encoding: .utf8) ?? ""
+    check(!swiftTelJSON.contains("swift-boat-gate") && !swiftTelJSON.contains("swift-tok"), "M4-WAN-06: Swift telemetry must never leak Bearer or Boat cookie secrets")
     let cj1 = try cloudClient.resolveCatalog(manufacturer: "TZONE", model: "THT-02", variant: "m12")
     let cj2 = try cloudClient.resolveCatalog(manufacturer: "tzone", model: "tht-02", variant: "M12")
     check((cj2["reused_existing_job"] as? Bool) == true, "M4-WAN-02: Swift client deduplicates in-flight job")

@@ -326,15 +326,71 @@ public enum FieldScanTwinController {
                 }
             }
 
-            // 2. Match explicit `twin.actions.json` triggers or part IDs / labels
+            // 2. Match explicit `twin.actions.json` triggers OR linked part aliases/labels (`PR #4` & `PR #5` parity)
+            let resetPhrasesV1 = ["reset view", "reset 3d", "close housing", "close the housing", "close the sensor", "reassemble", "default overview", "full view"]
+            if resetPhrasesV1.contains(where: { q.contains($0) }),
+               let resetAct = actions.first(where: { ($0["kind"] as? String) == "reset_view" }) {
+                let vid = (resetAct["view_id"] as? String) ?? "default_overview"
+                let v1: [String: Any] = [
+                    "schema": "twin_action_v1",
+                    "kind": "reset_view",
+                    "part_id": resetAct["part_id"] ?? NSNull(),
+                    "view_id": vid,
+                    "citation_id": resetAct["citation_id"] ?? NSNull(),
+                    "simulated_state": NSNull(),
+                    "callout_title": "ASSEMBLED OVERVIEW",
+                    "callout_body": "Resetting verified 3D Digital Twin to assembled overview.",
+                    "turn_id": tid,
+                    "scene_generation": sceneGeneration,
+                    "manifest_sha256": manifestSha,
+                    "requires_scene_ready": true,
+                ]
+                let legacy: [String: Any] = [
+                    "action": "reset_view",
+                    "part_id": resetAct["part_id"] ?? NSNull(),
+                    "view_id": vid,
+                    "explode_pcb": false,
+                    "callout_title": "ASSEMBLED OVERVIEW",
+                    "callout_body": "Resetting verified 3D Digital Twin to assembled overview.",
+                ]
+                return [
+                    "ambiguous": false,
+                    "clarification_required": false,
+                    "clarification_prompt": NSNull(),
+                    "candidate_part_ids": [],
+                    "twin_action": legacy,
+                    "twin_action_v1": v1,
+                    "turn_id": tid,
+                    "scene_generation": sceneGeneration,
+                    "manifest_sha256": manifestSha,
+                ]
+            }
+
             for act in actions {
-                let triggers = ((act["triggers"] as? [String]) ?? []).map { $0.lowercased() }
+                let kind = (act["kind"] as? String) ?? "focus_part"
+                let triggers = ((act["triggers"] as? [String]) ?? []).map { $0.lowercased() }.filter { !$0.isEmpty }
+                if kind == "reset_view" && triggers.isEmpty {
+                    continue
+                }
                 let pid = act["part_id"] as? String
-                if triggers.contains(where: { q.contains($0) }) || (pid != nil && q.contains(pid!.lowercased())) {
-                    let kind = (act["kind"] as? String) ?? "focus_part"
+                let matchedPart = parts.first(where: { ($0["part_id"] as? String) == pid })
+                var partTerms: [String] = []
+                if let mp = matchedPart {
+                    for al in ((mp["aliases"] as? [String]) ?? []) {
+                        let clean = al.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        if !clean.isEmpty { partTerms.append(clean) }
+                    }
+                    for key in ["label", "legacy_zone_id"] {
+                        if let v = (mp[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !v.isEmpty {
+                            partTerms.append(v)
+                        }
+                    }
+                }
+                if triggers.contains(where: { q.contains($0) })
+                    || (pid != nil && q.contains(pid!.lowercased()))
+                    || partTerms.contains(where: { q.contains($0) }) {
                     let vid = (act["view_id"] as? String) ?? "isometric_home"
                     let cit = act["citation_id"] as? String
-                    let matchedPart = parts.first(where: { ($0["part_id"] as? String) == pid })
                     let lbl = (matchedPart?["label"] as? String) ?? (pid ?? vid)
                     let sum = (matchedPart?["summary"] as? String) ?? "Verified 3D catalog twin inspection view."
                     let v1: [String: Any] = [
@@ -373,11 +429,18 @@ public enum FieldScanTwinController {
                 }
             }
 
-            // 3. Direct part_id / label match in `twin.parts.json`
+            // 3. Direct part_id / label / aliases match in `twin.parts.json`
             for p in parts {
                 let pid = (p["part_id"] as? String) ?? ""
                 let lbl = (p["label"] as? String) ?? pid
-                if !pid.isEmpty && (q.contains(pid.lowercased()) || q.contains(lbl.lowercased())) {
+                let aliases = ((p["aliases"] as? [String]) ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty }
+                let legacyZ = ((p["legacy_zone_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if !pid.isEmpty && (
+                    q.contains(pid.lowercased())
+                    || q.contains(lbl.lowercased())
+                    || (!legacyZ.isEmpty && q.contains(legacyZ))
+                    || aliases.contains(where: { q.contains($0) })
+                ) {
                     let vid = pid.contains("dip") ? "open_dip" : (pid.contains("rear") ? "rear_connector" : (pid.contains("probe") ? "probe_tip" : "isometric_home"))
                     let sum = (p["summary"] as? String) ?? ""
                     let v1: [String: Any] = [

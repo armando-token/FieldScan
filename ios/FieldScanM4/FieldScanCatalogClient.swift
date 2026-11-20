@@ -25,7 +25,9 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
 
     private let keychainService = "com.fieldscan.tht02.ipadm4.catalog"
     private let keychainAccount = "cloud_access_token"
+    private let keychainBoatGateAccount = "boat_port_auth_token"
     private var inMemoryTokenFallback: String?
+    private var inMemoryBoatGateFallback: String?
 
     private var activeJobsByKey: [String: [String: Any]] = [:]
     private var jobsById: [String: [String: Any]] = [:]
@@ -102,6 +104,7 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         baseURL: String,
         syncEnabled: Bool? = nil,
         authToken: String? = nil,
+        boatPortAuthToken: String? = nil,
         persistInKeychain: Bool = false
     ) throws -> [String: Any] {
         lock.lock()
@@ -130,7 +133,15 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
             let clean = tok.trimmingCharacters(in: .whitespacesAndNewlines)
             inMemoryTokenFallback = clean.isEmpty ? nil : clean
             if persistInKeychain {
-                saveTokenToKeychain(clean.isEmpty ? nil : clean)
+                saveSecretToKeychain(clean.isEmpty ? nil : clean, account: keychainAccount)
+            }
+        }
+
+        if let boatTok = boatPortAuthToken {
+            let clean = boatTok.trimmingCharacters(in: .whitespacesAndNewlines)
+            inMemoryBoatGateFallback = clean.isEmpty ? nil : clean
+            if persistInKeychain {
+                saveSecretToKeychain(clean.isEmpty ? nil : clean, account: keychainBoatGateAccount)
             }
         }
 
@@ -154,11 +165,11 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         return try configureEndpoint(baseURL: baseURLString, syncEnabled: enabled)
     }
 
-    private func saveTokenToKeychain(_ token: String?) {
+    private func saveSecretToKeychain(_ token: String?, account: String) {
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: keychainAccount,
+            kSecAttrAccount as String: account,
         ]
         SecItemDelete(baseQuery as CFDictionary)
         guard let t = token, !t.isEmpty, let data = t.data(using: .utf8) else { return }
@@ -168,14 +179,11 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         SecItemAdd(addQuery as CFDictionary, nil)
     }
 
-    private func resolveAuthTokenUnlocked() -> String? {
-        if let mem = inMemoryTokenFallback, !mem.isEmpty {
-            return mem
-        }
+    private func readSecretFromKeychain(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: keychainAccount,
+            kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
@@ -183,8 +191,29 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
            let data = item as? Data,
            let str = String(data: data, encoding: .utf8), !str.isEmpty {
-            inMemoryTokenFallback = str
             return str
+        }
+        return nil
+    }
+
+    private func resolveAuthTokenUnlocked() -> String? {
+        if let mem = inMemoryTokenFallback, !mem.isEmpty {
+            return mem
+        }
+        if let kc = readSecretFromKeychain(account: keychainAccount) {
+            inMemoryTokenFallback = kc
+            return kc
+        }
+        return nil
+    }
+
+    private func resolveBoatGateTokenUnlocked() -> String? {
+        if let mem = inMemoryBoatGateFallback, !mem.isEmpty {
+            return mem
+        }
+        if let kc = readSecretFromKeychain(account: keychainBoatGateAccount) {
+            inMemoryBoatGateFallback = kc
+            return kc
         }
         return nil
     }
@@ -201,6 +230,8 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
             "egress_policy": syncEnabledFlag ? "catalog_https_authorized" : "strict_local_only",
             "configured_endpoint": baseURLString.isEmpty ? NSNull() : baseURLString,
             "has_credentials": resolveAuthTokenUnlocked() != nil,
+            "has_boat_gate_cookie": resolveBoatGateTokenUnlocked() != nil,
+            "trusted_signer_key_ids": Array(store.trustedKeys.keys).sorted(),
             "https_requests_emitted": httpsRequestsEmitted,
             "last_contact_utc": lastContactUTC ?? NSNull(),
             "last_health_status": lastHealthStatus,
@@ -226,7 +257,7 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         lock.unlock()
     }
 
-    private func ensureSyncAllowedUnlocked() throws -> (baseURL: String, host: String, scheme: String, epoch: Int, token: String?) {
+    private func ensureSyncAllowedUnlocked() throws -> (baseURL: String, host: String, scheme: String, epoch: Int, token: String?, boatCookie: String?) {
         guard syncEnabledFlag else {
             throw FieldScanCatalogError(
                 code: "SYNC_DISABLED",
@@ -237,7 +268,7 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         guard !baseURLString.isEmpty && !allowedHost.isEmpty else {
             throw FieldScanCatalogError(code: "CLOUD_ENDPOINT_UNCONFIGURED", message: "Cloud Catalog HTTPS URL is not configured.")
         }
-        return (baseURLString, allowedHost, allowedScheme, cancelEpoch, resolveAuthTokenUnlocked())
+        return (baseURLString, allowedHost, allowedScheme, cancelEpoch, resolveAuthTokenUnlocked(), resolveBoatGateTokenUnlocked())
     }
 
     private func performDataRequest(
@@ -247,7 +278,7 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         extraHeaders: [String: String] = [:]
     ) throws -> (statusCode: Int, headers: [AnyHashable: Any], body: Data) {
         lock.lock()
-        let (base, expHost, expScheme, startEpoch, token) = try ensureSyncAllowedUnlocked()
+        let (base, expHost, expScheme, startEpoch, token, boatCookie) = try ensureSyncAllowedUnlocked()
         httpsRequestsEmitted += 1
         lock.unlock()
 
@@ -265,6 +296,9 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let tok = token {
             req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
+        }
+        if let bc = boatCookie {
+            req.setValue("_port_auth=\(bc)", forHTTPHeaderField: "Cookie")
         }
         for (k, v) in extraHeaders {
             req.setValue(v, forHTTPHeaderField: k)
@@ -380,6 +414,21 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         }
     }
 
+    private static func hoistIdentityAliases(_ json: inout [String: Any]) {
+        let ident = (json["identity"] as? [String: Any]) ?? [:]
+        let cached = (json["cached_publication"] as? [String: Any]) ?? [:]
+        if json["product_id"] == nil || json["product_id"] is NSNull {
+            if let pid = (ident["product_id"] as? String) ?? (cached["product_id"] as? String) {
+                json["product_id"] = pid
+            }
+        }
+        if json["variant_id"] == nil || json["variant_id"] is NSNull {
+            if let vid = (ident["variant_id"] as? String) ?? (cached["variant_id"] as? String) {
+                json["variant_id"] = vid
+            }
+        }
+    }
+
     public func resolveCatalog(
         manufacturer: String?,
         model: String,
@@ -387,7 +436,7 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         hardwareRevision: String? = nil
     ) throws -> [String: Any] {
         lock.lock()
-        let (base, _, _, _, _) = try ensureSyncAllowedUnlocked()
+        let (base, _, _, _, _, _) = try ensureSyncAllowedUnlocked()
         uiAttemptSeq += 1
         let attemptId = uiAttemptSeq
         let rawKey = "\((manufacturer ?? "").lowercased())|\(model.lowercased())|\((variant ?? "").lowercased())|\((hardwareRevision ?? "").lowercased())|\(base.lowercased())"
@@ -412,6 +461,7 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         guard var json = (try? JSONSerialization.jsonObject(with: res.body)) as? [String: Any] else {
             throw FieldScanCatalogError(code: "INVALID_ENVELOPE", message: "Invalid JSON from /v1/catalog/resolve")
         }
+        Self.hoistIdentityAliases(&json)
         json["ui_attempt_id"] = attemptId
         json["reused_existing_job"] = false
 
@@ -433,6 +483,7 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         guard var json = (try? JSONSerialization.jsonObject(with: res.body)) as? [String: Any] else {
             throw FieldScanCatalogError(code: "INVALID_ENVELOPE", message: "Invalid JSON from /v1/jobs/\(jobId)")
         }
+        Self.hoistIdentityAliases(&json)
         json["job_id"] = jobId
         lock.lock()
         if let prev = jobsById[jobId], let nk = prev["norm_key"] as? String {
@@ -450,7 +501,7 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         channel: String = "default"
     ) throws -> [String: Any] {
         lock.lock()
-        let (base, expHost, expScheme, startEpoch, token) = try ensureSyncAllowedUnlocked()
+        let (base, expHost, expScheme, startEpoch, token, boatCookie) = try ensureSyncAllowedUnlocked()
         let pvKey = "\(productId)/\(variantId)@\(base)"
         var hdrs: [String: String] = [:]
         var cachedSha: String?
@@ -510,6 +561,9 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
             req.setValue(corr, forHTTPHeaderField: "X-FieldScan-Correlation-Id")
             if let tok = token {
                 req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
+            }
+            if let bc = boatCookie {
+                req.setValue("_port_auth=\(bc)", forHTTPHeaderField: "Cookie")
             }
 
             let t0 = ProcessInfo.processInfo.systemUptime

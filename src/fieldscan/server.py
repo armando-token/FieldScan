@@ -1457,11 +1457,22 @@ async def api_catalog_sync_config(payload: dict[str, Any]) -> dict[str, Any]:
     base_url = str(payload.get("base_url") or "")
     sync_en = payload.get("sync_enabled")
     auth_tok = payload.get("auth_token")
+    boat_tok = payload.get("boat_port_auth_token")
+    signers = payload.get("trusted_signers")
+    if isinstance(signers, list):
+        for s in signers:
+            if isinstance(s, dict) and s.get("key_id") and s.get("public_key_b64"):
+                await asyncio.to_thread(
+                    _CATALOG_STORE.register_trusted_signer,
+                    str(s["key_id"]),
+                    str(s["public_key_b64"]),
+                )
     tel = await asyncio.to_thread(
         _CATALOG_CLIENT.configure_endpoint,
         base_url,
         sync_enabled=bool(sync_en) if sync_en is not None else None,
         auth_token=str(auth_tok) if auth_tok is not None else None,
+        boat_port_auth_token=str(boat_tok) if boat_tok is not None else None,
     )
     return {"ok": True, "sync": tel}
 

@@ -44,7 +44,7 @@ Every package is distributed with a detached-payload JSON envelope (`<= 512 KB`)
 - **Labeled Reference Fixture Public Key (`key_id = "demo-1"`, `issuer = "fieldscan-demo"`):**
   - Base64: `dY3z2CiJZsOxQuwsAHq4jGNIfYDzRWQ4U1yAV3IMsb0=`
   - Hex: `758df3d8288966c3b142ec2c007ab88c63487d80f3456438535c8057720cb1bd`
-  - Scope: Labeled test and reference fixture verification only; production deployments provision a separate production `key_id` in the trusted key ring without embedding private keys in the repository.
+  - Scope: Labeled test and reference fixture verification only; production deployments register their production `key_id` + 32-byte Base64 public key at runtime via `POST /api/catalog/sync_config` (`trusted_signers: [{key_id, public_key_b64}]`) without embedding private keys in the repository.
 
 ### 3.2 Strict Payload Validation & Budgets (`M4-PKG-01..09`)
 
@@ -53,11 +53,13 @@ Before any file enters `packages/<manifest-sha256>/`, both Swift and Python stor
 - Envelope `key_id` matches inner `manifest.key_id` and resolves in `trusted_keys` (`UNTRUSTED_KEY_ID`, `KEY_ID_MISMATCH`).
 - `schema_version == 1`, `interaction_version == 1`, and `minimum_app_build <= 210` (`UNSUPPORTED_SCHEMA_VERSION`, `MINIMUM_BUILD_NOT_MET`).
 - Normalized relative paths only: rejects `/`, `\`, `:`, `.`, `..`, symlinks, and executable/script extensions (`.sh`, `.py`, `.js`, `.html`, `.dylib`, `.app`, etc. -> `EXECUTABLE_OR_UNSAFE_PATH`).
-- Hard resource budgets: `<= 64` artifacts per package, `<= 50 MB` per single artifact, `<= 120 MB` total uncompressed package bytes (`SIZE_BUDGET_EXCEEDED`, `ARCHIVE_LIMIT_EXCEEDED`), plus pre-flight free disk space check (`DISK_FULL`).
+- Hard resource budgets: `<= 256` artifacts per package (accommodating per-page `manual_markdown` up to 200-page Cloud manuals), `<= 50 MB` per single artifact, `<= 120 MB` total uncompressed package bytes (`SIZE_BUDGET_EXCEEDED`, `ARCHIVE_LIMIT_EXCEEDED`), plus pre-flight free disk space check (`DISK_FULL`).
 - Capability dependency & semantic validation (`MISSING_CAPABILITY_DEPENDENCY`, `SEMANTIC_REFERENCE_BROKEN`):
-  - `documentation == true`: requires readable PDF(s) (`manual_pdf`) and validates every `document_id` in `manual_index`.
-  - `interactive_twin == true`: requires `twin_glb`, `twin_parts`, and `twin_actions`; inspects binary glTF 2.0 header, blocks external buffer/image URIs, verifies unique `part_id`s, confirms every `node_name` exists in the `.glb` scene graph, and checks every `citation_id` (`<doc_id>:p<page>[:<section>]`) against real PDF page counts.
+  - `documentation == true`: accepts `manual_pdf` or Cloud `reference_only` (`document_index`/`manual_index` + `manual_markdown`), supporting both multi-document `documents[]` and Cloud single-document root `docs/index.json` (`revision_label`, `excerpt`, `markdown_path`).
+  - `interactive_twin == true`: requires `twin_glb`, `twin_parts`, and `twin_actions`; inspects binary glTF 2.0 header, blocks external buffer/image URIs, verifies unique `part_id`s, accepts both `node_name`/`node_id`, `units`/`unit` (`m`/`meters`/`mm`/`millimeters`), and meter-space view offsets (`camera_offset_m`, `target_m`, `exploded_offsets_m`), confirms every node exists in the `.glb` scene graph, and checks every `citation_id` (`<doc_id>:p<page>[:<section>]`) against real page counts.
+  - `procedures == true`: satisfied by explicit `procedures` artifact or Cloud `twin_actions` with verified page citations; `withdrawn_procedures` and `revoked_instructions` are both recorded into `revoked_instructions` SQLite table.
   - Partial packages (`interactive_twin == false`) declare explicit `reason_codes` (e.g. `INTERNAL_GEOMETRY_UNCONFIRMED`) and render cleanly in `docs_only_no_3d` mode.
+- Optional private deployment gate support: `POST /api/catalog/sync_config` accepts an optional `boat_port_auth_token` (stored in Keychain/native memory only, never echoed to JS or logs) transmitted as `Cookie: _port_auth=<token>` alongside `Authorization: Bearer <token>`.
 - Anti-rollback ordering (`M4-PKG-06`): `publication_seq <= active_seq` for `(issuer, channel, product_id, variant_id)` is rejected with `409 ROLLBACK_BLOCKED`. Legitimate content reverts must be published with a strictly higher `publication_seq`.
 
 ---

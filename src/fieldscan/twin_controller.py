@@ -425,14 +425,72 @@ def prepare_visual_action(
                         "manifest_sha256": manifest_sha,
                     }
 
-        # 2. Match explicit `twin.actions.json` triggers
+        # 2. Match explicit `twin.actions.json` triggers OR linked part aliases/labels (`PR #4` & `PR #5` parity)
+        wants_reset = any(
+            p in q
+            for p in ("reset view", "reset 3d", "close housing", "close the housing", "close the sensor", "reassemble", "default overview", "full view")
+        )
+        if wants_reset:
+            reset_act = next((a for a in actions if str(a.get("kind") or "") == "reset_view"), None)
+            if reset_act is not None:
+                vid = str(reset_act.get("view_id") or "default_overview")
+                v1 = {
+                    "schema": "twin_action_v1",
+                    "kind": "reset_view",
+                    "part_id": reset_act.get("part_id"),
+                    "view_id": vid,
+                    "citation_id": reset_act.get("citation_id"),
+                    "simulated_state": None,
+                    "callout_title": "ASSEMBLED OVERVIEW",
+                    "callout_body": "Resetting verified 3D Digital Twin to assembled overview.",
+                    "turn_id": tid,
+                    "scene_generation": int(scene_generation),
+                    "manifest_sha256": manifest_sha,
+                    "requires_scene_ready": True,
+                }
+                legacy = {
+                    "action": "reset_view",
+                    "part_id": reset_act.get("part_id"),
+                    "view_id": vid,
+                    "explode_pcb": False,
+                    "callout_title": "ASSEMBLED OVERVIEW",
+                    "callout_body": "Resetting verified 3D Digital Twin to assembled overview.",
+                }
+                return {
+                    "ambiguous": False,
+                    "clarification_required": False,
+                    "clarification_prompt": None,
+                    "candidate_part_ids": [],
+                    "twin_action": legacy,
+                    "twin_action_v1": v1,
+                    "turn_id": tid,
+                    "scene_generation": int(scene_generation),
+                    "manifest_sha256": manifest_sha,
+                }
+
         for act in actions:
-            triggers = [str(t).lower() for t in act.get("triggers", [])]
+            kind = str(act.get("kind") or "focus_part")
+            if kind == "reset_view" and not act.get("triggers"):
+                continue
+            triggers = [str(t).lower() for t in act.get("triggers", []) if str(t).strip()]
             pid = act.get("part_id")
-            if any(t in q for t in triggers) or (pid and str(pid).lower() in q):
-                kind = str(act.get("kind") or "focus_part")
+            matched_part = next((p for p in parts if p.get("part_id") == pid), None)
+            part_terms: list[str] = []
+            if matched_part:
+                for al in matched_part.get("aliases") or []:
+                    s_al = str(al).strip().lower()
+                    if s_al:
+                        part_terms.append(s_al)
+                for extra_k in ("label", "legacy_zone_id"):
+                    v_ex = str(matched_part.get(extra_k) or "").strip().lower()
+                    if v_ex:
+                        part_terms.append(v_ex)
+            if (
+                any(t in q for t in triggers)
+                or (pid and str(pid).lower() in q)
+                or any(term in q for term in part_terms)
+            ):
                 vid = str(act.get("view_id") or "isometric_home")
-                matched_part = next((p for p in parts if p.get("part_id") == pid), None)
                 lbl = str((matched_part or {}).get("label") or pid or vid)
                 summary = str((matched_part or {}).get("summary") or "Verified 3D catalog twin inspection view.")
                 v1 = {
@@ -469,11 +527,18 @@ def prepare_visual_action(
                     "manifest_sha256": manifest_sha,
                 }
 
-        # 3. Direct part_id / label match in `twin.parts.json`
+        # 3. Direct part_id / label / aliases match in `twin.parts.json`
         for p in parts:
             pid = str(p.get("part_id") or "")
             lbl = str(p.get("label") or pid)
-            if pid and (pid.lower() in q or lbl.lower() in q):
+            aliases = [str(al).strip().lower() for al in (p.get("aliases") or []) if str(al).strip()]
+            legacy_z = str(p.get("legacy_zone_id") or "").strip().lower()
+            if pid and (
+                pid.lower() in q
+                or lbl.lower() in q
+                or (legacy_z and legacy_z in q)
+                or any(al in q for al in aliases)
+            ):
                 vid = (
                     "open_dip"
                     if "dip" in pid

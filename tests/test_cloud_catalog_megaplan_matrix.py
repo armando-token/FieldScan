@@ -730,10 +730,10 @@ def test_m4_pkg_09_archive_entry_limit_path_traversal_symlink_and_exec_rejected(
         store.import_package_from_path(z_sym)
     assert e_sym.value.code == "EXECUTABLE_OR_UNSAFE_PATH"
 
-    # 9d. Excessive archive member count (> 72 entries)
+    # 9d. Excessive archive member count (> 264 entries)
     z_many = tmp_path / "too_many.zip"
     with zipfile.ZipFile(z_many, "w") as zf:
-        for i in range(80):
+        for i in range(275):
             zf.writestr(f"docs/f_{i}.png", b"x")
     with pytest.raises(CatalogDomainError) as e_many:
         store.import_package_from_path(z_many)
@@ -1348,3 +1348,254 @@ def test_m4_end_01_full_end_to_end_https_download_offline_relaunch_voice_and_exp
         assert exported_json["catalog_context"]["manifest_sha256"] == msha
         assert exported_json["latest_sample_evaluation"]["fresh"] is False
         assert "fresh_physical_modbus_sample" in exported_json["pending_evidence"]
+
+
+def test_m4_cloud_interop_01_pr4_wire_schemas_boat_gate_and_reference_only(isolated_server_catalog) -> None:
+    """Verify 1:1 wire compatibility with PR #4 (`fieldscan_cloud`) manifests, docs/index.json, twin.parts.json, Boat gate, and reference_only OEM docs."""
+    from fieldscan.catalog_store import (
+        build_reference_sensor_glb,
+        ed25519_public_key_from_seed,
+    )
+
+    store: FieldScanPackageStore = isolated_server_catalog["store"]
+    client: FieldScanCatalogClient = isolated_server_catalog["client"]
+    tmp: Path = isolated_server_catalog["tmp_path"]
+
+    # 1. Register a fresh runtime Cloud production Ed25519 key pair (distinct from `demo-1`)
+    cloud_seed = hashlib.sha256(b"fieldscan-cloud-pr4-interop-signer-seed-v1").digest()
+    cloud_pub_b64 = base64.b64encode(ed25519_public_key_from_seed(cloud_seed)).decode("ascii")
+    reg = store.register_trusted_signer("prod-cloud-2026", cloud_pub_b64)
+    assert "prod-cloud-2026" in reg["trusted_key_ids"]
+
+    # 2. Construct exact PR #4-format artifacts:
+    #    - single-doc `docs/index.json` (`role="document_index"`, `revision_label`, `excerpt`, `markdown_path`)
+    #    - per-page `manual_markdown`
+    #    - `twin.parts.json` with `unit: "m"`, `node_id`, `aliases`, `legacy_zone_id`, `camera_offset_m`, `target_m`, `exploded_offsets_m`
+    #    - `twin.actions.json` WITHOUT `triggers`
+    #    - `capabilities.procedures = True` backed by `twin_actions` (NO separate `procedures` artifact!)
+    #    - `withdrawn_procedures = ["legacy_proc_01"]`
+    glb_bytes = build_reference_sensor_glb()
+    pdf_src = REPO_ROOT / "assets" / "THT02_Users_Manual_v1.1.pdf"
+    pdf_bytes = pdf_src.read_bytes()
+
+    md_p1 = b"# TZ THT-02 Manual - Page 1\n\nStrainer head and SHT30 probe."
+    md_p5 = b"# TZ THT-02 Manual - Page 5\n\nSW1 DIP-8 switch binary table."
+    doc_index = {
+        "schema_version": 1,
+        "document_id": "tht02_manual_v1_1",
+        "title": "TZ THT-02 RS-485 Temperature & Humidity Sensor (V1.1)",
+        "revision_label": "V1.1",
+        "pdf_sha256": sha256_bytes(pdf_bytes),
+        "page_count": 9,
+        "pages": [
+            {
+                "page": p,
+                "citation_id": f"tht02_manual_v1_1:p{p}:section1",
+                "extraction_method": "embedded_text",
+                "markdown_path": f"docs/tht02_manual_v1_1/pages/page_{p:03d}.md",
+                "excerpt": "SW1 DIP-8 switch address table and binary weights 128..1" if p == 5 else f"THT-02 manual page {p} content.",
+            }
+            for p in range(1, 10)
+        ],
+    }
+    doc_index_bytes = json.dumps(doc_index, sort_keys=True, indent=2).encode("utf-8")
+
+    twin_parts = {
+        "schema_version": 1,
+        "product_id": "tzone_tht02",
+        "variant_id": "v1_1_rs485",
+        "recipe_version": "1.0.0",
+        "unit": "m",
+        "parts": [
+            {
+                "part_id": "dip.bank",
+                "node_id": "dip.bank",
+                "legacy_zone_id": "upper_barrel_dip",
+                "aliases": ["DIP bank", "DIP switch", "SW1", "address switch"],
+                "citation_id": "tht02_manual_v1_1:p5:section1",
+                "page": 5,
+            },
+            {
+                "part_id": "probe.sht30",
+                "node_id": "probe.sht30",
+                "legacy_zone_id": "strainer_head",
+                "aliases": ["strainer", "probe head", "SHT30"],
+                "citation_id": "tht02_manual_v1_1:p1:section1",
+                "page": 1,
+            },
+        ],
+        "views": [
+            {
+                "view_id": "default_overview",
+                "label": "Assembled Overview",
+                "camera_offset_m": [0.18, 0.08, 0.07],
+                "target_m": [0.0, 0.0, 0.07],
+                "exploded_offsets_m": {},
+            },
+            {
+                "view_id": "open_dip",
+                "label": "Two-Step Open DIP Access",
+                "camera_offset_m": [0.09, 0.05, 0.053],
+                "target_m": [0.0, 0.0, 0.053],
+                "exploded_offsets_m": {"dip.bank": [0.0, 0.032, 0.0]},
+            },
+        ],
+    }
+    twin_parts_bytes = json.dumps(twin_parts, sort_keys=True, indent=2).encode("utf-8")
+
+    twin_actions = {
+        "schema_version": 1,
+        "product_id": "tzone_tht02",
+        "variant_id": "v1_1_rs485",
+        "actions": [
+            {
+                "kind": "focus_part",
+                "part_id": "dip.bank",
+                "view_id": "open_dip",
+                "citation_id": "tht02_manual_v1_1:p5:section1",
+                "page": 5,
+            },
+            {
+                "kind": "reset_view",
+                "part_id": "probe.sht30",
+                "view_id": "default_overview",
+                "citation_id": "tht02_manual_v1_1:p1:section1",
+                "page": 1,
+            },
+        ],
+    }
+    twin_actions_bytes = json.dumps(twin_actions, sort_keys=True, indent=2).encode("utf-8")
+
+    blobs_map = {
+        sha256_bytes(pdf_bytes): pdf_bytes,
+        sha256_bytes(md_p1): md_p1,
+        sha256_bytes(md_p5): md_p5,
+        sha256_bytes(doc_index_bytes): doc_index_bytes,
+        sha256_bytes(glb_bytes): glb_bytes,
+        sha256_bytes(twin_parts_bytes): twin_parts_bytes,
+        sha256_bytes(twin_actions_bytes): twin_actions_bytes,
+    }
+    manifest_payload = {
+        "schema_version": 1,
+        "interaction_version": 1,
+        "issuer": "fieldscan-cloud",
+        "key_id": "prod-cloud-2026",
+        "product_id": "tzone_tht02",
+        "variant_id": "v1_1_rs485",
+        "publication_seq": 1,
+        "minimum_app_build": 1,
+        "sources": [{"source_id": "tht02_manual_v1_1", "origin": "test_fixture", "revision_label": "V1.1"}],
+        "capabilities": {"documentation": True, "interactive_twin": True, "procedures": True},
+        "reason_codes": [],
+        "withdrawn_procedures": ["legacy_proc_01"],
+        "artifacts": [
+            {"role": "manual_pdf", "path": "docs/tht02_manual_v1_1/manual.pdf", "sha256": sha256_bytes(pdf_bytes), "byte_count": len(pdf_bytes), "document_id": "tht02_manual_v1_1"},
+            {"role": "manual_markdown", "path": "docs/tht02_manual_v1_1/pages/page_001.md", "sha256": sha256_bytes(md_p1), "byte_count": len(md_p1), "document_id": "tht02_manual_v1_1"},
+            {"role": "manual_markdown", "path": "docs/tht02_manual_v1_1/pages/page_005.md", "sha256": sha256_bytes(md_p5), "byte_count": len(md_p5), "document_id": "tht02_manual_v1_1"},
+            {"role": "document_index", "path": "docs/index.json", "sha256": sha256_bytes(doc_index_bytes), "byte_count": len(doc_index_bytes), "document_id": "tht02_manual_v1_1"},
+            {"role": "twin_glb", "path": "twin/tzone_tht02_v1_1_rs485.glb", "sha256": sha256_bytes(glb_bytes), "byte_count": len(glb_bytes)},
+            {"role": "twin_parts", "path": "twin/twin.parts.json", "sha256": sha256_bytes(twin_parts_bytes), "byte_count": len(twin_parts_bytes)},
+            {"role": "twin_actions", "path": "twin/twin.actions.json", "sha256": sha256_bytes(twin_actions_bytes), "byte_count": len(twin_actions_bytes)},
+        ],
+    }
+    env_bytes = json.dumps(create_signed_manifest_envelope(manifest_payload, key_id="prod-cloud-2026", seed32=cloud_seed)).encode("utf-8")
+
+    # 3. Verify Boat.dev `_port_auth` Cookie + PR #4 `job_state="completed"` nested `identity`
+    captured_headers: list[dict[str, str]] = []
+
+    def _pr4_handler(req: httpx.Request) -> httpx.Response:
+        captured_headers.append(dict(req.headers))
+        if req.url.path == "/v1/catalog/resolve":
+            return httpx.Response(
+                200,
+                json={
+                    "job_state": "completed",
+                    "availability": "ready",
+                    "identity": {"product_id": "tzone_tht02", "variant_id": "v1_1_rs485", "resolution": "exact"},
+                    "cached_publication": {
+                        "product_id": "tzone_tht02",
+                        "variant_id": "v1_1_rs485",
+                        "publication_seq": 1,
+                        "availability": "ready",
+                        "manifest_url": "/v1/catalog/products/tzone_tht02/variants/v1_1_rs485/manifest",
+                    },
+                },
+            )
+        if req.url.path.endswith("/manifest"):
+            return httpx.Response(200, content=env_bytes, headers={"ETag": '"pr4-etag-1"', "Content-Type": "application/json"})
+        if "/v1/catalog/blobs/" in req.url.path:
+            sha = req.url.path.rsplit("/", 1)[-1]
+            return httpx.Response(200, content=blobs_map[sha])
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(_pr4_handler)
+    client.configure_endpoint(
+        "https://catalog.boat.internal",
+        sync_enabled=True,
+        auth_token="cloud-bearer-1",
+        boat_port_auth_token="boat-secret-cookie-99",
+    )
+    tel_json = json.dumps(client.get_sync_telemetry())
+    assert "boat-secret-cookie-99" not in tel_json
+    assert client.get_sync_telemetry()["has_boat_gate_cookie"] is True
+
+    res = client.resolve_catalog(manufacturer="TZONE", model="TZ THT-02", transport=transport)
+    assert res["job_state"] == "completed"
+    assert res["product_id"] == "tzone_tht02" and res["variant_id"] == "v1_1_rs485"
+    assert captured_headers[0].get("cookie") == "_port_auth=boat-secret-cookie-99"
+
+    inst = client.fetch_and_install_variant("tzone_tht02", "v1_1_rs485", transport=transport)
+    assert inst["ok"] is True
+    msha = inst["package"]["manifest_sha256"]
+
+    # Withdrawn procedure recorded as revoked instruction
+    revs = store.get_revoked_instructions("tzone_tht02", "v1_1_rs485")
+    assert any(r["instruction_id"] == "legacy_proc_01" for r in revs)
+
+    # Descriptor normalizes single-doc `docs/index.json` + meter-based views + `node_id`/`aliases`
+    desc = store.build_scene_and_manual_descriptor(store.select_context_for_next_session(msha))
+    assert desc["scene_origin"] == "catalog_glb"
+    assert len(desc["documents"]) == 1 and desc["documents"][0]["revision"] == "V1.1"
+    assert desc["documents"][0]["pages"][4]["markdown_url"] is not None
+    assert desc["twin"]["parts"][0]["node_name"] == "dip.bank"
+    assert desc["twin"]["views"][1]["camera_pos_mm"] == [90.0, 50.0, 53.0]
+    assert desc["twin"]["views"][1]["exploded_offsets_m"] == {"dip.bank": [0.0, 0.032, 0.0]}
+
+    # Voice command matches PR #4 action via part `aliases` (no `triggers` array!)
+    vis = prepare_visual_action("Show me the SW1 address switch", descriptor=desc, scene_generation=2, turn_id="pr4-t1")
+    assert vis["twin_action_v1"]["part_id"] == "dip.bank"
+    assert vis["twin_action_v1"]["view_id"] == "open_dip"
+    assert vis["twin_action_v1"]["citation_id"] == "tht02_manual_v1_1:p5:section1"
+
+    # Manual lookup matches single-doc `excerpt`
+    ml = lookup_manual_in_descriptor("binary weights 128", desc)
+    assert ml["matched"] is True and ml["manual_page"] == 5
+
+    # 4. Reference-only OEM package (NO `manual_pdf`, only `document_index` + `manual_markdown`)
+    ref_only_manifest = {
+        "schema_version": 1,
+        "interaction_version": 1,
+        "issuer": "fieldscan-cloud",
+        "key_id": "prod-cloud-2026",
+        "product_id": "oem_ref_sensor",
+        "variant_id": "ref_only_v1",
+        "publication_seq": 1,
+        "minimum_app_build": 1,
+        "sources": [{"source_id": "tht02_manual_v1_1", "origin": "oem_reference_only", "revision_label": "V1.1"}],
+        "capabilities": {"documentation": True, "interactive_twin": False, "procedures": False},
+        "reason_codes": ["SOURCE_REFERENCE_ONLY_NO_PDF_REDISTRIBUTION", "INTERNAL_GEOMETRY_UNCONFIRMED"],
+        "artifacts": [
+            {"role": "manual_markdown", "path": "docs/tht02_manual_v1_1/pages/page_005.md", "sha256": sha256_bytes(md_p5), "byte_count": len(md_p5), "document_id": "tht02_manual_v1_1"},
+            {"role": "document_index", "path": "docs/index.json", "sha256": sha256_bytes(doc_index_bytes), "byte_count": len(doc_index_bytes), "document_id": "tht02_manual_v1_1"},
+        ],
+    }
+    ref_env = json.dumps(create_signed_manifest_envelope(ref_only_manifest, key_id="prod-cloud-2026", seed32=cloud_seed)).encode("utf-8")
+    ref_pkg = store.install_verified_package(
+        ref_env,
+        {sha256_bytes(md_p5): md_p5, sha256_bytes(doc_index_bytes): doc_index_bytes},
+        source_origin="cloud_https",
+    )
+    ref_desc = store.build_scene_and_manual_descriptor(store.select_context_for_next_session(ref_pkg["manifest_sha256"]))
+    assert ref_desc["scene_origin"] == "docs_only_no_3d"
+    assert len(ref_desc["documents"]) == 1 and ref_desc["documents"][0]["pdf_url"] is None
+    assert ref_desc["documents"][0]["pages"][4]["markdown_url"] is not None

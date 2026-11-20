@@ -6315,10 +6315,19 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 let baseURL = (bodyJSON["base_url"] as? String) ?? FieldScanRuntimeConfig.shared.cloudCatalogBaseURL
                 let syncOpt: Bool? = (bodyJSON["sync_enabled"] != nil) ? boolFromAny(bodyJSON["sync_enabled"], defaultValue: false) : nil
                 let token = bodyJSON["auth_token"] as? String
+                let boatToken = bodyJSON["boat_port_auth_token"] as? String
+                if let signers = bodyJSON["trusted_signers"] as? [[String: Any]] {
+                    for s in signers {
+                        if let kid = s["key_id"] as? String, let pk = s["public_key_b64"] as? String {
+                            _ = try FieldScanPackageStore.shared.registerTrustedSigner(keyId: kid, publicKeyBase64: pk)
+                        }
+                    }
+                }
                 let tel = try FieldScanCatalogClient.shared.configureEndpoint(
                     baseURL: baseURL,
                     syncEnabled: syncOpt,
                     authToken: token,
+                    boatPortAuthToken: boatToken,
                     persistInKeychain: true
                 )
                 if !baseURL.isEmpty {

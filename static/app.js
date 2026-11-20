@@ -394,6 +394,7 @@ const dom = {
   catalogSessionPinNotice: document.getElementById('catalogSessionPinNotice'),
   inputCloudEndpoint: document.getElementById('inputCloudEndpoint'),
   inputCloudToken: document.getElementById('inputCloudToken'),
+  inputBoatPortToken: document.getElementById('inputBoatPortToken'),
   btnSaveSyncConfig: document.getElementById('btnSaveSyncConfig'),
   btnCheckCloudHealth: document.getElementById('btnCheckCloudHealth'),
   catalogResolveForm: document.getElementById('catalogResolveForm'),
@@ -2563,17 +2564,32 @@ function rebuildAssemblyPillsForBundled() {
 }
 
 function highlightCatalogGlbPart(partId, { calloutTitle = '', calloutBody = '', viewId = null } = {}) {
+  const views = state.activeCatalogDescriptor?.twin?.views || [];
+  const viewCfg = views.find((v) => v.view_id === viewId) || null;
+  const viewExplodeMap =
+    viewCfg && viewCfg.exploded_offsets_m && typeof viewCfg.exploded_offsets_m === 'object'
+      ? viewCfg.exploded_offsets_m
+      : null;
+
   Object.entries(cad.catalogPartNodes).forEach(([pid, node]) => {
     const active = pid === partId;
     const meta = cad.catalogPartsMeta[pid] || {};
-    if (Array.isArray(meta.explode_offset_m) && meta.explode_offset_m.length === 3 && node.userData.basePos) {
-      const expand = viewId === 'open_dip' || state.exploded ? 1.0 : 0.0;
-      const scale = node.userData.scaleMm || 1000.0;
-      node.position.set(
-        node.userData.basePos.x + meta.explode_offset_m[0] * scale * expand,
-        node.userData.basePos.y + meta.explode_offset_m[1] * scale * expand,
-        node.userData.basePos.z + meta.explode_offset_m[2] * scale * expand
-      );
+    if (node.userData.basePos) {
+      const nodeName = node.userData.nodeName || meta.node_name || meta.node_id || '';
+      const viewOffset = (viewExplodeMap && (viewExplodeMap[nodeName] || viewExplodeMap[pid])) || null;
+      const partOffset = Array.isArray(meta.explode_offset_m) && meta.explode_offset_m.length === 3 ? meta.explode_offset_m : null;
+      const expand = viewOffset ? 1.0 : viewId === 'open_dip' || state.exploded ? 1.0 : 0.0;
+      const off = viewOffset || partOffset;
+      if (Array.isArray(off) && off.length === 3) {
+        // Child nodes live inside `offstageRoot` which already applies `scaleMm` (`1000.0` for meter GLBs)
+        node.position.set(
+          node.userData.basePos.x + off[0] * expand,
+          node.userData.basePos.y + off[1] * expand,
+          node.userData.basePos.z + off[2] * expand
+        );
+      } else {
+        node.position.copy(node.userData.basePos);
+      }
     }
     node.traverse((child) => {
       if (child.isMesh && child.material && child.material.emissive) {
@@ -2600,8 +2616,6 @@ function highlightCatalogGlbPart(partId, { calloutTitle = '', calloutBody = '', 
     dom.faultCalloutText.textContent = calloutBody || meta?.summary || '';
   }
 
-  const views = state.activeCatalogDescriptor?.twin?.views || [];
-  const viewCfg = views.find((v) => v.view_id === viewId);
   if (viewCfg && Array.isArray(viewCfg.camera_pos_mm) && Array.isArray(viewCfg.target_mm)) {
     flyCameraTo(
       viewCfg.camera_pos_mm[0],
@@ -2629,7 +2643,9 @@ function applyTwinActionV1(v1) {
   }
   if (v1.kind === 'reset_view') {
     if (dom.faultCallout) dom.faultCallout.hidden = true;
-    highlightCatalogGlbPart(null, { viewId: 'isometric_home' });
+    const views = state.activeCatalogDescriptor?.twin?.views || [];
+    const defaultVid = views.some((v) => v.view_id === 'default_overview') ? 'default_overview' : 'isometric_home';
+    highlightCatalogGlbPart(null, { viewId: v1.view_id || defaultVid });
     reset3DCamera();
     return;
   }
@@ -2741,7 +2757,8 @@ async function loadCatalogSceneFromDescriptor(descriptor, generation) {
       const partsMeta = {};
       const partsList = Array.isArray(twin.parts) ? twin.parts : [];
       for (const p of partsList) {
-        const found = offstageRoot.getObjectByName(p.node_name);
+        const nodeName = p.node_name || p.node_id;
+        const found = offstageRoot.getObjectByName(nodeName);
         if (!found) {
           disposeThreeSubtree(offstageRoot);
           reportSceneReadyToBackend(generation, manifestSha, 'failed');
@@ -2755,6 +2772,7 @@ async function loadCatalogSceneFromDescriptor(descriptor, generation) {
           }
         });
         found.userData.partId = p.part_id;
+        found.userData.nodeName = nodeName;
         found.userData.basePos = found.position.clone();
         found.userData.scaleMm = scaleMm;
         partNodes[p.part_id] = found;
@@ -6526,6 +6544,7 @@ function bindCatalogModalEvents() {
   dom.btnSaveSyncConfig?.addEventListener('click', async () => {
     try {
       const tokenVal = dom.inputCloudToken?.value || null;
+      const boatVal = dom.inputBoatPortToken?.value || null;
       await fetchJsonWithFallback(['/api/catalog/sync_config'], {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -6533,9 +6552,11 @@ function bindCatalogModalEvents() {
           base_url: dom.inputCloudEndpoint?.value?.trim() || '',
           sync_enabled: Boolean(dom.toggleCloudSync?.checked),
           auth_token: tokenVal || undefined,
+          boat_port_auth_token: boatVal || undefined,
         }),
       });
       if (dom.inputCloudToken) dom.inputCloudToken.value = '';
+      if (dom.inputBoatPortToken) dom.inputBoatPortToken.value = '';
       if (dom.catalogCloudResultBox) {
         dom.catalogCloudResultBox.textContent = 'Saved Cloud Catalog endpoint configuration.';
       }
@@ -6641,7 +6662,9 @@ function renderCloudResolveResult(data) {
 
   const summary = document.createElement('div');
   const st = data.job_state || data.availability || 'ready';
-  summary.textContent = `Status: ${st}${data.job_id ? ` · Job ${data.job_id}` : ''}`;
+  const availPart = data.availability && data.availability !== st ? ` · Availability: ${data.availability}` : '';
+  const reasonsPart = Array.isArray(data.reason_codes) && data.reason_codes.length > 0 ? ` · ${data.reason_codes.join(', ')}` : '';
+  summary.textContent = `Status: ${st}${availPart}${data.job_id ? ` · Job ${data.job_id}` : ''}${reasonsPart}`;
   dom.catalogCloudResultBox.appendChild(summary);
 
   if (data.job_id && (data.job_state === 'queued' || data.job_state === 'running')) {

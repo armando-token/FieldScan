@@ -110,7 +110,7 @@ public struct SessionContentContext {
 
 public enum FieldScanCatalogContract {
     public static let maxEnvelopeBytes = 512 * 1024
-    public static let maxArtifactsPerPackage = 64
+    public static let maxArtifactsPerPackage = 256
     public static let maxSingleArtifactBytes = 50 * 1024 * 1024
     public static let maxPackageTotalBytes = 120 * 1024 * 1024
     public static let currentAppBuild = 210
@@ -443,16 +443,23 @@ public enum FieldScanCatalogContract {
         guard let caps = payload["capabilities"] as? [String: Any] else {
             throw FieldScanCatalogError(code: "INVALID_ENVELOPE", message: "Missing capabilities object")
         }
-        if (caps["documentation"] as? Bool) == true && !rolesPresent.contains("manual_pdf") {
-            throw FieldScanCatalogError(code: "MISSING_CAPABILITY_DEPENDENCY", message: "documentation=true requires manual_pdf artifact")
+        let hasDocIndexAndMd = (rolesPresent.contains("manual_index") || rolesPresent.contains("document_index")) && rolesPresent.contains("manual_markdown")
+        if (caps["documentation"] as? Bool) == true && !rolesPresent.contains("manual_pdf") && !hasDocIndexAndMd {
+            throw FieldScanCatalogError(
+                code: "MISSING_CAPABILITY_DEPENDENCY",
+                message: "documentation=true requires manual_pdf or document_index + manual_markdown artifacts"
+            )
         }
         if (caps["interactive_twin"] as? Bool) == true {
             for reqRole in ["twin_glb", "twin_parts", "twin_actions"] where !rolesPresent.contains(reqRole) {
                 throw FieldScanCatalogError(code: "MISSING_CAPABILITY_DEPENDENCY", message: "interactive_twin=true requires '\(reqRole)'")
             }
         }
-        if (caps["procedures"] as? Bool) == true && !rolesPresent.contains("procedures") {
-            throw FieldScanCatalogError(code: "MISSING_CAPABILITY_DEPENDENCY", message: "procedures=true requires 'procedures' artifact")
+        if (caps["procedures"] as? Bool) == true && !rolesPresent.contains("procedures") && !rolesPresent.contains("twin_actions") {
+            throw FieldScanCatalogError(
+                code: "MISSING_CAPABILITY_DEPENDENCY",
+                message: "procedures=true requires 'procedures' or 'twin_actions' artifact"
+            )
         }
 
         return (manifest: payload, manifestSha256: sha256Hex(rawPayload), rawPayload: rawPayload)

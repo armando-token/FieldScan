@@ -54,6 +54,7 @@ class FieldScanCatalogClient:
         self._allowed_scheme = "https"
         self._allow_loopback_http = allow_loopback_http_for_tests
         self._auth_token: str | None = None  # Held strictly in native memory/Keychain, never serialized to JS or logs
+        self._boat_port_auth_token: str | None = None  # Optional Boat.dev private gate cookie (`_port_auth`)
 
         self._active_jobs_by_key: dict[str, dict[str, Any]] = {}
         self._jobs_by_id: dict[str, dict[str, Any]] = {}
@@ -78,6 +79,7 @@ class FieldScanCatalogClient:
         *,
         sync_enabled: bool | None = None,
         auth_token: str | None = None,
+        boat_port_auth_token: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             raw = (base_url or "").strip().rstrip("/")
@@ -99,6 +101,9 @@ class FieldScanCatalogClient:
 
             if auth_token is not None:
                 self._auth_token = auth_token.strip() or None
+
+            if boat_port_auth_token is not None:
+                self._boat_port_auth_token = boat_port_auth_token.strip() or None
 
             if sync_enabled is not None:
                 was_enabled = self._sync_enabled
@@ -122,6 +127,8 @@ class FieldScanCatalogClient:
                 "egress_policy": "catalog_https_authorized" if self._sync_enabled else "strict_local_only",
                 "configured_endpoint": self._base_url or None,
                 "has_credentials": bool(self._auth_token),
+                "has_boat_gate_cookie": bool(self._boat_port_auth_token),
+                "trusted_signer_key_ids": sorted(self.store.trusted_keys.keys()),
                 "https_requests_emitted": self._https_requests_emitted,
                 "last_contact_utc": self._last_contact_utc,
                 "last_health_status": self._last_health_status,
@@ -193,6 +200,8 @@ class FieldScanCatalogClient:
         headers = {"X-FieldScan-Correlation-Id": corr, "Accept": "application/json"}
         if self._auth_token:
             headers["Authorization"] = f"Bearer {self._auth_token}"
+        if self._boat_port_auth_token:
+            headers["Cookie"] = f"_port_auth={self._boat_port_auth_token}"
         if extra_headers:
             headers.update(extra_headers)
 
@@ -314,6 +323,7 @@ class FieldScanCatalogClient:
         }
         resp = self._request("POST", "/v1/catalog/resolve", json_body=body, transport=transport)
         data = resp.json()
+        self._hoist_identity_aliases(data)
         data["ui_attempt_id"] = attempt_id
         data["reused_existing_job"] = False
 
@@ -326,10 +336,27 @@ class FieldScanCatalogClient:
                 self._jobs_by_id[jid] = data
         return data
 
+    @staticmethod
+    def _hoist_identity_aliases(data: dict[str, Any]) -> None:
+        """Preserve PR #4 nested `identity`/`cached_publication` while exposing top-level convenience keys."""
+        if not isinstance(data, dict):
+            return
+        ident = data.get("identity") if isinstance(data.get("identity"), dict) else {}
+        cached = data.get("cached_publication") if isinstance(data.get("cached_publication"), dict) else {}
+        if not data.get("product_id"):
+            pid = ident.get("product_id") or cached.get("product_id")
+            if pid:
+                data["product_id"] = pid
+        if not data.get("variant_id"):
+            vid = ident.get("variant_id") or cached.get("variant_id")
+            if vid:
+                data["variant_id"] = vid
+
     def poll_job(self, job_id: str, *, transport: httpx.BaseTransport | None = None) -> dict[str, Any]:
         """GET `/v1/jobs/{job_id}` separating `job_state` from `availability` (`Section 3.2`)."""
         resp = self._request("GET", f"/v1/jobs/{job_id}", transport=transport)
         data = resp.json()
+        self._hoist_identity_aliases(data)
         data["job_id"] = job_id
         with self._lock:
             prev = self._jobs_by_id.get(job_id, {})
@@ -399,6 +426,8 @@ class FieldScanCatalogClient:
                 hdrs = {"X-FieldScan-Correlation-Id": corr}
                 if self._auth_token:
                     hdrs["Authorization"] = f"Bearer {self._auth_token}"
+                if self._boat_port_auth_token:
+                    hdrs["Cookie"] = f"_port_auth={self._boat_port_auth_token}"
 
                 t0 = time.perf_counter()
                 with self._lock:

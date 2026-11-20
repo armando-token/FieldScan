@@ -924,31 +924,17 @@
 
         <div class="catalog-grid">
           <div class="catalog-cloud-pane">
-            <h3>1. Cloud Catalog Endpoint &amp; Lookup</h3>
-            <div class="catalog-form-row">
-              <input
-                type="url"
-                id="inputCloudEndpoint"
-                class="catalog-input"
-                placeholder="Authorized HTTPS catalog endpoint"
-                autocomplete="off"
-              />
-              <input
-                type="password"
-                id="inputCloudToken"
-                class="catalog-input catalog-input-sm"
-                placeholder="Bearer token (Keychain)"
-                autocomplete="off"
-              />
-              <input
-                type="password"
-                id="inputBoatPortToken"
-                class="catalog-input catalog-input-sm"
-                placeholder="Private gate cookie (optional)"
-                autocomplete="off"
-              />
-              <button type="button" class="chip-btn" id="btnSaveSyncConfig">Save</button>
-              <button type="button" class="chip-btn" id="btnCheckCloudHealth">Health</button>
+            <h3>1. Automatic FieldScan Cloud Updates</h3>
+            <div class="catalog-one-tap-bar">
+              <button
+                type="button"
+                class="chip-btn chip-btn-cv active"
+                id="btnDownloadLatestCloud"
+                title="Automatically connect to FieldScan Cloud, verify Ed25519 signature, and download the latest package"
+              >
+                Download Latest Version
+              </button>
+              <button type="button" class="chip-btn" id="btnCheckCloudHealth">Check Server</button>
             </div>
 
             <form id="catalogResolveForm" class="catalog-resolve-form">
@@ -959,8 +945,36 @@
             </form>
 
             <div class="catalog-status-box" id="catalogCloudResultBox">
-              Cloud sync is OFF by default on startup (zero unsolicited WAN requests). Local signed packages and the bundled TZ THT-02 twin work 100% offline.
+              Tap "Download Latest Version" to connect automatically and fetch the newest Ed25519-verified manual &amp; 3D twin. Bundled TZ THT-02 V1.1 remains ready 100% offline.
             </div>
+
+            <details class="catalog-advanced-details">
+              <summary>Advanced / Custom Server Settings</summary>
+              <div class="catalog-form-row">
+                <input
+                  type="url"
+                  id="inputCloudEndpoint"
+                  class="catalog-input"
+                  placeholder="Default FieldScan Cloud HTTPS server"
+                  autocomplete="off"
+                />
+                <input
+                  type="password"
+                  id="inputCloudToken"
+                  class="catalog-input catalog-input-sm"
+                  placeholder="Custom Bearer token (optional)"
+                  autocomplete="off"
+                />
+                <input
+                  type="password"
+                  id="inputBoatPortToken"
+                  class="catalog-input catalog-input-sm"
+                  placeholder="Private gate cookie (optional)"
+                  autocomplete="off"
+                />
+                <button type="button" class="chip-btn" id="btnSaveSyncConfig">Save</button>
+              </div>
+            </details>
           </div>
 
           <div class="catalog-installed-pane">

@@ -118,7 +118,61 @@ class FieldScanCatalogClient:
             return self.get_sync_telemetry()
 
     def set_sync_enabled(self, enabled: bool) -> dict[str, Any]:
-        return self.configure_endpoint(self._base_url, sync_enabled=enabled)
+        from fieldscan.catalog_store import DEFAULT_PILOT_CLOUD_BASE_URL
+
+        effective_base = self._base_url or DEFAULT_PILOT_CLOUD_BASE_URL
+        return self.configure_endpoint(effective_base, sync_enabled=enabled)
+
+    def ensure_auto_enrolled_if_needed(
+        self,
+        *,
+        default_base_url: str | None = None,
+        force_reenroll: bool = False,
+        device_id: str | None = None,
+    ) -> None:
+        from fieldscan.catalog_store import DEFAULT_PILOT_CLOUD_BASE_URL
+
+        with self._lock:
+            target_base = self._base_url or default_base_url or DEFAULT_PILOT_CLOUD_BASE_URL
+            has_token = bool(self._auth_token)
+            is_enabled = self._sync_enabled
+
+        if not self._base_url or not is_enabled:
+            self.configure_endpoint(target_base, sync_enabled=True)
+
+        if has_token and not force_reenroll:
+            return
+
+        dev_id = device_id or f"station-{uuid.getnode():012x}"
+        status, _hdrs, body = self._request_bytes(
+            "POST",
+            "/v1/devices/enroll",
+            json_body={"device_id": dev_id, "platform": "macos", "app_version": "2.1"},
+        )
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except Exception as exc:
+            raise CatalogDomainError("AUTO_ENROLL_FAILED", "Invalid JSON from /v1/devices/enroll") from exc
+        tok = str(payload.get("access_token") or "").strip()
+        if status != 200 or not tok:
+            raise CatalogDomainError("AUTO_ENROLL_FAILED", "Server did not return an enrollment access_token", status_code=status)
+        self.configure_endpoint(target_base, sync_enabled=True, auth_token=tok)
+
+    def download_latest_package(
+        self,
+        product_id: str = "tzone_tht02",
+        variant_id: str = "v1_1_rs485",
+        *,
+        default_base_url: str | None = None,
+    ) -> dict[str, Any]:
+        self.ensure_auto_enrolled_if_needed(default_base_url=default_base_url, force_reenroll=False)
+        try:
+            return self.fetch_and_install_variant(product_id, variant_id, channel="pilot")
+        except CatalogDomainError as err:
+            if err.code == "HTTP_UNAUTHORIZED":
+                self.ensure_auto_enrolled_if_needed(default_base_url=default_base_url, force_reenroll=True)
+                return self.fetch_and_install_variant(product_id, variant_id, channel="pilot")
+            raise
 
     def get_sync_telemetry(self) -> dict[str, Any]:
         with self._lock:

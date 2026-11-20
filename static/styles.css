@@ -3266,3 +3266,30 @@ svg.lucide {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+.catalog-one-tap-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.catalog-advanced-details {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  border: 1px dashed var(--border-subtle);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.catalog-advanced-details > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.catalog-advanced-details[open] > summary {
+  margin-bottom: 8px;
+  color: var(--text-body);
+}

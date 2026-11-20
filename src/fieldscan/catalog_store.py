@@ -159,8 +159,14 @@ DEMO_FIXTURE_PUBLIC_KEY_32: bytes = ed25519_public_key_from_seed(DEMO_FIXTURE_SE
 DEMO_FIXTURE_PUBLIC_KEY_HEX: str = DEMO_FIXTURE_PUBLIC_KEY_32.hex()
 DEMO_FIXTURE_PUBLIC_KEY_B64: str = base64.b64encode(DEMO_FIXTURE_PUBLIC_KEY_32).decode("ascii")
 
+# Pinned Boat.dev pilot Cloud Ed25519 public key (`pilot-1`, 32 raw bytes Base64)
+PILOT_CLOUD_PUBLIC_KEY_B64: str = "Zn5ZenJKf/TvAmETMhr+eNl66WpSfbSRbU179Tt9HQI="
+PILOT_CLOUD_PUBLIC_KEY_32: bytes = base64.b64decode(PILOT_CLOUD_PUBLIC_KEY_B64)
+DEFAULT_PILOT_CLOUD_BASE_URL: str = "https://box-node-507a5a88ccd86113-8080.on.boat.dev"
+
 DEFAULT_TRUSTED_PUBLIC_KEYS: dict[str, bytes] = {
     "demo-1": DEMO_FIXTURE_PUBLIC_KEY_32,
+    "pilot-1": PILOT_CLOUD_PUBLIC_KEY_32,
 }
 
 # ==============================================================================

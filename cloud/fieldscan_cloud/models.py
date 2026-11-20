@@ -170,3 +170,27 @@ class SignedManifestEnvelope(BaseModel):
     key_id: str
     payload_b64: str
     signature_b64: str
+
+
+class DeviceEnrollRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_id: str = Field(..., min_length=6, max_length=128)
+    platform: str = Field(default="ipados", min_length=2, max_length=32)
+    app_version: str = Field(default="2.1", min_length=1, max_length=32)
+
+    @field_validator("device_id", "platform", "app_version")
+    @classmethod
+    def _clean_enroll_str(cls, v: str, info) -> str:
+        cleaned = _reject_url_or_control(v, info.field_name)
+        if not cleaned:
+            raise ValueError(f"{info.field_name} must not be empty")
+        return cleaned
+
+
+class DeviceEnrollResponse(BaseModel):
+    access_token: str
+    tenant_id: str
+    channel: str
+    credential_id: str
+    key_id: str

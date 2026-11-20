@@ -185,6 +185,55 @@ def lookup_active_credential(conn: sqlite3.Connection, token_sha256: str) -> sql
     ).fetchone()
 
 
+def enroll_device_credential(
+    conn: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    channel: str,
+    device_id: str,
+    token_sha256: str,
+    max_devices: int = 50,
+    max_active_jobs: int = 5,
+) -> str:
+    """Atomically register or rotate a per-device Bearer credential digest for zero-typing iPad onboarding."""
+    dev_hash = hashlib.sha256(f"{tenant_id}:{device_id.strip()}".encode("utf-8")).hexdigest()[:16]
+    cred_id = f"cred_dev_{dev_hash}"
+    label = f"device:{device_id.strip()[:48]}"
+    ts = now_ts()
+    with immediate_tx(conn):
+        conn.execute(
+            """
+            INSERT INTO tenants (id, name, channel, status, created_at)
+            VALUES (?, ?, ?, 'active', ?)
+            ON CONFLICT(id) DO UPDATE SET channel = excluded.channel, status = 'active';
+            """,
+            (tenant_id, f"FieldScan {tenant_id}", channel, ts),
+        )
+        existing = conn.execute("SELECT id FROM api_credentials WHERE id = ?;", (cred_id,)).fetchone()
+        if existing is None:
+            dev_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM api_credentials WHERE tenant_id = ? AND id LIKE 'cred_dev_%' AND status = 'active';",
+                    (tenant_id,),
+                ).fetchone()["cnt"]
+            )
+            if dev_count >= max_devices:
+                raise PermissionError("ENROLL_LIMIT_EXCEEDED")
+        conn.execute(
+            """
+            INSERT INTO api_credentials (id, tenant_id, label, token_sha256, status, max_active_jobs, created_at)
+            VALUES (?, ?, ?, ?, 'active', ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              label = excluded.label,
+              token_sha256 = excluded.token_sha256,
+              status = 'active',
+              revoked_at = NULL;
+            """,
+            (cred_id, tenant_id, label, token_sha256.lower(), max_active_jobs, ts),
+        )
+    return cred_id
+
+
 def compute_request_key(
     *,
     tenant_id: str,

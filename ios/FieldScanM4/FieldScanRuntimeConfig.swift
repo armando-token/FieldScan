@@ -119,7 +119,10 @@ public final class FieldScanRuntimeConfig {
 
     /// Cloud Catalog HTTPS URL (accessed exclusively by `FieldScanCatalogClient`, NEVER trusted as a WKWebView HMI origin).
     public var cloudCatalogBaseURL: String {
-        get { defaults.string(forKey: kCloudCatalogBaseURL) ?? "" }
+        get {
+            let stored = (defaults.string(forKey: kCloudCatalogBaseURL) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return stored.isEmpty ? FieldScanCatalogContract.defaultPilotCloudBaseURL : stored
+        }
         set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: kCloudCatalogBaseURL) }
     }
 

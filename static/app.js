@@ -1,6 +1,7 @@
 import * as THREE from '/static/vendor/three.module.js';
 import { OrbitControls } from '/static/vendor/OrbitControls.js';
 import { STLExporter } from '/static/vendor/STLExporter.js';
+import { GLTFLoader } from '/static/vendor/GLTFLoader.js';
 
 /* ==========================================================================
    CANONICAL TZ THT-02 METADATA, SUB-ASSEMBLIES & MANUAL INDEX (100% ENGLISH)
@@ -180,6 +181,15 @@ const state = {
   confirmedChangesCount: 0,
   pusrGatewayHost: '',
   pusrGatewayPort: 502,
+  selectedCatalogContext: null,
+  activeCatalogDescriptor: null,
+  sceneOrigin: 'bundled_parametric',
+  sceneGeneration: 1,
+  glbSceneReady: true,
+  pendingTwinActionV1: null,
+  manualDocuments: [],
+  activeDocumentId: 'tht02_manual_v1_1',
+  cadExportsSupported: ['dxf', 'stl', 'pdf', 'json'],
   lastPollSeq: 0,
   emeraldVerifyUntil: 0,
   occlusionFiltered: false,
@@ -216,6 +226,10 @@ const state = {
    ========================================================================== */
 const dom = {
   btnSensorPill: document.getElementById('btnSensorPill'),
+  sensorPillLabel: document.getElementById('sensorPillLabel'),
+  btnOpenCatalogModal: document.getElementById('btnOpenCatalogModal'),
+  catalogOriginLabel: document.getElementById('catalogOriginLabel'),
+  catalogUpdateDot: document.getElementById('catalogUpdateDot'),
   selectCameraMode: document.getElementById('selectCameraMode'),
   btnUploadPhoto: document.getElementById('btnUploadPhoto'),
   photoUploadInput: document.getElementById('photoUploadInput'),
@@ -281,6 +295,9 @@ const dom = {
 
   canvasStage: document.getElementById('canvasStage'),
   cadCanvas: document.getElementById('cadCanvas'),
+  twinNo3dOverlay: document.getElementById('twinNo3dOverlay'),
+  twinNo3dTitle: document.getElementById('twinNo3dTitle'),
+  twinNo3dBody: document.getElementById('twinNo3dBody'),
   labelDimLength: document.getElementById('labelDimLength'),
   labelDimDia: document.getElementById('labelDimDia'),
   labelDipAddr: document.getElementById('labelDipAddr'),
@@ -331,6 +348,7 @@ const dom = {
 
   manualDrawer: document.getElementById('manualDrawer'),
   btnToggleManualDrawer: document.getElementById('btnToggleManualDrawer'),
+  manualDocSelect: document.getElementById('manualDocSelect'),
   manualPrevBtn: document.getElementById('manualPrevBtn'),
   manualNextBtn: document.getElementById('manualNextBtn'),
   btnExpandManual: document.getElementById('btnExpandManual'),
@@ -339,6 +357,7 @@ const dom = {
   manualSectionBanner: document.getElementById('manualSectionBanner'),
   manualViewerBox: document.getElementById('manualViewerBox'),
   manualPageImg: document.getElementById('manualPageImg'),
+  manualPdfFallbackFrame: document.getElementById('manualPdfFallbackFrame'),
   manualPageCaption: document.getElementById('manualPageCaption'),
 
   escQueueTag: document.getElementById('escQueueTag'),
@@ -360,9 +379,30 @@ const dom = {
   lightboxPageBadge: document.getElementById('lightboxPageBadge'),
   lightboxSectionBanner: document.getElementById('lightboxSectionBanner'),
   lightboxImg: document.getElementById('lightboxImg'),
+  lightboxPdfFallbackFrame: document.getElementById('lightboxPdfFallbackFrame'),
   lightboxPrevBtn: document.getElementById('lightboxPrevBtn'),
   lightboxNextBtn: document.getElementById('lightboxNextBtn'),
   lightboxCloseBtn: document.getElementById('lightboxCloseBtn'),
+
+  catalogModal: document.getElementById('catalogModal'),
+  catalogCloseBtn: document.getElementById('catalogCloseBtn'),
+  toggleCloudSync: document.getElementById('toggleCloudSync'),
+  catalogEgressBadge: document.getElementById('catalogEgressBadge'),
+  btnImportSignedPackage: document.getElementById('btnImportSignedPackage'),
+  packageZipInput: document.getElementById('packageZipInput'),
+  btnResetBundledContext: document.getElementById('btnResetBundledContext'),
+  catalogSessionPinNotice: document.getElementById('catalogSessionPinNotice'),
+  inputCloudEndpoint: document.getElementById('inputCloudEndpoint'),
+  inputCloudToken: document.getElementById('inputCloudToken'),
+  inputBoatPortToken: document.getElementById('inputBoatPortToken'),
+  btnSaveSyncConfig: document.getElementById('btnSaveSyncConfig'),
+  btnCheckCloudHealth: document.getElementById('btnCheckCloudHealth'),
+  catalogResolveForm: document.getElementById('catalogResolveForm'),
+  inputResolveMfg: document.getElementById('inputResolveMfg'),
+  inputResolveModel: document.getElementById('inputResolveModel'),
+  inputResolveVariant: document.getElementById('inputResolveVariant'),
+  catalogCloudResultBox: document.getElementById('catalogCloudResultBox'),
+  catalogPackagesList: document.getElementById('catalogPackagesList'),
 
   escalationModal: document.getElementById('escalationModal'),
   escalationCloseBtn: document.getElementById('escalationCloseBtn'),
@@ -538,6 +578,9 @@ const cad = {
   zoneGroups: {},
   zoneMeshes: {},
   allSolidMaterials: [],
+  catalogGlbGroup: null,
+  catalogPartNodes: {},
+  catalogPartsMeta: {},
 
   anchorDimLength: new THREE.Vector3(0, -18.5, 0),
   anchorDimDia: new THREE.Vector3(0, 0, 77.5),
@@ -2409,6 +2452,20 @@ function selectZone(zoneId, { flipManual = false, zoomCamera = true } = {}) {
 function applyTwinAction(twinAction) {
   if (!twinAction || typeof twinAction !== 'object') return;
 
+  if (state.sceneOrigin === 'catalog_glb') {
+    applyTwinActionV1({
+      schema: 'twin_action_v1',
+      kind: twinAction.action === 'reset_view' ? 'reset_view' : 'focus_part',
+      part_id: twinAction.part_id || twinAction.focus_zone || null,
+      view_id: twinAction.view_id || 'isometric_home',
+      callout_title: twinAction.callout_title || '',
+      callout_body: twinAction.callout_body || '',
+      scene_generation: state.sceneGeneration,
+      manifest_sha256: state.selectedCatalogContext?.manifest_sha256 || '',
+    });
+    return;
+  }
+
   if (twinAction.render_mode === 'wireframe' || twinAction.render_mode === 'solid') {
     setRenderMode(twinAction.render_mode);
   }
@@ -2449,6 +2506,334 @@ function applyTwinAction(twinAction) {
   } else if (twinAction.camera_pose === 'isometric_home') {
     reset3DCamera();
   }
+}
+
+/* ==========================================================================
+   DUAL-ORIGIN 3D SCENE ADAPTER (`bundled_parametric` + `catalog_glb`) & `twin_action_v1`
+   ========================================================================== */
+function disposeThreeSubtree(root) {
+  if (!root) return;
+  root.traverse((obj) => {
+    if (obj.geometry && typeof obj.geometry.dispose === 'function') {
+      obj.geometry.dispose();
+    }
+    const mats = Array.isArray(obj.material) ? obj.material : obj.material ? [obj.material] : [];
+    mats.forEach((m) => {
+      ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'bumpMap'].forEach((k) => {
+        if (m[k] && typeof m[k].dispose === 'function') {
+          m[k].dispose();
+        }
+      });
+      if (typeof m.dispose === 'function') {
+        m.dispose();
+      }
+    });
+  });
+}
+
+function clearCatalogGlbGroup() {
+  if (cad.catalogGlbGroup && cad.scene) {
+    cad.scene.remove(cad.catalogGlbGroup);
+    disposeThreeSubtree(cad.catalogGlbGroup);
+  }
+  cad.catalogGlbGroup = null;
+  cad.catalogPartNodes = {};
+  cad.catalogPartsMeta = {};
+}
+
+function rebuildAssemblyPillsForBundled() {
+  if (!dom.assemblyTreePills) return;
+  const bundledChips = [
+    ['strainer_head', '1. SHT30 Strainer'],
+    ['upper_seal_ring', '2. O-Ring Seal'],
+    ['upper_barrel_dip', '3. DIP-8 PCB'],
+    ['mounting_flange', '4. Flange Ø4.2'],
+    ['lower_barrel_rs485', '5. RS-485 Barrel'],
+    ['waterproof_gland_leads', '6. Gland & Leads'],
+  ];
+  dom.assemblyTreePills.innerHTML = '';
+  bundledChips.forEach(([zoneId, label]) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'part-chip';
+    btn.dataset.zone = zoneId;
+    btn.textContent = label;
+    btn.addEventListener('click', () => selectZone(zoneId, { flipManual: true }));
+    dom.assemblyTreePills.appendChild(btn);
+  });
+}
+
+function highlightCatalogGlbPart(partId, { calloutTitle = '', calloutBody = '', viewId = null } = {}) {
+  const views = state.activeCatalogDescriptor?.twin?.views || [];
+  const viewCfg = views.find((v) => v.view_id === viewId) || null;
+  const viewExplodeMap =
+    viewCfg && viewCfg.exploded_offsets_m && typeof viewCfg.exploded_offsets_m === 'object'
+      ? viewCfg.exploded_offsets_m
+      : null;
+
+  Object.entries(cad.catalogPartNodes).forEach(([pid, node]) => {
+    const active = pid === partId;
+    const meta = cad.catalogPartsMeta[pid] || {};
+    if (node.userData.basePos) {
+      const nodeName = node.userData.nodeName || meta.node_name || meta.node_id || '';
+      const viewOffset = (viewExplodeMap && (viewExplodeMap[nodeName] || viewExplodeMap[pid])) || null;
+      const partOffset = Array.isArray(meta.explode_offset_m) && meta.explode_offset_m.length === 3 ? meta.explode_offset_m : null;
+      const expand = viewOffset ? 1.0 : viewId === 'open_dip' || state.exploded ? 1.0 : 0.0;
+      const off = viewOffset || partOffset;
+      if (Array.isArray(off) && off.length === 3) {
+        // Child nodes live inside `offstageRoot` which already applies `scaleMm` (`1000.0` for meter GLBs)
+        node.position.set(
+          node.userData.basePos.x + off[0] * expand,
+          node.userData.basePos.y + off[1] * expand,
+          node.userData.basePos.z + off[2] * expand
+        );
+      } else {
+        node.position.copy(node.userData.basePos);
+      }
+    }
+    node.traverse((child) => {
+      if (child.isMesh && child.material && child.material.emissive) {
+        child.material.emissive.setHex(active ? 0x0284c7 : 0x000000);
+        child.material.emissiveIntensity = active ? 0.65 : 0.0;
+      }
+    });
+  });
+
+  if (dom.assemblyTreePills) {
+    dom.assemblyTreePills.querySelectorAll('.part-chip').forEach((chip) => {
+      chip.classList.toggle('active', chip.dataset.partId === partId);
+    });
+  }
+
+  const meta = cad.catalogPartsMeta[partId];
+  if (meta && dom.selectedPartSummary) {
+    dom.selectedPartSummary.textContent = `${meta.label || partId}: ${meta.summary || ''}`;
+  }
+  if (calloutTitle && dom.faultCallout && dom.faultCalloutZone && dom.faultCalloutText) {
+    dom.faultCallout.hidden = false;
+    dom.faultCallout.classList.add('is-guided');
+    dom.faultCalloutZone.textContent = calloutTitle;
+    dom.faultCalloutText.textContent = calloutBody || meta?.summary || '';
+  }
+
+  if (viewCfg && Array.isArray(viewCfg.camera_pos_mm) && Array.isArray(viewCfg.target_mm)) {
+    flyCameraTo(
+      viewCfg.camera_pos_mm[0],
+      viewCfg.camera_pos_mm[1],
+      viewCfg.camera_pos_mm[2],
+      viewCfg.target_mm[0],
+      viewCfg.target_mm[1],
+      viewCfg.target_mm[2]
+    );
+  }
+}
+
+function applyTwinActionV1(v1) {
+  if (!v1 || typeof v1 !== 'object') return;
+  const activeSha = state.selectedCatalogContext?.manifest_sha256 || '';
+  if (v1.manifest_sha256 && activeSha && state.sceneOrigin === 'catalog_glb' && v1.manifest_sha256 !== activeSha) {
+    return; // Fence stale action targeting a superseded manifest (`M4-VOICE-01`)
+  }
+  if (state.sceneOrigin === 'catalog_glb' && !state.glbSceneReady) {
+    state.pendingTwinActionV1 = v1;
+    return;
+  }
+  if (state.sceneOrigin !== 'catalog_glb') {
+    return;
+  }
+  if (v1.kind === 'reset_view') {
+    if (dom.faultCallout) dom.faultCallout.hidden = true;
+    const views = state.activeCatalogDescriptor?.twin?.views || [];
+    const defaultVid = views.some((v) => v.view_id === 'default_overview') ? 'default_overview' : 'isometric_home';
+    highlightCatalogGlbPart(null, { viewId: v1.view_id || defaultVid });
+    reset3DCamera();
+    return;
+  }
+  if (v1.part_id) {
+    highlightCatalogGlbPart(v1.part_id, {
+      calloutTitle: v1.callout_title || '',
+      calloutBody: v1.callout_body || '',
+      viewId: v1.view_id || 'isometric_home',
+    });
+  } else if (v1.view_id) {
+    highlightCatalogGlbPart(null, { viewId: v1.view_id });
+  }
+}
+
+async function reportSceneReadyToBackend(generation, manifestSha, status = 'ready') {
+  try {
+    await fetch('/api/catalog/scene_ready', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scene_generation: generation,
+        manifest_sha256: manifestSha || '',
+        status,
+      }),
+    });
+  } catch (_e) {}
+}
+
+async function loadCatalogSceneFromDescriptor(descriptor, generation) {
+  const origin = descriptor?.scene_origin || 'bundled_parametric';
+  const manifestSha = descriptor?.context?.manifest_sha256 || '';
+  state.sceneOrigin = origin;
+  state.sceneGeneration = generation;
+
+  if (origin === 'bundled_parametric') {
+    clearCatalogGlbGroup();
+    if (cad.sensorRig) cad.sensorRig.visible = true;
+    if (dom.twinNo3dOverlay) dom.twinNo3dOverlay.hidden = true;
+    rebuildAssemblyPillsForBundled();
+    state.glbSceneReady = true;
+    if (dom.twinMatchBadge) {
+      dom.twinMatchBadge.textContent = 'PARAMETRIC CAD MODEL · 140.0×Ø16.0 MM';
+    }
+    reportSceneReadyToBackend(generation, manifestSha, 'ready');
+    return;
+  }
+
+  if (origin === 'docs_only_no_3d' || !descriptor?.twin?.glb_url) {
+    clearCatalogGlbGroup();
+    if (cad.sensorRig) cad.sensorRig.visible = false;
+    if (dom.twinNo3dOverlay) {
+      dom.twinNo3dOverlay.hidden = false;
+      if (dom.twinNo3dTitle) dom.twinNo3dTitle.textContent = '3D DIGITAL TWIN UNAVAILABLE FOR THIS VARIANT';
+      if (dom.twinNo3dBody) {
+        const reasons = (descriptor?.context?.reason_codes || []).join(', ');
+        dom.twinNo3dBody.textContent = reasons
+          ? `Verified manuals are active (${reasons}). Interactive 3D geometry is not included in this signed package.`
+          : 'Verified manuals and procedures are active in the manual drawer. Interactive 3D geometry is not included in this signed package.';
+      }
+    }
+    state.glbSceneReady = false;
+    if (dom.twinMatchBadge) {
+      dom.twinMatchBadge.textContent = 'DOCS-ONLY VERIFIED PACKAGE';
+    }
+    reportSceneReadyToBackend(generation, manifestSha, 'docs_only');
+    return;
+  }
+
+  if (!cad.scene) {
+    return;
+  }
+
+  state.glbSceneReady = false;
+  const twin = descriptor.twin;
+  const scaleMm = Number(twin.scale_to_studio_mm) || 1000.0;
+
+  // Strict local-only LoadingManager (`Section 5.3`, `M4-3D-02`): block any remote HTTP/HTTPS URI inside GLB!
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier((url) => {
+    const clean = String(url || '').trim().toLowerCase();
+    if (clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('//')) {
+      try {
+        const u = new URL(url, window.location.origin);
+        if (u.origin !== window.location.origin) {
+          throw new Error('Blocked external GLB sub-resource URI');
+        }
+      } catch (_e) {
+        return 'data:application/octet-stream;base64,';
+      }
+    }
+    return url;
+  });
+
+  const loader = new GLTFLoader(manager);
+  loader.load(
+    twin.glb_url,
+    (gltf) => {
+      // Generation fence (`M4-3D-03`): discard stale off-stage load if user switched variant again
+      if (generation !== state.sceneGeneration) {
+        disposeThreeSubtree(gltf.scene);
+        return;
+      }
+
+      const offstageRoot = gltf.scene;
+      offstageRoot.scale.set(scaleMm, scaleMm, scaleMm);
+      offstageRoot.rotation.y = Math.PI / 2;
+
+      const partNodes = {};
+      const partsMeta = {};
+      const partsList = Array.isArray(twin.parts) ? twin.parts : [];
+      for (const p of partsList) {
+        const nodeName = p.node_name || p.node_id;
+        const found = offstageRoot.getObjectByName(nodeName);
+        if (!found) {
+          disposeThreeSubtree(offstageRoot);
+          reportSceneReadyToBackend(generation, manifestSha, 'failed');
+          return;
+        }
+        found.traverse((ch) => {
+          if (ch.isMesh && ch.material) {
+            ch.material = ch.material.clone();
+            ch.castShadow = true;
+            ch.receiveShadow = true;
+          }
+        });
+        found.userData.partId = p.part_id;
+        found.userData.nodeName = nodeName;
+        found.userData.basePos = found.position.clone();
+        found.userData.scaleMm = scaleMm;
+        partNodes[p.part_id] = found;
+        partsMeta[p.part_id] = p;
+      }
+
+      clearCatalogGlbGroup();
+      if (cad.sensorRig) cad.sensorRig.visible = false;
+      if (dom.twinNo3dOverlay) dom.twinNo3dOverlay.hidden = true;
+
+      cad.catalogGlbGroup = offstageRoot;
+      cad.catalogPartNodes = partNodes;
+      cad.catalogPartsMeta = partsMeta;
+      cad.scene.add(offstageRoot);
+
+      if (dom.assemblyTreePills) {
+        dom.assemblyTreePills.innerHTML = '';
+        partsList.forEach((p, idx) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'part-chip';
+          btn.dataset.partId = p.part_id;
+          btn.textContent = `${idx + 1}. ${p.label || p.part_id}`;
+          btn.addEventListener('click', () =>
+            highlightCatalogGlbPart(p.part_id, {
+              calloutTitle: String(p.label || p.part_id).toUpperCase(),
+              calloutBody: p.summary || '',
+              viewId: p.part_id.includes('dip') ? 'open_dip' : p.part_id.includes('rear') ? 'rear_connector' : 'isometric_home',
+            })
+          );
+          dom.assemblyTreePills.appendChild(btn);
+        });
+      }
+
+      const dims = twin.reference_dimensions_mm || {};
+      if (dom.labelDimLength && dims.length) dom.labelDimLength.textContent = `${Number(dims.length).toFixed(1)} MM`;
+      if (dom.labelDimDia && dims.outer_diameter) dom.labelDimDia.textContent = `Ø${Number(dims.outer_diameter).toFixed(1)} MM`;
+      if (dom.twinMatchBadge) {
+        dom.twinMatchBadge.textContent = `VERIFIED GLB TWIN · SEQ #${descriptor?.context?.publication_seq || 1}`;
+      }
+
+      state.glbSceneReady = true;
+      reportSceneReadyToBackend(generation, manifestSha, 'ready');
+      if (state.pendingTwinActionV1) {
+        const queued = state.pendingTwinActionV1;
+        state.pendingTwinActionV1 = null;
+        applyTwinActionV1(queued);
+      }
+    },
+    undefined,
+    (_err) => {
+      if (generation !== state.sceneGeneration) return;
+      state.glbSceneReady = false;
+      if (dom.twinNo3dOverlay) {
+        dom.twinNo3dOverlay.hidden = false;
+        if (dom.twinNo3dTitle) dom.twinNo3dTitle.textContent = 'GLB SCENE FAILED INTEGRITY CHECK';
+        if (dom.twinNo3dBody) dom.twinNo3dBody.textContent = 'Preserving previous verified view and manual documentation.';
+      }
+      reportSceneReadyToBackend(generation, manifestSha, 'failed');
+    }
+  );
 }
 
 function setFaultHighlight(zoneId, reason = '') {
@@ -2776,27 +3161,187 @@ function renderManualSectionCallout(el, sectionInfo) {
   }
 }
 
+function getActiveManualDocument() {
+  if (Array.isArray(state.manualDocuments) && state.manualDocuments.length > 0) {
+    return (
+      state.manualDocuments.find((d) => d.document_id === state.activeDocumentId) || state.manualDocuments[0]
+    );
+  }
+  return null;
+}
+
+function applyCatalogDescriptor(descriptor, generation = null) {
+  if (!descriptor || typeof descriptor !== 'object') return;
+  state.activeCatalogDescriptor = descriptor;
+  state.selectedCatalogContext = descriptor.context || state.selectedCatalogContext;
+  state.cadExportsSupported = Array.isArray(descriptor.cad_exports_supported)
+    ? descriptor.cad_exports_supported
+    : ['dxf', 'stl', 'pdf', 'json'];
+
+  const ctx = descriptor.context || {};
+  if (dom.catalogOriginLabel) {
+    dom.catalogOriginLabel.textContent =
+      ctx.content_origin === 'catalog'
+        ? `Catalog · seq #${ctx.publication_seq || 1}`
+        : 'Bundled V1.1';
+  }
+  if (dom.sensorPillLabel && ctx.title) {
+    dom.sensorPillLabel.textContent =
+      ctx.content_origin === 'catalog'
+        ? `${ctx.product_id || 'Sensor'} · ${ctx.variant_id || ''}`
+        : 'TZ THT-02 · 140×Ø16 mm';
+  }
+
+  // Update CAD .DXF / .STL button availability (`M4-3D-05`)
+  const dxfOk = state.cadExportsSupported.includes('dxf');
+  const stlOk = state.cadExportsSupported.includes('stl');
+  if (dom.btnDownloadDxf) dom.btnDownloadDxf.classList.toggle('is-disabled', !dxfOk);
+  if (dom.btnDownloadStl) dom.btnDownloadStl.classList.toggle('is-disabled', !stlOk);
+
+  // Dynamic Multi-Document & 12+ Page Manual Setup (`M4-DOC-01..03`)
+  state.manualDocuments = Array.isArray(descriptor.documents) ? descriptor.documents : [];
+  if (state.manualDocuments.length > 0) {
+    state.activeDocumentId = state.manualDocuments[0].document_id;
+  }
+  if (dom.manualDocSelect) {
+    if (state.manualDocuments.length > 1) {
+      dom.manualDocSelect.hidden = false;
+      dom.manualDocSelect.innerHTML = '';
+      state.manualDocuments.forEach((doc) => {
+        const opt = document.createElement('option');
+        opt.value = doc.document_id;
+        opt.textContent = `${doc.title || doc.document_id} (${doc.page_count || 1}p)`;
+        dom.manualDocSelect.appendChild(opt);
+      });
+      dom.manualDocSelect.value = state.activeDocumentId;
+    } else {
+      dom.manualDocSelect.hidden = true;
+    }
+  }
+  rebuildManualQuickPillsForActiveDocument();
+  setManualPage(1);
+
+  const nextGen = generation != null ? Number(generation) : state.sceneGeneration + 1;
+  loadCatalogSceneFromDescriptor(descriptor, nextGen);
+}
+
+function rebuildManualQuickPillsForActiveDocument() {
+  if (!dom.manualQuickPills) return;
+  const doc = getActiveManualDocument();
+  if (!doc || state.sceneOrigin === 'bundled_parametric') {
+    const defaultLabels = [
+      [1, 'P1 Parts'],
+      [2, 'P2 SHT30'],
+      [3, 'P3 Cal/Specs'],
+      [4, 'P4 Wiring'],
+      [5, 'P5 DIP-8'],
+      [6, 'P6 Regs'],
+      [7, 'P7 0x03'],
+      [8, 'P8 0x06'],
+      [9, 'P9 140×16'],
+    ];
+    dom.manualQuickPills.innerHTML = '';
+    defaultLabels.forEach(([p, lbl]) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `page-pill${p === state.manualPage ? ' active' : ''}`;
+      btn.dataset.page = String(p);
+      btn.textContent = lbl;
+      btn.addEventListener('click', () => setManualPage(p));
+      dom.manualQuickPills.appendChild(btn);
+    });
+    return;
+  }
+
+  const pages = Array.isArray(doc.pages) ? doc.pages : [];
+  dom.manualQuickPills.innerHTML = '';
+  pages.forEach((pg) => {
+    const pnum = Number(pg.page) || 1;
+    const printed = pg.printed_page && String(pg.printed_page) !== String(pnum) ? ` (${pg.printed_page})` : '';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `page-pill${pnum === state.manualPage ? ' active' : ''}`;
+    btn.dataset.page = String(pnum);
+    btn.textContent = `P${pnum}${printed}`;
+    btn.addEventListener('click', () => setManualPage(pnum));
+    dom.manualQuickPills.appendChild(btn);
+  });
+}
+
 function setManualPage(
   pageNum,
-  { flash = false, expandDrawer = false, openLightbox = false, sectionInfo = null, scrollIntoView = false } = {}
+  {
+    flash = false,
+    expandDrawer = false,
+    openLightbox = false,
+    sectionInfo = null,
+    scrollIntoView = false,
+    documentId = null,
+  } = {}
 ) {
-  const page = Math.max(1, Math.min(9, Number(pageNum) || 1));
-  state.manualPage = page;
-  const imgUrl = `/assets/manual_pages/page_${page}.png`;
-  const caption = sectionInfo?.heading || MANUAL_PAGES[page] || `Page ${page} · TZ THT-02 Datasheet`;
+  if (documentId && Array.isArray(state.manualDocuments) && state.manualDocuments.some((d) => d.document_id === documentId)) {
+    if (state.activeDocumentId !== documentId) {
+      state.activeDocumentId = documentId;
+      if (dom.manualDocSelect) dom.manualDocSelect.value = documentId;
+      rebuildManualQuickPillsForActiveDocument();
+    }
+  }
 
-  dom.manualPageImg.src = imgUrl;
-  dom.manualPageImg.alt = `TZ THT-02 Technical Manual Page ${page}`;
-  dom.manualPageIndicator.textContent = `PAGE ${page} / 9`;
+  const activeDoc = getActiveManualDocument();
+  const isCatalogDoc = Boolean(activeDoc && state.sceneOrigin !== 'bundled_parametric');
+  const maxPage = isCatalogDoc ? Math.max(1, Number(activeDoc.page_count || activeDoc.pages?.length || 1)) : 9;
+  const page = Math.max(1, Math.min(maxPage, Number(pageNum) || 1));
+  state.manualPage = page;
+
+  let imgUrl = `/assets/manual_pages/page_${page}.png`;
+  let pdfFallbackUrl = null;
+  let caption = sectionInfo?.heading || MANUAL_PAGES[page] || `Page ${page} · TZ THT-02 Datasheet`;
+  let docTitle = "TZ THT-02 User's Manual V1.1";
+  let badgeStr = `${page} / ${maxPage}`;
+
+  if (isCatalogDoc) {
+    docTitle = `${activeDoc.title || activeDoc.document_id} (${activeDoc.revision || 'rev-1'})`;
+    const pgObj = (activeDoc.pages || []).find((p) => Number(p.page) === page) || {};
+    imgUrl = pgObj.image_url || sectionInfo?.image_url || null;
+    pdfFallbackUrl = pgObj.pdf_fallback_url || sectionInfo?.pdf_fallback_url || activeDoc.pdf_url || null;
+    const printedNote =
+      pgObj.printed_page && String(pgObj.printed_page) !== String(page) ? ` [Printed ${pgObj.printed_page}]` : '';
+    badgeStr = `${page}${printedNote} / ${maxPage}`;
+    caption = sectionInfo?.heading || `${pgObj.title || `Page ${page}`}${printedNote}`;
+  }
+
+  if (imgUrl) {
+    dom.manualPageImg.hidden = false;
+    dom.manualPageImg.src = imgUrl;
+    dom.manualPageImg.alt = `${docTitle} Page ${page}`;
+    if (dom.manualPdfFallbackFrame) dom.manualPdfFallbackFrame.hidden = true;
+
+    dom.lightboxImg.hidden = false;
+    dom.lightboxImg.src = imgUrl;
+    if (dom.lightboxPdfFallbackFrame) dom.lightboxPdfFallbackFrame.hidden = true;
+  } else if (pdfFallbackUrl) {
+    // Graceful PDF viewer fallback when rasterized page PNG is absent (`M4-DOC-02`)
+    dom.manualPageImg.hidden = true;
+    if (dom.manualPdfFallbackFrame) {
+      dom.manualPdfFallbackFrame.hidden = false;
+      dom.manualPdfFallbackFrame.src = pdfFallbackUrl;
+    }
+    dom.lightboxImg.hidden = true;
+    if (dom.lightboxPdfFallbackFrame) {
+      dom.lightboxPdfFallbackFrame.hidden = false;
+      dom.lightboxPdfFallbackFrame.src = pdfFallbackUrl;
+    }
+  }
+
+  dom.manualPageIndicator.textContent = `PAGE ${badgeStr}`;
   dom.manualPageCaption.textContent = caption;
 
   dom.manualQuickPills.querySelectorAll('.page-pill').forEach((pill) => {
     pill.classList.toggle('active', Number(pill.dataset.page) === page);
   });
 
-  dom.lightboxImg.src = imgUrl;
-  dom.lightboxPageBadge.textContent = `${page} / 9`;
-  dom.lightboxTitle.textContent = `TZ THT-02 User's Manual V1.1 — ${caption}`;
+  dom.lightboxPageBadge.textContent = badgeStr;
+  dom.lightboxTitle.textContent = `${docTitle} — ${caption}`;
 
   renderManualSectionCallout(dom.manualSectionBanner, sectionInfo);
   renderManualSectionCallout(dom.lightboxSectionBanner, sectionInfo);
@@ -3860,7 +4405,13 @@ function handleCopilotResponse(res) {
     selectZone(zone, { flipManual: false, zoomCamera: true });
   }
 
-  if (res.twin_action && typeof res.twin_action === 'object') {
+  if (res.catalog_descriptor && typeof res.catalog_descriptor === 'object') {
+    applyCatalogDescriptor(res.catalog_descriptor, res.scene_generation);
+  }
+
+  if (res.twin_action_v1 && typeof res.twin_action_v1 === 'object' && state.sceneOrigin === 'catalog_glb') {
+    applyTwinActionV1(res.twin_action_v1);
+  } else if (res.twin_action && typeof res.twin_action === 'object') {
     applyTwinAction(res.twin_action);
   } else {
     const shouldFocusDip = Boolean(res.focus_dip || res.explode_pcb === true || zone === 'upper_barrel_dip');
@@ -3895,6 +4446,7 @@ function handleCopilotResponse(res) {
       openLightbox: Boolean(res.open_manual_lightbox),
       sectionInfo: res.manual_section || null,
       scrollIntoView: Boolean(res.open_manual),
+      documentId: res.document_id || res.manual_section?.document_id || null,
     });
   }
 
@@ -3919,7 +4471,7 @@ function handleCopilotResponse(res) {
     populateEscalationModal(res.signoff_package);
   }
 
-  if (state.autoSpeak && !window.FIELDSCAN_IOS_NATIVE) {
+  if (state.autoSpeak && !isEmbeddedIosLoopbackHost()) {
     playDiagnosisAudio(audioB64, answerText);
   }
 }
@@ -4047,6 +4599,9 @@ async function submitDiagnosisQuery(queryText, { includeCamera = true, zoneHint 
         zone: zoneHint,
         dip_address: computeDipAddress(),
         dip_bits: state.dipBits,
+        session_id: state.activeSessionId,
+        manifest_sha256: state.selectedCatalogContext?.manifest_sha256 || null,
+        scene_generation: state.sceneGeneration,
       }),
     });
     handleCopilotResponse(res);
@@ -4233,6 +4788,12 @@ function syncMicDeckIdleUi() {
   }
 }
 
+function isEmbeddedIosLoopbackHost() {
+  if (window.FIELDSCAN_IOS_NATIVE !== true) return false;
+  const h = String(window.location.hostname || '').toLowerCase();
+  return !h || h === '127.0.0.1' || h === 'localhost' || window.location.protocol === 'file:';
+}
+
 async function fetchNativeVoiceWithTimeout(url, options = {}, timeoutMs = 2200) {
   const ctrl = new AbortController();
   const timerId = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -4347,7 +4908,7 @@ async function toggleHandsFreeMode() {
     stopVoiceRecording();
   }
 
-  if (window.FIELDSCAN_IOS_NATIVE === true || !navigator.mediaDevices?.getUserMedia) {
+  if (isEmbeddedIosLoopbackHost() || !navigator.mediaDevices?.getUserMedia) {
     const ok = await startNativeIosHandsFreeMode();
     if (!ok) {
       appendChatMessage({
@@ -4569,7 +5130,7 @@ function disableHandsFreeMode() {
     nativeHfPollTimer = null;
   }
   nativeHfPollInFlight = false;
-  if (wasNativeHandsFree || window.FIELDSCAN_IOS_NATIVE === true) {
+  if (wasNativeHandsFree || isEmbeddedIosLoopbackHost()) {
     fetchNativeVoiceWithTimeout('/api/voice/handsfree_stop', { method: 'POST' }, 1500).catch(() => {});
   }
   hfSpeechActive = false;
@@ -4734,7 +5295,7 @@ async function toggleVoiceRecording() {
 
   stopActiveTtsPlayback();
 
-  if (window.FIELDSCAN_IOS_NATIVE || !navigator.mediaDevices?.getUserMedia) {
+  if (isEmbeddedIosLoopbackHost() || !navigator.mediaDevices?.getUserMedia) {
     const ok = await startNativeIosMicRecording();
     if (!ok) {
       appendChatMessage({
@@ -5584,8 +6145,16 @@ function bindWorkstationEvents() {
     if (e.target === dom.manualModal) dom.manualModal.hidden = true;
   });
 
-  // CAD & Sign-Off Footer Buttons
+  // CAD & Sign-Off Footer Buttons (`M4-3D-05` guard for catalog GLB variants)
   dom.btnDownloadDxf.addEventListener('click', async () => {
+    if (!state.cadExportsSupported.includes('dxf')) {
+      appendChatMessage({
+        role: 'assistant',
+        author: 'CAD EXPORT GUARD',
+        text: 'Parametric AutoCAD .DXF generation is supported only for the bundled TZ THT-02 engineering model. Export the Maintenance PDF + JSON Dossier for this catalog variant.',
+      });
+      return;
+    }
     if (state.lastEscalation?.dxf_url || state.lastEscalation?.files?.dxf) {
       window.open(state.lastEscalation.dxf_url || state.lastEscalation.files.dxf, '_blank');
       return;
@@ -5612,12 +6181,28 @@ function bindWorkstationEvents() {
   });
 
   dom.btnDownloadStl.addEventListener('click', () => {
+    if (!state.cadExportsSupported.includes('stl')) {
+      appendChatMessage({
+        role: 'assistant',
+        author: 'CAD EXPORT GUARD',
+        text: 'Parametric Binary .STL export is supported only for the bundled TZ THT-02 engineering model. Export the Maintenance PDF + JSON Dossier for this catalog variant.',
+      });
+      return;
+    }
     if (state.lastEscalation?.stl_url || state.lastEscalation?.files?.stl) {
       window.location.href = state.lastEscalation.stl_url || state.lastEscalation.files.stl;
       return;
     }
     exportClientBinaryStl();
   });
+
+  if (dom.manualDocSelect) {
+    dom.manualDocSelect.addEventListener('change', (e) => {
+      setManualPage(1, { documentId: e.target.value, expandDrawer: true });
+    });
+  }
+
+  bindCatalogModalEvents();
 
   dom.btnOpenEscalateModal.addEventListener('click', generateAndOpenEscalationPackage);
   dom.escalationCloseBtn.addEventListener('click', () => {
@@ -5788,7 +6373,7 @@ function bindWorkstationEvents() {
           text: `Generated ${manifest.export_profile} dossier (partial=${manifest.partial_report}, changes=${manifest.confirmed_changes_count ?? 0}): PDF (${manifest.pdf_url}) & JSON (${manifest.json_url}).`,
         });
         if (manifest.pdf_url) {
-          if (window.FIELDSCAN_IOS_NATIVE && window.fieldscanNativeBridge?.shareExportedFile) {
+          if (isEmbeddedIosLoopbackHost() && window.fieldscanNativeBridge?.shareExportedFile) {
             const pdfName = manifest.pdf_url.split('/').pop();
             window.fieldscanNativeBridge.shareExportedFile(pdfName, '', 'application/pdf');
           } else {
@@ -5810,7 +6395,326 @@ function bindWorkstationEvents() {
       dom.manualModal.hidden = true;
       dom.escalationModal.hidden = true;
       if (dom.calibrationPlannedModal) dom.calibrationPlannedModal.hidden = true;
+      if (dom.catalogModal) dom.catalogModal.hidden = true;
     }
+  });
+}
+
+async function refreshCatalogModalState() {
+  try {
+    const [st, pkgsRes] = await Promise.all([
+      fetchJsonWithFallback(['/api/catalog/status']),
+      fetchJsonWithFallback(['/api/catalog/packages']),
+    ]);
+    const sync = st?.sync || {};
+    if (dom.toggleCloudSync) dom.toggleCloudSync.checked = Boolean(sync.sync_enabled);
+    if (dom.inputCloudEndpoint && sync.configured_endpoint && !dom.inputCloudEndpoint.value) {
+      dom.inputCloudEndpoint.value = sync.configured_endpoint;
+    }
+    if (dom.catalogEgressBadge) {
+      dom.catalogEgressBadge.textContent = sync.sync_enabled
+        ? `HTTPS Cloud Authorized · ${sync.https_requests_emitted || 0} HTTPS reqs`
+        : `Strict Local Only · ${sync.https_requests_emitted || 0} HTTPS reqs`;
+    }
+    if (dom.catalogUpdateDot) {
+      dom.catalogUpdateDot.hidden = !st?.update_ready_for_next_session;
+    }
+    if (dom.catalogSessionPinNotice) {
+      if (st?.update_ready_for_next_session && st?.pinned_session_context) {
+        dom.catalogSessionPinNotice.hidden = false;
+        dom.catalogSessionPinNotice.textContent = `Open session remains pinned to publication seq #${st.pinned_session_context.publication_seq}. Newer package will apply on the next session.`;
+      } else {
+        dom.catalogSessionPinNotice.hidden = true;
+      }
+    }
+
+    const selSha = st?.selected_context?.manifest_sha256 || '';
+    const pkgs = Array.isArray(pkgsRes?.packages) ? pkgsRes.packages : [];
+    if (dom.catalogPackagesList) {
+      dom.catalogPackagesList.innerHTML = '';
+      if (pkgs.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'catalog-pkg-meta';
+        empty.textContent = 'No external catalog packages installed yet. Bundled TZ THT-02 V1.1 is active.';
+        dom.catalogPackagesList.appendChild(empty);
+      } else {
+        pkgs.forEach((p) => {
+          const card = document.createElement('div');
+          const isSel = p.manifest_sha256 === selSha;
+          card.className = `catalog-pkg-card${isSel ? ' is-selected' : ''}`;
+
+          const head = document.createElement('div');
+          head.className = 'catalog-pkg-head';
+          const titleEl = document.createElement('strong');
+          titleEl.textContent = `${p.title || p.product_id} (seq #${p.publication_seq})`;
+          const actBtn = document.createElement('button');
+          actBtn.type = 'button';
+          actBtn.className = 'chip-btn';
+          actBtn.textContent = isSel ? 'Selected' : 'Select for Next Session';
+          actBtn.addEventListener('click', async () => {
+            await selectCatalogPackage(p.manifest_sha256);
+          });
+          head.appendChild(titleEl);
+          head.appendChild(actBtn);
+
+          const meta = document.createElement('div');
+          meta.className = 'catalog-pkg-meta';
+          const caps = p.capabilities || {};
+          const capTags = [
+            caps.documentation ? 'Docs' : null,
+            caps.interactive_twin ? '3D GLB' : 'No 3D',
+            caps.procedures ? 'Procedures' : null,
+            p.bench_modbus_homologated ? 'Modbus Homologated' : 'Ref-Only (Bus Locked)',
+          ]
+            .filter(Boolean)
+            .join(' · ');
+          meta.textContent = `${p.product_id}/${p.variant_id} · ${capTags} · sha256:${String(p.manifest_sha256 || '').slice(0, 12)}...`;
+
+          card.appendChild(head);
+          card.appendChild(meta);
+          dom.catalogPackagesList.appendChild(card);
+        });
+      }
+    }
+  } catch (_e) {}
+}
+
+async function selectCatalogPackage(manifestSha) {
+  try {
+    const res = await fetchJsonWithFallback(['/api/catalog/select'], {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ manifest_sha256: manifestSha || 'bundle' }),
+    });
+    if (res?.catalog_descriptor) {
+      // Only switch live HMI scene immediately if no open session is pinned to another package (`M4-SESSION-01`)
+      if (!state.activeSessionId) {
+        applyCatalogDescriptor(res.catalog_descriptor, res.scene_generation);
+      } else {
+        state.selectedCatalogContext = res.selected_context;
+      }
+    }
+    await refreshCatalogModalState();
+  } catch (err) {
+    if (dom.catalogCloudResultBox) {
+      dom.catalogCloudResultBox.textContent = `Selection error: ${err.message || err}`;
+    }
+  }
+}
+
+function bindCatalogModalEvents() {
+  if (!dom.catalogModal) return;
+
+  dom.btnOpenCatalogModal?.addEventListener('click', async () => {
+    dom.catalogModal.hidden = false;
+    await refreshCatalogModalState();
+  });
+  dom.catalogCloseBtn?.addEventListener('click', () => {
+    dom.catalogModal.hidden = true;
+  });
+  dom.catalogModal.addEventListener('click', (e) => {
+    if (e.target === dom.catalogModal) dom.catalogModal.hidden = true;
+  });
+
+  dom.btnResetBundledContext?.addEventListener('click', async () => {
+    state.activeSessionId = null;
+    await selectCatalogPackage('bundle');
+  });
+
+  dom.toggleCloudSync?.addEventListener('change', async (e) => {
+    const enabled = Boolean(e.target.checked);
+    try {
+      await fetchJsonWithFallback(['/api/catalog/sync_config'], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base_url: dom.inputCloudEndpoint?.value?.trim() || '',
+          sync_enabled: enabled,
+        }),
+      });
+      await refreshCatalogModalState();
+    } catch (err) {
+      e.target.checked = false;
+      if (dom.catalogCloudResultBox) {
+        dom.catalogCloudResultBox.textContent = `Cannot enable Cloud Sync: ${err.message || err}`;
+      }
+    }
+  });
+
+  dom.btnSaveSyncConfig?.addEventListener('click', async () => {
+    try {
+      const tokenVal = dom.inputCloudToken?.value || null;
+      const boatVal = dom.inputBoatPortToken?.value || null;
+      await fetchJsonWithFallback(['/api/catalog/sync_config'], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base_url: dom.inputCloudEndpoint?.value?.trim() || '',
+          sync_enabled: Boolean(dom.toggleCloudSync?.checked),
+          auth_token: tokenVal || undefined,
+          boat_port_auth_token: boatVal || undefined,
+        }),
+      });
+      if (dom.inputCloudToken) dom.inputCloudToken.value = '';
+      if (dom.inputBoatPortToken) dom.inputBoatPortToken.value = '';
+      if (dom.catalogCloudResultBox) {
+        dom.catalogCloudResultBox.textContent = 'Saved Cloud Catalog endpoint configuration.';
+      }
+      await refreshCatalogModalState();
+    } catch (err) {
+      if (dom.catalogCloudResultBox) {
+        dom.catalogCloudResultBox.textContent = `Configuration error: ${err.message || err}`;
+      }
+    }
+  });
+
+  dom.btnCheckCloudHealth?.addEventListener('click', async () => {
+    try {
+      const h = await fetchJsonWithFallback(['/api/catalog/healthz']);
+      if (dom.catalogCloudResultBox) {
+        dom.catalogCloudResultBox.textContent = h.ok
+          ? `Cloud Catalog healthy (${h.status}).`
+          : `Cloud Catalog check: ${h.error_code || 'UNREACHABLE'} — ${h.message || ''}`;
+      }
+      await refreshCatalogModalState();
+    } catch (err) {
+      if (dom.catalogCloudResultBox) {
+        dom.catalogCloudResultBox.textContent = `Health check failed: ${err.message || err}`;
+      }
+    }
+  });
+
+  dom.btnImportSignedPackage?.addEventListener('click', () => {
+    if (isEmbeddedIosLoopbackHost() && window.fieldscanNativeBridge?.presentPackageImporter) {
+      window.fieldscanNativeBridge.presentPackageImporter();
+      return;
+    }
+    dom.packageZipInput?.click();
+  });
+
+  dom.packageZipInput?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const res = await fetch('/api/catalog/import', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok || data.error_code) {
+        if (dom.catalogCloudResultBox) {
+          dom.catalogCloudResultBox.textContent = `Package rejected (${data.error_code}): ${data.message}`;
+        }
+      } else {
+        if (dom.catalogCloudResultBox) {
+          dom.catalogCloudResultBox.textContent = `Verified & installed Ed25519 package ${data.package.product_id}/${data.package.variant_id} (seq #${data.package.publication_seq}).`;
+        }
+        await refreshCatalogModalState();
+      }
+    } catch (err) {
+      if (dom.catalogCloudResultBox) {
+        dom.catalogCloudResultBox.textContent = `Import failed: ${err.message || err}`;
+      }
+    }
+    e.target.value = '';
+  });
+
+  window.addEventListener('fieldscan:packageImported', async (ev) => {
+    const detail = ev.detail || {};
+    if (dom.catalogCloudResultBox) {
+      dom.catalogCloudResultBox.textContent = detail.ok
+        ? `Verified & installed Ed25519 package ${detail.package?.product_id}/${detail.package?.variant_id} (seq #${detail.package?.publication_seq}).`
+        : `Package rejected (${detail.error_code || 'ERROR'}): ${detail.message || ''}`;
+    }
+    await refreshCatalogModalState();
+  });
+
+  dom.catalogResolveForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const manufacturer = dom.inputResolveMfg?.value?.trim() || null;
+    const model = dom.inputResolveModel?.value?.trim() || '';
+    const variant = dom.inputResolveVariant?.value?.trim() || null;
+    if (!model) return;
+    if (dom.catalogCloudResultBox) dom.catalogCloudResultBox.textContent = 'Querying FieldScan Cloud Catalog...';
+    try {
+      const resp = await fetch('/api/catalog/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manufacturer, model, variant }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.error_code) {
+        dom.catalogCloudResultBox.textContent = `${data.error_code || 'ERROR'}: ${data.message || 'Lookup blocked'}`;
+        return;
+      }
+      renderCloudResolveResult(data);
+      await refreshCatalogModalState();
+    } catch (err) {
+      if (dom.catalogCloudResultBox) {
+        dom.catalogCloudResultBox.textContent = `Cloud lookup failed: ${err.message || err}`;
+      }
+    }
+  });
+}
+
+function renderCloudResolveResult(data) {
+  if (!dom.catalogCloudResultBox) return;
+  dom.catalogCloudResultBox.innerHTML = '';
+
+  const summary = document.createElement('div');
+  const st = data.job_state || data.availability || 'ready';
+  const availPart = data.availability && data.availability !== st ? ` · Availability: ${data.availability}` : '';
+  const reasonsPart = Array.isArray(data.reason_codes) && data.reason_codes.length > 0 ? ` · ${data.reason_codes.join(', ')}` : '';
+  summary.textContent = `Status: ${st}${availPart}${data.job_id ? ` · Job ${data.job_id}` : ''}${reasonsPart}`;
+  dom.catalogCloudResultBox.appendChild(summary);
+
+  if (data.job_id && (data.job_state === 'queued' || data.job_state === 'running')) {
+    const pollBtn = document.createElement('button');
+    pollBtn.type = 'button';
+    pollBtn.className = 'chip-btn';
+    pollBtn.textContent = 'Refresh Job Status';
+    pollBtn.addEventListener('click', async () => {
+      const r = await fetch(`/api/catalog/jobs/${encodeURIComponent(data.job_id)}`);
+      const j = await r.json();
+      renderCloudResolveResult(j);
+    });
+    dom.catalogCloudResultBox.appendChild(pollBtn);
+  }
+
+  const directPid = data.product_id || data.identity?.product_id || data.cached_publication?.product_id;
+  const directVid = data.variant_id || data.identity?.variant_id || data.cached_publication?.variant_id;
+  const cands = Array.isArray(data.candidates) && data.candidates.length > 0
+    ? data.candidates
+    : directPid && directVid
+      ? [{ ...data, product_id: directPid, variant_id: directVid }]
+      : [];
+  cands.forEach((c) => {
+    const row = document.createElement('div');
+    row.className = 'catalog-pkg-head';
+    const label = document.createElement('span');
+    label.textContent = `${c.title || c.display_name || `${c.product_id}/${c.variant_id}`} ${c.discriminant_hint ? `— ${c.discriminant_hint}` : ''}`;
+    const dlBtn = document.createElement('button');
+    dlBtn.type = 'button';
+    dlBtn.className = 'chip-btn chip-btn-cv active';
+    dlBtn.textContent = 'Download & Verify';
+    dlBtn.addEventListener('click', async () => {
+      dlBtn.disabled = true;
+      dlBtn.textContent = 'Verifying...';
+      const ir = await fetch('/api/catalog/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_id: c.product_id, variant_id: c.variant_id }),
+      });
+      const idata = await ir.json();
+      if (!ir.ok || idata.error_code) {
+        dom.catalogCloudResultBox.textContent = `Install failed (${idata.error_code}): ${idata.message}`;
+      } else {
+        dom.catalogCloudResultBox.textContent = `Installed ${c.product_id}/${c.variant_id} (${idata.status}).`;
+        await refreshCatalogModalState();
+      }
+    });
+    row.appendChild(label);
+    row.appendChild(dlBtn);
+    dom.catalogCloudResultBox.appendChild(row);
   });
 }
 
@@ -5818,19 +6722,33 @@ async function ensureActiveWorkSession() {
   if (state.activeSessionId) return state.activeSessionId;
   try {
     const mode = dom.selectModbusMode?.value || 'auto';
+    const selCtx = state.selectedCatalogContext;
+    const reqBody = {
+      profile_id: selCtx?.local_profile_id || 'tzone_tht02',
+      transport_mode: mode,
+      simulation: mode.startsWith('sim_'),
+    };
+    if (selCtx && selCtx.content_origin === 'catalog' && selCtx.manifest_sha256) {
+      reqBody.catalog_context = selCtx;
+      reqBody.manifest_sha256 = selCtx.manifest_sha256;
+    }
     const created = await fetchJsonWithFallback(['/api/sessions'], {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        profile_id: 'tzone_tht02',
-        transport_mode: mode,
-        simulation: mode.startsWith('sim_'),
-      }),
+      body: JSON.stringify(reqBody),
     });
     if (created?.session_id) {
       state.activeSessionId = created.session_id;
       const count = created?.state?.confirmed_changes?.length || 0;
       if (dom.confirmChangeLabel) dom.confirmChangeLabel.textContent = `Confirm Change (${count})`;
+      if (created?.revocation_banner) {
+        appendChatMessage({
+          role: 'assistant',
+          author: 'CATALOG SAFETY NOTICE',
+          text: created.revocation_banner,
+          isFault: true,
+        });
+      }
     }
   } catch (_e) {}
   return state.activeSessionId;

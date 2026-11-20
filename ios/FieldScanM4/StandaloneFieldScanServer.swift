@@ -191,6 +191,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
     private var activeModbusMode: String = "auto"
     private var targetSlaveId: Int = 1
+    private var simulatedVisualDipAddress: Int = 1
+    private var activeSceneGeneration: Int = 1
+    private var latestSceneReadyTurn: [String: Any] = [:]
     private var activeBaudBps: Int = 9600
     private var modbusPollSequence: Int = 0
     private var breathTestStartTime: TimeInterval = 0
@@ -444,7 +447,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             params.allowLocalEndpointReuse = true
 
             guard let port = NWEndpoint.Port(rawValue: listenPort) else { return }
-            let nwListener = try NWListener(using: params, on: port)
+            // Bind strictly to loopback `127.0.0.1:8088` so no external LAN interface can reach the embedded server (`[G30]`, `M4-BASE-01`)
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: port)
+            let nwListener = try NWListener(using: params)
 
             nwListener.stateUpdateHandler = { [weak self] newState in
                 switch newState {
@@ -533,7 +538,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
                 let expectedBodyLength = Int(headers["content-length"] ?? "0") ?? 0
                 let currentBodyLength = buffer.count - bodyStart
-                if currentBodyLength < expectedBodyLength && !isComplete && error == nil && buffer.count < 16_777_216 {
+                if currentBodyLength < expectedBodyLength && !isComplete && error == nil && buffer.count < 136_314_880 {
                     self.receiveHTTPRequest(on: connection, accumulated: buffer)
                     return
                 }
@@ -558,7 +563,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 return
             }
 
-            if isComplete || error != nil || buffer.count > 16_777_216 {
+            if isComplete || error != nil || buffer.count > 136_314_880 {
                 connection.cancel()
                 return
             }
@@ -628,22 +633,27 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             return
         }
 
-        // 5. Airplane / Offline Socket Guard Verification
+        // 5. Airplane / Offline Socket Guard Verification (`M4-BASE-01..03`)
         if path == "/api/offline/verify" || path == "/api/airplane/verify" {
-            var status = buildUnifiedStatus()
-            status["offline_verified"] = true
-            status["guard_active"] = true
-            status["external_egress_blocked"] = true
-            status["blocked_external_attempts"] = 0
+            let status = buildUnifiedStatus()
             sendJSONResponse(on: connection, statusCode: 200, payload: status)
             return
         }
 
-        // 6. Sensor Specification & PDF Metadata (`GET /api/spec`)
+        // 6. Sensor Specification, Multi-Doc Manual & 3D Scene Descriptor (`GET /api/spec`)
         if req.method == "GET" && path == "/api/spec" {
+            let ctx = resolveEffectiveContext(
+                sessionId: req.queryItems["session_id"],
+                manifestSha: req.queryItems["manifest_sha256"]
+            )
             let spec = loadTHT02Spec()
+            let descriptor = (try? FieldScanPackageStore.shared.buildSceneAndManualDescriptor(context: ctx)) ?? [:]
+            let sensorIdOut = ctx.productId == "tzone_tht02" ? "TZ-THT-02" : ctx.productId.uppercased()
             let payload: [String: Any] = [
-                "sensor_id": "TZ-THT-02",
+                "sensor_id": sensorIdOut,
+                "active_context": ctx.toDictionary(),
+                "catalog_descriptor": descriptor,
+                "cad_exports_supported": descriptor["cad_exports_supported"] ?? ["dxf", "stl", "pdf", "json"],
                 "spec": spec,
                 "pdf_document": buildPDFDocumentMetadata(),
                 "camera_modes": [
@@ -661,13 +671,13 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             return
         }
 
-        // 7. Sensor Datasheet Matcher (`POST /api/sensor/load`)
+        // 7. Strict Context-Aware Sensor & Variant Resolver (`POST /api/sensor/load`, `M4-ID-01..02`)
         if req.method == "POST" && path == "/api/sensor/load" {
             let bodyJSON = parseJSONBody(req.body)
             let rawQuery = (bodyJSON["query"] as? String)
                 ?? (bodyJSON["sensor_query"] as? String)
                 ?? (bodyJSON["sensor_id"] as? String)
-                ?? "TZ THT-02"
+                ?? ""
             let response = handleSensorLoad(query: rawQuery)
             sendJSONResponse(on: connection, statusCode: 200, payload: response)
             return
@@ -718,11 +728,62 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         if req.method == "POST" && path == "/api/modbus/mode" {
             let bodyJSON = parseJSONBody(req.body)
             let mode = (bodyJSON["mode"] as? String) ?? "auto"
+            let effCtx = resolveEffectiveContext(sessionId: bodyJSON["session_id"] as? String, manifestSha: nil)
+            if !mode.lowercased().hasPrefix("sim_") && mode.lowercased() != "auto" && !effCtx.benchModbusHomologated {
+                sendJSONResponse(on: connection, statusCode: 409, payload: [
+                    "ok": false,
+                    "error_code": "PROFILE_NOT_HOMOLOGATED_FOR_BUS",
+                    "message": "Active profile '\(effCtx.productId)/\(effCtx.variantId)' is a catalog reference package without bench Modbus homologation; hardware bus polling is inhibited.",
+                ])
+                return
+            }
             let slaveId = intFromAny(bodyJSON["target_slave_id"] ?? bodyJSON["slave_id"])
             let baudBps = intFromAny(bodyJSON["baud_bps"])
             setModbusMode(mode: mode, slaveId: slaveId, baudBps: baudBps)
             evaluateLiveReactiveWatch()
             sendJSONResponse(on: connection, statusCode: 200, payload: buildUnifiedStatus())
+            return
+        }
+
+        if req.method == "POST" && path == "/api/modbus/target_slave" {
+            let bodyJSON = parseJSONBody(req.body)
+            let confirmed = boolFromAny(bodyJSON["confirmed"], defaultValue: false)
+            guard confirmed else {
+                sendJSONResponse(on: connection, statusCode: 400, payload: [
+                    "ok": false,
+                    "error_code": "CONFIRMATION_REQUIRED",
+                    "message": "Changing the authorized Modbus polling target requires explicit confirmed=true.",
+                ])
+                return
+            }
+            guard let sid = intFromAny(bodyJSON["slave_id"] ?? bodyJSON["target_slave_id"]), (1...247).contains(sid) else {
+                sendJSONResponse(on: connection, statusCode: 400, payload: [
+                    "ok": false,
+                    "error_code": "INVALID_SLAVE_ID",
+                    "message": "Modbus Slave ID must be in 1..247.",
+                ])
+                return
+            }
+            let effCtx = resolveEffectiveContext(sessionId: bodyJSON["session_id"] as? String, manifestSha: nil)
+            guard effCtx.benchModbusHomologated else {
+                sendJSONResponse(on: connection, statusCode: 409, payload: [
+                    "ok": false,
+                    "error_code": "PROFILE_NOT_HOMOLOGATED_FOR_BUS",
+                    "message": "Profile '\(effCtx.productId)/\(effCtx.variantId)' is not homologated for Modbus register polling.",
+                ])
+                return
+            }
+            stateLock.lock()
+            targetSlaveId = sid
+            simulatedVisualDipAddress = sid
+            stateLock.unlock()
+            stepModbusTelemetryOnce(forceImmediateTCPPoll: false)
+            sendJSONResponse(on: connection, statusCode: 200, payload: [
+                "ok": true,
+                "target_slave_id": sid,
+                "simulated_visual_dip_address": sid,
+                "modbus": getModbusTelemetry(),
+            ])
             return
         }
 
@@ -758,6 +819,15 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
         if req.method == "POST" && path == "/api/modbus/poll" {
             let bodyJSON = parseJSONBody(req.body)
+            let effCtx = resolveEffectiveContext(sessionId: bodyJSON["session_id"] as? String, manifestSha: nil)
+            if !effCtx.benchModbusHomologated {
+                sendJSONResponse(on: connection, statusCode: 409, payload: [
+                    "ok": false,
+                    "error_code": "PROFILE_NOT_HOMOLOGATED_FOR_BUS",
+                    "message": "Active profile '\(effCtx.productId)/\(effCtx.variantId)' is not homologated for TZONE Modbus register polling.",
+                ])
+                return
+            }
             if let sid = intFromAny(bodyJSON["slave_id"] ?? bodyJSON["unit_id"]), (1...247).contains(sid) {
                 stateLock.lock()
                 targetSlaveId = sid
@@ -962,11 +1032,23 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             return
         }
 
+        // 16b. Signed Cloud & Installed Catalog Routes (`/api/catalog/...`, `/api/export/dxf|stl`)
+        if path.hasPrefix("/api/catalog/") || path == "/api/export/dxf" || path == "/api/export/stl" {
+            handleCatalogOrCADExportRoute(req, on: connection)
+            return
+        }
+
         // 17. Static File Serving (`/`, `/static/...`, `/assets/...`, `/knowledge/...`, `/exports/...`, `/outbox/...`)
         if req.method == "GET" || req.method == "HEAD" {
             if let (fileData, mimeType) = resolveStaticOrExportedFile(path: path) {
                 let bodyToSend = req.method == "HEAD" ? Data() : fileData
-                sendHTTPResponse(on: connection, statusCode: 200, contentType: mimeType, body: bodyToSend)
+                sendHTTPResponse(
+                    on: connection,
+                    statusCode: 200,
+                    contentType: mimeType,
+                    body: bodyToSend,
+                    extraHeaders: ["Content-Length": "\(fileData.count)"]
+                )
                 return
             }
         }
@@ -996,26 +1078,36 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let statusText: String
         switch statusCode {
         case 200: statusText = "OK"
+        case 202: statusText = "Accepted"
         case 204: statusText = "No Content"
+        case 206: statusText = "Partial Content"
+        case 304: statusText = "Not Modified"
         case 400: statusText = "Bad Request"
+        case 401: statusText = "Unauthorized"
+        case 403: statusText = "Forbidden"
         case 404: statusText = "Not Found"
         case 409: statusText = "Conflict"
+        case 410: statusText = "Gone"
+        case 416: statusText = "Range Not Satisfiable"
+        case 429: statusText = "Too Many Requests"
         case 500: statusText = "Internal Server Error"
+        case 503: statusText = "Service Unavailable"
         case 507: statusText = "Insufficient Storage"
         default: statusText = "OK"
         }
 
+        let explicitContentLen = extraHeaders["Content-Length"] ?? "\(body.count)"
         var headerLines = [
             "HTTP/1.1 \(statusCode) \(statusText)",
             "Content-Type: \(contentType)",
-            "Content-Length: \(body.count)",
+            "Content-Length: \(explicitContentLen)",
             "Cache-Control: no-store, no-cache, must-revalidate, max-age=0",
             "Access-Control-Allow-Origin: *",
-            "Access-Control-Allow-Methods: GET, POST, OPTIONS",
+            "Access-Control-Allow-Methods: GET, HEAD, POST, OPTIONS",
             "Access-Control-Allow-Headers: *",
             "Connection: close",
         ]
-        for (k, v) in extraHeaders {
+        for (k, v) in extraHeaders where k.lowercased() != "content-length" {
             headerLines.append("\(k): \(v)")
         }
         let headerBlock = headerLines.joined(separator: "\r\n") + "\r\n\r\n"
@@ -1146,6 +1238,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         case "png": return "image/png"
         case "jpg", "jpeg": return "image/jpeg"
         case "pdf": return "application/pdf"
+        case "glb": return "model/gltf-binary"
         case "dxf": return "application/dxf"
         case "stl": return "application/sla"
         case "eml": return "message/rfc822"
@@ -1926,6 +2019,20 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "exposure_ok": liveAnalysis?.exposureOk ?? true,
             "white_sticker_occluded": liveAnalysis?.whiteStickerOccluded ?? false,
         ]
+        let effCamCtx = resolveEffectiveContext(sessionId: nil, manifestSha: nil)
+        let isCalibratedTHT02 = (effCamCtx.productId == "tzone_tht02" && effCamCtx.contentOrigin != "catalog")
+        let isOccludedOrUncertain = isHandScrewdriver
+            || ((liveAnalysis?.whiteStickerOccluded ?? false) == true)
+            || ((liveAnalysis?.sharpnessScore ?? 48.0) < 24.0)
+            || !sensorDetectedInFrame
+        visionTel["detector_applicability"] = isCalibratedTHT02 ? "calibrated_tht02_140x16mm" : "generic_cylinder_manual_confirmation"
+        if !isCalibratedTHT02 {
+            visionTel["evidence_state"] = "manual_confirmation_required"
+        } else if isOccludedOrUncertain {
+            visionTel["evidence_state"] = "uncertain_occluded"
+        } else {
+            visionTel["evidence_state"] = "observed"
+        }
         if anomalyZone == nil {
             visionTel["anomaly_zone"] = NSNull()
         }
@@ -2896,6 +3003,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let modelLabel = lastModelLabel
         let latMs = lastLatencyMs
         let tokSec = lastTokensPerSec
+        let simDip = simulatedVisualDipAddress
+        let authBusSid = targetSlaveId
+        let sceneGen = activeSceneGeneration
         stateLock.unlock()
 
         let sysInfo: [String: Any] = [
@@ -2907,11 +3017,20 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "tokens_per_sec": tokSec,
         ]
 
+        let syncTel = FieldScanCatalogClient.shared.getSyncTelemetry()
+        let syncOn = (syncTel["sync_enabled"] as? Bool) ?? false
+        let httpsEmitted = (syncTel["https_requests_emitted"] as? Int) ?? 0
+        let strictlyOffline = (!syncOn && httpsEmitted == 0)
+        let effCtx = resolveEffectiveContext(sessionId: nil, manifestSha: nil)
+
         let offlineInfo: [String: Any] = [
-            "offline_verified": true,
+            "offline_verified": strictlyOffline,
             "guard_active": true,
-            "external_egress_blocked": true,
+            "external_egress_blocked": !syncOn,
+            "egress_policy": syncTel["egress_policy"] ?? "strict_local_only",
+            "local_listener_scope": "loopback_127.0.0.1",
             "blocked_external_attempts": 0,
+            "https_requests_emitted": httpsEmitted,
             "loopback_connections": 1,
             "verified_at": ISO8601DateFormatter().string(from: Date()),
         ]
@@ -2919,9 +3038,15 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         return [
             "status": "ok",
             "contract_version": FieldScanSessionEngine.contractVersion,
-            "sensor_id": "TZ-THT-02",
-            "offline_verified": true,
+            "sensor_id": effCtx.productId == "tzone_tht02" ? "TZ-THT-02" : effCtx.productId.uppercased(),
+            "active_context": effCtx.toDictionary(),
+            "scene_generation": sceneGen,
+            "simulated_visual_dip_address": simDip,
+            "authorized_bus_slave_id": authBusSid,
+            "local_listener_scope": "loopback_127.0.0.1",
+            "offline_verified": strictlyOffline,
             "blocked_external_attempts": 0,
+            "catalog_sync": syncTel,
             "fps": visionTel["fps"] ?? 25.0,
             "vision": visionTel,
             "modbus": modbusTel,
@@ -3239,7 +3364,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 ?? (payload["text"] as? String)
                 ?? "Configure for Industrial Modbus RTU slave 1"
             let dipAddr = intFromAny(payload["dip_address"])
-            return runGuideDipForModbus(operatorText: text, currentDipAddr: dipAddr)
+            let effCtx = resolveEffectiveContext(sessionId: payload["session_id"] as? String, manifestSha: nil)
+            return runGuideDipForModbus(operatorText: text, currentDipAddr: dipAddr, authorizeBusTarget: effCtx.benchModbusHomologated)
         }
 
         if step == "connect_modbus" {
@@ -3331,7 +3457,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         ]
     }
 
-    private func runGuideDipForModbus(operatorText: String, currentDipAddr: Int?) -> [String: Any] {
+    private func runGuideDipForModbus(operatorText: String, currentDipAddr: Int?, authorizeBusTarget: Bool = false) -> [String: Any] {
         let targetAddr = parseRequestedModbusTarget(text: operatorText, fallbackAddr: currentDipAddr)
         let pinPlan = Self.describeDipPins(address: targetAddr)
         let instructionEn = (pinPlan["instruction_en"] as? String) ?? "Set Pins 1 through 7 to OFF and flip Pin 8 to ON"
@@ -3339,7 +3465,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let dipBinary = (pinPlan["dip_binary"] as? String) ?? "00000001"
         let dipBits = (pinPlan["dip_bits"] as? [Int]) ?? [0, 0, 0, 0, 0, 0, 0, 1]
 
-        setModbusMode(mode: activeModbusMode, slaveId: targetAddr, baudBps: 9600)
+        if authorizeBusTarget {
+            setModbusMode(mode: activeModbusMode, slaveId: targetAddr, baudBps: 9600)
+        }
         renderWorkbenchOrCameraStep()
         let frameJpeg = getLatestJpeg()
 
@@ -3354,7 +3482,11 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
         stateLock.lock()
         repairStage = "STEP2_GUIDING_DIP_MODBUS"
-        targetSlaveId = targetAddr
+        simulatedVisualDipAddress = targetAddr
+        if authorizeBusTarget {
+            targetSlaveId = targetAddr
+        }
+        let authBusSid = targetSlaveId
         focusDipActive = true
         appendRepairLogUnlocked(
             step: "Guided DIP-8 Configuration (Modbus Slave #\(targetAddr))",
@@ -3373,6 +3505,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         return [
             "stage": "STEP2_GUIDING_DIP_MODBUS",
             "target_slave_id": targetAddr,
+            "simulated_visual_dip_address": targetAddr,
+            "authorized_bus_slave_id": authBusSid,
+            "bus_target_mutated": authorizeBusTarget,
             "dip_plan": pinPlan,
             "dip_bits": dipBits,
             "diagnosis": msg,
@@ -4327,7 +4462,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let q = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return nil }
 
-        if q.hasSuffix("?") || q.hasPrefix("¿") || q.range(of: "^(hola|buenos|buenas|hello|hi|hey|good\\s+(morning|afternoon|evening)|what|which|how|why|where|who|when|can\\s+you|could\\s+you|explain|tell\\s+me|que|cual|como|por\\s+que|donde|en\\s+que|puedes|me\\s+escuchas|muestrame|dime|is\\s+the|are\\s+the|do\\s+i|does\\s+it)\\b", options: .regularExpression) != nil {
+        if q.hasSuffix("?") || q.hasPrefix("\u{00BF}") || q.range(of: "^(hello|hi|hey|good\\s+(morning|afternoon|evening)|what|which|how|why|where|who|when|can\\s+you|could\\s+you|explain|tell\\s+me|is\\s+the|are\\s+the|do\\s+i|does\\s+it)\\b", options: .regularExpression) != nil {
             return nil
         }
 
@@ -4386,14 +4521,33 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             ? "What do you currently see on the camera and RS-485 bus?"
             : rawQuery
         let zoneHint = (payload["zone"] as? String) ?? (payload["highlighted_zone"] as? String)
-        let dipAddr = intFromAny(payload["dip_address"]) ?? targetSlaveId
+        let dipAddr = intFromAny(payload["dip_address"]) ?? simulatedVisualDipAddress
+        let effCtx = resolveEffectiveContext(
+            sessionId: payload["session_id"] as? String,
+            manifestSha: payload["manifest_sha256"] as? String
+        )
+        let catDescriptor = try? FieldScanPackageStore.shared.buildSceneAndManualDescriptor(context: effCtx)
+        stateLock.lock()
+        let sceneGen = intFromAny(payload["scene_generation"]) ?? activeSceneGeneration
+        stateLock.unlock()
 
         if let intent = detectConversationalRepairIntent(query) {
             if intent == "inspect_open" {
                 return runStartOpenInspection()
             }
             if intent == "guide_dip" {
-                return runGuideDipForModbus(operatorText: query, currentDipAddr: dipAddr)
+                // Conversational/voice requests update ONLY visual DIP simulation, NEVER `targetSlaveId` (`M4-BUS-01`)
+                var res = runGuideDipForModbus(operatorText: query, currentDipAddr: dipAddr, authorizeBusTarget: false)
+                let prep = FieldScanTwinController.prepareVisualAction(
+                    query: query,
+                    descriptor: catDescriptor,
+                    zoneHint: "upper_barrel_dip",
+                    currentDipAddress: (res["simulated_visual_dip_address"] as? Int) ?? dipAddr,
+                    sceneGeneration: sceneGen
+                )
+                res["twin_action"] = prep["twin_action"] ?? NSNull()
+                res["twin_action_v1"] = prep["twin_action_v1"] ?? NSNull()
+                return res
             }
             if intent == "signoff_report" {
                 let pkg = generateSignoffOrEscalationDossier(payload: payload, forceSignoff: true)
@@ -4439,38 +4593,44 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             vlmBaseURL: bridge.activeOmniBaseURL,
             vlmRunning: bridge.vlServerRunning,
             vlmModelLabel: bridge.activeModelName,
+            catalogDescriptor: catDescriptor,
+            sceneGeneration: sceneGen,
+            turnId: payload["turn_id"] as? String,
             describeDipFn: { addr in Self.describeDipPins(address: addr) }
         )
 
         var diagnosisText = (engineResult["reply_text"] as? String) ?? ""
         let modelUsed = (engineResult["model_used"] as? String) ?? bridge.activeModelName
         let intentStr = (engineResult["intent"] as? String) ?? "general_chat"
-        let langStr = (engineResult["language"] as? String) ?? "en"
         let probableCauses = (engineResult["probable_causes"] as? [String]) ?? []
         let recommendedActions = (engineResult["recommended_actions"] as? [String]) ?? []
         let targetZoneOpt = engineResult["target_zone"] as? String
         let explodePcb = (engineResult["explode_pcb"] as? Bool) ?? false
         let dipBitsOpt = engineResult["dip_bits"] as? [Int]
         let twinActionOpt = engineResult["twin_action"] as? [String: Any]
+        let twinActionV1Opt = engineResult["twin_action_v1"] as? [String: Any]
+        let clarificationReq = (engineResult["clarification_required"] as? Bool) ?? false
         let openManual = (engineResult["open_manual"] as? Bool) ?? false
         let openManualLightbox = (engineResult["open_manual_lightbox"] as? Bool) ?? false
         let primaryPageOpt = engineResult["manual_page"] as? Int
         let manualSectionOpt = engineResult["manual_section"] as? [String: Any]
         let citations = (engineResult["citations"] as? [[String: Any]]) ?? []
 
-        // Sync targetSlaveId if the operator requested configuring DIP-8 pins for a specific Slave ID
+        // Store visual/simulated DIP rocker state separately from `targetSlaveId` (`M4-BUS-01`)
         if let ta = twinActionOpt, let reqSlave = ta["target_slave_id"] as? Int, (1...247).contains(reqSlave) {
             stateLock.lock()
-            targetSlaveId = reqSlave
+            simulatedVisualDipAddress = reqSlave
             stateLock.unlock()
         }
 
-        // Apply deterministic grounding filter (`IA-04`) so LLM output can never claim SCADA/PLC/calibration or cite pages > 9
-        let activeProf = FieldScanSessionEngine.shared.resolveDeviceProfile((payload["profile_id"] as? String) ?? "tzone_tht02")
+        // Apply deterministic grounding filter (`IA-04`, `M4-DOC-01`) with dynamic page ceiling
+        let maxDocPages = ((catDescriptor?["documents"] as? [[String: Any]])?.compactMap { $0["page_count"] as? Int }.max()) ?? 9
+        let activeProf = FieldScanSessionEngine.shared.resolveDeviceProfile((payload["profile_id"] as? String) ?? effCtx.localProfileId ?? "tzone_tht02")
         let grounded = FieldScanSessionEngine.shared.applyDeterministicGroundingFilter(
             candidateText: diagnosisText,
             profile: activeProf,
-            verifiedTelemetry: modbusTel
+            verifiedTelemetry: modbusTel,
+            maxPageCount: max(9, maxDocPages)
         )
         if let cleanTxt = grounded["text"] as? String, !cleanTxt.isEmpty {
             diagnosisText = cleanTxt
@@ -4483,6 +4643,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         stateLock.lock()
         lastLatencyMs = elapsedMs
         lastModelLabel = modelUsed
+        let simDipNow = simulatedVisualDipAddress
+        let authBusSidNow = targetSlaveId
         let andonNow = mbHealthy ? "GREEN" : (explodePcb ? "YELLOW" : "RED")
         stateLock.unlock()
 
@@ -4496,6 +4658,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "intent": intentStr,
             "query_mode": intentStr,
             "language": "en",
+            "clarification_required": clarificationReq,
+            "candidate_part_ids": engineResult["candidate_part_ids"] ?? [],
             "grounding_corrected": groundingCorrected,
             "probable_causes": probableCauses,
             "recommended_actions": recommendedActions,
@@ -4504,7 +4668,16 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "explode_pcb": explodePcb,
             "focus_dip": focusDipOut,
             "dip_bits": dipBitsOpt ?? NSNull(),
+            "simulated_visual_dip_address": simDipNow,
+            "authorized_bus_slave_id": authBusSidNow,
+            "bus_target_mutated": false,
             "twin_action": twinActionOpt ?? NSNull(),
+            "twin_action_v1": twinActionV1Opt ?? NSNull(),
+            "turn_id": engineResult["turn_id"] ?? "",
+            "scene_generation": engineResult["scene_generation"] ?? sceneGen,
+            "manifest_sha256": engineResult["manifest_sha256"] ?? effCtx.manifestSha256,
+            "document_id": engineResult["document_id"] ?? NSNull(),
+            "printed_page": engineResult["printed_page"] ?? NSNull(),
             "andon_state": andonNow,
             "open_manual": openManual,
             "open_manual_lightbox": openManualLightbox,
@@ -4634,7 +4807,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         #endif
     }
 
-    /// Uses Liquid AI `LFM3-Omni-2B-Q8_0` (`activeOmniBaseURL`) to transcribe 16 kHz mono WAV audio in Spanish or English.
+    /// Uses Liquid AI `LFM3-Omni-2B-Q8_0` (`activeOmniBaseURL`) to transcribe 16 kHz mono WAV audio strictly in English.
     private func queryLocalOmniASRIfAvailable(wavData: Data) -> String? {
         guard wavData.count > 1000 else { return nil }
         let bridge = LlamaServerBridge.shared
@@ -4655,7 +4828,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "messages": [
                 [
                     "role": "system",
-                    "content": "Perform ASR. Output only the exact spoken words verbatim in the language spoken (Spanish or English). Do not add quotes or explanations.",
+                    "content": "Perform English ASR. Output only the exact spoken English words verbatim. Do not add quotes or explanations.",
                 ],
                 [
                     "role": "user",
@@ -4795,16 +4968,16 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 do {
                     let session = LanguageModelSession(instructions: """
                     You are FieldScan AI, a friendly, natural, real-time conversational AI and industrial field engineer running locally on an iPad Air M4 (12 GB RAM).
-                    Respond concisely in 1 to 3 clear sentences in the same language the user spoke (Spanish or English).
+                    Respond concisely in 1 to 3 clear sentences strictly in English.
                     Never invent SCADA/PLC confirmations or unverified sensor readings; rely strictly on the provided live context: \(contextSummary)
                     """)
                     let resp = try await session.respond(to: query)
                     if Task.isCancelled { return }
                     let text = resp.content.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !text.isEmpty {
-                        boxLock.lock()
-                        outputText = text
-                        boxLock.unlock()
+                        boxLock.withLock {
+                            outputText = text
+                        }
                     }
                 } catch {
                     // Apple Intelligence may not be enabled or available on this device state
@@ -4814,10 +4987,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             if waitRes == .timedOut {
                 genTask.cancel()
             }
-            boxLock.lock()
-            let finalOut = outputText
-            boxLock.unlock()
-            return finalOut
+            return boxLock.withLock { outputText }
         }
         #endif
         return nil
@@ -5926,11 +6096,406 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         return (recognizedText, false)
     }
 
-    // MARK: - Sensor Load & Spec Helpers
+    // MARK: - Sensor Load, Catalog Context & Signed Package Routes (`M4-ID-01..03`, `M4-PKG-*`, `M4-WAN-*`)
+
+    private func resolveEffectiveContext(sessionId: String?, manifestSha: String?) -> SessionContentContext {
+        if let mSha = manifestSha?.trimmingCharacters(in: .whitespacesAndNewlines), !mSha.isEmpty {
+            if mSha == "bundle" || mSha.hasPrefix("bundle-") {
+                return FieldScanPackageStore.shared.buildBundleDefaultContext()
+            }
+            if let pkg = try? FieldScanPackageStore.shared.getInstalledPackage(manifestSha256: mSha) {
+                let mObj = (pkg["manifest"] as? [String: Any]) ?? [:]
+                let homologated = (mObj["bench_modbus_homologated"] as? Bool) ?? false
+                return SessionContentContext(
+                    productId: (pkg["product_id"] as? String) ?? "unknown",
+                    variantId: (pkg["variant_id"] as? String) ?? "default",
+                    title: (mObj["title"] as? String) ?? "\(pkg["product_id"] ?? "") (\(pkg["variant_id"] ?? ""))",
+                    publicationSeq: (pkg["publication_seq"] as? Int) ?? 1,
+                    manifestSha256: mSha,
+                    localProfileId: homologated ? (mObj["bench_profile_id"] as? String) : nil,
+                    contentOrigin: "catalog",
+                    benchModbusHomologated: homologated,
+                    capabilities: (pkg["capabilities"] as? [String: Bool]) ?? [:]
+                )
+            }
+        }
+
+        let sidToCheck = sessionId ?? FieldScanSessionEngine.shared.currentActiveSessionId
+        if let sid = sidToCheck,
+           let snap = try? FieldScanSessionEngine.shared.getSession(sessionId: sid),
+           ((snap["status"] as? String) == "open" || sessionId != nil),
+           let catCtx = snap["catalog_context"] as? [String: Any],
+           (catCtx["content_origin"] as? String) == "catalog",
+           let mSha = catCtx["manifest_sha256"] as? String {
+            return SessionContentContext(
+                productId: (catCtx["product_id"] as? String) ?? "unknown",
+                variantId: (catCtx["variant_id"] as? String) ?? "default",
+                title: (catCtx["title"] as? String) ?? "\(catCtx["product_id"] ?? "")",
+                publicationSeq: (catCtx["publication_seq"] as? Int) ?? 1,
+                manifestSha256: mSha,
+                localProfileId: catCtx["local_profile_id"] as? String,
+                contentOrigin: "catalog",
+                benchModbusHomologated: (catCtx["bench_modbus_homologated"] as? Bool) ?? false,
+                capabilities: (catCtx["capabilities"] as? [String: Bool]) ?? [:]
+            )
+        }
+        return FieldScanPackageStore.shared.getSelectedContext()
+    }
+
+    private func handleCatalogOrCADExportRoute(_ req: HTTPRequestPacket, on connection: NWConnection) {
+        let path = req.path
+
+        if path == "/api/export/dxf" || path == "/api/export/stl" {
+            let bodyJSON = parseJSONBody(req.body)
+            let effCtx = resolveEffectiveContext(
+                sessionId: bodyJSON["session_id"] as? String,
+                manifestSha: bodyJSON["manifest_sha256"] as? String
+            )
+            let desc = (try? FieldScanPackageStore.shared.buildSceneAndManualDescriptor(context: effCtx)) ?? [:]
+            let supported = (desc["cad_exports_supported"] as? [String]) ?? ["dxf", "stl", "pdf", "json"]
+            let fmt = path.hasSuffix("dxf") ? "dxf" : "stl"
+            guard supported.contains(fmt) else {
+                sendJSONResponse(on: connection, statusCode: 409, payload: [
+                    "ok": false,
+                    "error_code": "CAD_EXPORT_UNSUPPORTED_FOR_GLB",
+                    "message": "Parametric AutoCAD .\(fmt.uppercased()) generation is available only for the bundled TZ THT-02 engineering model; catalog GLB package '\(effCtx.productId)/\(effCtx.variantId)' supports \(supported.joined(separator: ", ")).",
+                    "cad_exports_supported": supported,
+                ])
+                return
+            }
+            let dossier = generateSignoffOrEscalationDossier(payload: bodyJSON, forceSignoff: true)
+            sendJSONResponse(on: connection, statusCode: 200, payload: [
+                "ok": true,
+                "format": fmt,
+                "url": fmt == "dxf" ? (dossier["dxf_url"] ?? "") : (dossier["stl_url"] ?? ""),
+                "path": fmt == "dxf" ? (dossier["dxf_path"] ?? "") : (dossier["stl_path"] ?? ""),
+            ])
+            return
+        }
+
+        // Read-only local installed artifact streaming (`GET` / `HEAD` `/api/catalog/installed/{manifest_sha}/objects/{object_sha}`)
+        if (req.method == "GET" || req.method == "HEAD") && path.hasPrefix("/api/catalog/installed/") {
+            let rest = String(path.dropFirst("/api/catalog/installed/".count))
+            let parts = rest.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            guard parts.count == 3, parts[1] == "objects" else {
+                sendJSONResponse(on: connection, statusCode: 404, payload: ["error_code": "OBJECT_NOT_DECLARED", "message": "Malformed object route"])
+                return
+            }
+            do {
+                let res = try FieldScanPackageStore.shared.readObjectRange(
+                    manifestSha256: parts[0],
+                    objectSha256: parts[2],
+                    rangeHeader: req.headers["range"],
+                    headOnly: req.method == "HEAD"
+                )
+                sendHTTPResponse(
+                    on: connection,
+                    statusCode: res.statusCode,
+                    contentType: res.mimeType,
+                    body: res.body,
+                    extraHeaders: res.headers
+                )
+            } catch let cerr as FieldScanCatalogError {
+                sendJSONResponse(on: connection, statusCode: cerr.statusCode, payload: cerr.toDictionary())
+            } catch {
+                sendJSONResponse(on: connection, statusCode: 404, payload: ["error_code": "OBJECT_MISSING", "message": error.localizedDescription])
+            }
+            return
+        }
+
+        do {
+            if req.method == "GET" && path == "/api/catalog/status" {
+                let selected = FieldScanPackageStore.shared.getSelectedContext()
+                let installed = FieldScanPackageStore.shared.listInstalledPackages()
+                var pinnedSessionCtx: Any = NSNull()
+                var updateReadyForNext = false
+                if let activeSid = FieldScanSessionEngine.shared.currentActiveSessionId,
+                   let snap = try? FieldScanSessionEngine.shared.getSession(sessionId: activeSid),
+                   (snap["status"] as? String) == "open",
+                   let pCtx = snap["catalog_context"] as? [String: Any] {
+                    pinnedSessionCtx = pCtx
+                    let pProd = (pCtx["product_id"] as? String) ?? ""
+                    let pVar = (pCtx["variant_id"] as? String) ?? ""
+                    let pSeq = (pCtx["publication_seq"] as? Int) ?? 0
+                    if installed.contains(where: {
+                        (($0["product_id"] as? String) == pProd)
+                            && (($0["variant_id"] as? String) == pVar)
+                            && ((($0["publication_seq"] as? Int) ?? 0) > pSeq)
+                    }) {
+                        updateReadyForNext = true
+                    }
+                }
+                stateLock.lock()
+                let sGen = activeSceneGeneration
+                let readyTurn = latestSceneReadyTurn
+                stateLock.unlock()
+                sendJSONResponse(on: connection, statusCode: 200, payload: [
+                    "ok": true,
+                    "sync": FieldScanCatalogClient.shared.getSyncTelemetry(),
+                    "selected_context": selected.toDictionary(),
+                    "pinned_session_context": pinnedSessionCtx,
+                    "update_ready_for_next_session": updateReadyForNext,
+                    "installed_count": installed.count,
+                    "scene_generation": sGen,
+                    "latest_scene_ready": readyTurn,
+                ])
+                return
+            }
+
+            if req.method == "GET" && path == "/api/catalog/packages" {
+                sendJSONResponse(on: connection, statusCode: 200, payload: [
+                    "ok": true,
+                    "packages": FieldScanPackageStore.shared.listInstalledPackages(),
+                    "selected_context": FieldScanPackageStore.shared.getSelectedContext().toDictionary(),
+                ])
+                return
+            }
+
+            if req.method == "POST" && path == "/api/catalog/select" {
+                let bodyJSON = parseJSONBody(req.body)
+                let mSha = bodyJSON["manifest_sha256"] as? String
+                let ctx = try FieldScanPackageStore.shared.selectContextForNextSession(manifestSha256: mSha)
+                let desc = try FieldScanPackageStore.shared.buildSceneAndManualDescriptor(context: ctx)
+                stateLock.lock()
+                activeSceneGeneration += 1
+                let nextGen = activeSceneGeneration
+                stateLock.unlock()
+                sendJSONResponse(on: connection, statusCode: 200, payload: [
+                    "ok": true,
+                    "selected_context": ctx.toDictionary(),
+                    "catalog_descriptor": desc,
+                    "scene_generation": nextGen,
+                ])
+                return
+            }
+
+            if req.method == "POST" && path == "/api/catalog/import" {
+                let ct = (req.headers["content-type"] ?? "").lowercased()
+                if ct.contains("multipart/form-data") {
+                    let uploaded = extractUploadedData(from: req)
+                    guard !uploaded.isEmpty else {
+                        throw FieldScanCatalogError(code: "INVALID_ENVELOPE", message: "Empty package upload")
+                    }
+                    let tmpZip = FieldScanPackageStore.shared.stagingDirURL.appendingPathComponent("upload-\(UUID().uuidString.prefix(10).lowercased()).zip")
+                    try uploaded.write(to: tmpZip, options: .atomic)
+                    defer { try? FileManager.default.removeItem(at: tmpZip) }
+                    let pkg = try FieldScanPackageStore.shared.importPackage(from: tmpZip)
+                    sendJSONResponse(on: connection, statusCode: 200, payload: ["ok": true, "package": pkg])
+                    return
+                }
+                let bodyJSON = parseJSONBody(req.body)
+                if let srcPath = bodyJSON["path"] as? String, !srcPath.isEmpty {
+                    let candURL = URL(fileURLWithPath: srcPath).resolvingSymlinksInPath().standardizedFileURL
+                    let allowedRoots = [
+                        FieldScanPackageStore.shared.stagingDirURL,
+                        FileManager.default.temporaryDirectory,
+                        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+                        locateBundleRootDirectory()?.appendingPathComponent("knowledge/fixtures", isDirectory: true),
+                    ].compactMap { $0?.resolvingSymlinksInPath().standardizedFileURL.path }
+                    guard allowedRoots.contains(where: { candURL.path == $0 || candURL.path.hasPrefix($0 + "/") }) else {
+                        throw FieldScanCatalogError(code: "UNTRUSTED_IMPORT_PATH", message: "Direct path import is restricted to authorized fixture, Documents, or staging directories.", statusCode: 403)
+                    }
+                    let pkg = try FieldScanPackageStore.shared.importPackage(from: candURL)
+                    sendJSONResponse(on: connection, statusCode: 200, payload: ["ok": true, "package": pkg])
+                    return
+                }
+                if let b64 = bodyJSON["archive_b64"] as? String, let zipData = decodeDataURLOrBase64(b64) {
+                    let tmpZip = FieldScanPackageStore.shared.stagingDirURL.appendingPathComponent("b64-\(UUID().uuidString.prefix(10).lowercased()).zip")
+                    try zipData.write(to: tmpZip, options: .atomic)
+                    defer { try? FileManager.default.removeItem(at: tmpZip) }
+                    let pkg = try FieldScanPackageStore.shared.importPackage(from: tmpZip)
+                    sendJSONResponse(on: connection, statusCode: 200, payload: ["ok": true, "package": pkg])
+                    return
+                }
+                throw FieldScanCatalogError(code: "INVALID_ENVELOPE", message: "Provide path, archive_b64, or multipart file")
+            }
+
+            if req.method == "POST" && path == "/api/catalog/sync_config" {
+                let bodyJSON = parseJSONBody(req.body)
+                let baseURL = (bodyJSON["base_url"] as? String) ?? FieldScanRuntimeConfig.shared.cloudCatalogBaseURL
+                let syncOpt: Bool? = (bodyJSON["sync_enabled"] != nil) ? boolFromAny(bodyJSON["sync_enabled"], defaultValue: false) : nil
+                let token = bodyJSON["auth_token"] as? String
+                let boatToken = bodyJSON["boat_port_auth_token"] as? String
+                if let signers = bodyJSON["trusted_signers"] as? [[String: Any]] {
+                    for s in signers {
+                        if let kid = s["key_id"] as? String, let pk = s["public_key_b64"] as? String {
+                            _ = try FieldScanPackageStore.shared.registerTrustedSigner(keyId: kid, publicKeyBase64: pk)
+                        }
+                    }
+                }
+                let tel = try FieldScanCatalogClient.shared.configureEndpoint(
+                    baseURL: baseURL,
+                    syncEnabled: syncOpt,
+                    authToken: token,
+                    boatPortAuthToken: boatToken,
+                    persistInKeychain: true
+                )
+                if !baseURL.isEmpty {
+                    FieldScanRuntimeConfig.shared.cloudCatalogBaseURL = baseURL
+                }
+                if let s = syncOpt {
+                    FieldScanRuntimeConfig.shared.cloudCatalogSyncEnabled = s
+                }
+                sendJSONResponse(on: connection, statusCode: 200, payload: ["ok": true, "sync": tel])
+                return
+            }
+
+            if req.method == "GET" && path == "/api/catalog/healthz" {
+                let res = FieldScanCatalogClient.shared.checkHealth()
+                sendJSONResponse(on: connection, statusCode: 200, payload: res)
+                return
+            }
+
+            if req.method == "POST" && path == "/api/catalog/resolve" {
+                let bodyJSON = parseJSONBody(req.body)
+                let model = ((bodyJSON["model"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !model.isEmpty else {
+                    throw FieldScanCatalogError(code: "INVALID_ENVELOPE", message: "model is required")
+                }
+                let res = try FieldScanCatalogClient.shared.resolveCatalog(
+                    manufacturer: bodyJSON["manufacturer"] as? String,
+                    model: model,
+                    variant: bodyJSON["variant"] as? String,
+                    hardwareRevision: bodyJSON["hardware_revision"] as? String
+                )
+                sendJSONResponse(on: connection, statusCode: 200, payload: res)
+                return
+            }
+
+            if req.method == "GET" && path.hasPrefix("/api/catalog/jobs/") {
+                let jobId = String(path.dropFirst("/api/catalog/jobs/".count))
+                let res = try FieldScanCatalogClient.shared.pollJob(jobId: jobId)
+                sendJSONResponse(on: connection, statusCode: 200, payload: res)
+                return
+            }
+
+            if req.method == "POST" && path == "/api/catalog/install" {
+                let bodyJSON = parseJSONBody(req.body)
+                let pid = ((bodyJSON["product_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let vid = ((bodyJSON["variant_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !pid.isEmpty && !vid.isEmpty else {
+                    throw FieldScanCatalogError(code: "INVALID_ENVELOPE", message: "product_id and variant_id are required")
+                }
+                let channel = (bodyJSON["channel"] as? String) ?? "default"
+                let res = try FieldScanCatalogClient.shared.fetchAndInstallVariant(productId: pid, variantId: vid, channel: channel)
+                sendJSONResponse(on: connection, statusCode: 200, payload: res)
+                return
+            }
+
+            if req.method == "POST" && path == "/api/catalog/scene_ready" {
+                let bodyJSON = parseJSONBody(req.body)
+                let gen = intFromAny(bodyJSON["scene_generation"]) ?? 1
+                let status = ((bodyJSON["status"] as? String) ?? "ready").lowercased()
+                stateLock.lock()
+                let accepted = (gen >= activeSceneGeneration)
+                if accepted {
+                    latestSceneReadyTurn = [
+                        "scene_generation": gen,
+                        "turn_id": bodyJSON["turn_id"] ?? "",
+                        "manifest_sha256": bodyJSON["manifest_sha256"] ?? "",
+                        "status": status,
+                        "reported_at_utc": FieldScanSessionEngine.utcNowISO(),
+                    ]
+                }
+                let curGen = activeSceneGeneration
+                stateLock.unlock()
+                sendJSONResponse(on: connection, statusCode: 200, payload: [
+                    "ok": true,
+                    "accepted": accepted,
+                    "active_scene_generation": curGen,
+                ])
+                return
+            }
+        } catch let cerr as FieldScanCatalogError {
+            sendJSONResponse(on: connection, statusCode: cerr.statusCode, payload: cerr.toDictionary())
+            return
+        } catch {
+            sendJSONResponse(on: connection, statusCode: 500, payload: ["error_code": "INTERNAL_ERROR", "message": error.localizedDescription])
+            return
+        }
+
+        sendJSONResponse(on: connection, statusCode: 404, payload: ["detail": "Not found: \(path)"])
+    }
 
     private func handleSensorLoad(query: String) -> [String: Any] {
+        let resolved = FieldScanPackageStore.shared.resolveAssetQuery(query)
+        let matched = (resolved["matched"] as? Bool) ?? false
+        let resolution = (resolved["resolution"] as? String) ?? "unknown"
+
+        if !matched {
+            if resolution == "ambiguous" {
+                let prompt = (resolved["discriminant_prompt"] as? String) ?? "Multiple variants match; select exact hardware variant."
+                return [
+                    "matched": false,
+                    "resolution": "ambiguous",
+                    "identity_status": resolved["identity_status"] ?? "identify_variant",
+                    "sensor_id": NSNull(),
+                    "resolved_model": NSNull(),
+                    "spec": NSNull(),
+                    "discriminant_field": resolved["discriminant_field"] ?? "variant_id",
+                    "discriminant_prompt": prompt,
+                    "candidates": resolved["candidates"] ?? [],
+                    "diagnosis": prompt,
+                    "assistant_message": prompt,
+                    "citations": [],
+                    "manual_citations": [],
+                ]
+            }
+            let unknownMsg = "No local verified profile matches '\(query)'. Automatic TZONE THT-02 register mapping is inhibited; import a signed package or enable Cloud Catalog search."
+            return [
+                "matched": false,
+                "resolution": "unknown",
+                "identity_status": "unknown_pending_identity",
+                "sensor_id": NSNull(),
+                "resolved_model": NSNull(),
+                "spec": NSNull(),
+                "confidence": 0.0,
+                "can_query_cloud_catalog": true,
+                "suggested_cloud_query": resolved["suggested_cloud_query"] ?? [:],
+                "candidates": [],
+                "diagnosis": unknownMsg,
+                "assistant_message": unknownMsg,
+                "citations": [],
+                "manual_citations": [],
+            ]
+        }
+
+        let sensorId = (resolved["sensor_id"] as? String) ?? "TZ-THT-02"
+        let ctxDict = (resolved["context"] as? [String: Any]) ?? [:]
+        let isCatalog = ((ctxDict["content_origin"] as? String) == "catalog")
         let spec = loadTHT02Spec()
-        let msg = "Local datasheet verified (9 pages, 1.8 ms): input '\(query)' resolved to TZ THT-02 Industrial RS-485 Temperature & Humidity Sensor (TZ-THT-02). Parametric CAD blueprint loaded: total length 140.0 mm x outer diameter 16.0 mm, SHT30/SHT3X CMOSens probe element, and RS-485 Modbus-RTU bus."
+
+        if isCatalog, let mSha = ctxDict["manifest_sha256"] as? String,
+           let ctxObj = try? FieldScanPackageStore.shared.selectContextForNextSession(manifestSha256: mSha),
+           let desc = try? FieldScanPackageStore.shared.buildSceneAndManualDescriptor(context: ctxObj) {
+            stateLock.lock()
+            activeSceneGeneration += 1
+            let sGen = activeSceneGeneration
+            stateLock.unlock()
+            let docCount = ((desc["documents"] as? [[String: Any]]) ?? []).count
+            let msg = "Verified signed catalog package loaded for \(ctxObj.title) (publication seq #\(ctxObj.publicationSeq), \(docCount) document(s))."
+            let audioB64 = synthesizeSpeechB64(msg)
+            return [
+                "matched": true,
+                "resolution": "exact",
+                "identity_status": resolved["identity_status"] ?? "matched",
+                "sensor_id": sensorId,
+                "resolved_model": sensorId,
+                "matched_alias": resolved["matched_alias"] ?? sensorId,
+                "confidence": 0.99,
+                "context": ctxObj.toDictionary(),
+                "catalog_descriptor": desc,
+                "scene_generation": sGen,
+                "diagnosis": msg,
+                "assistant_message": msg,
+                "citations": [],
+                "manual_citations": [],
+                "audio_wav_b64": audioB64,
+                "spec": spec,
+            ]
+        }
+
+        let msg = "Local datasheet verified (9 pages, 1.8 ms): input '\(query)' resolved to \(sensorId). Parametric CAD blueprint loaded: total length 140.0 mm x outer diameter 16.0 mm, SHT30/SHT3X CMOSens probe element, and RS-485 Modbus-RTU bus."
         let audioB64 = synthesizeSpeechB64(msg)
         let citations: [[String: Any]] = [
             ["page": 1, "label": Self.manualPageTitles[1]!],
@@ -5938,10 +6503,13 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         ]
         return [
             "matched": true,
-            "sensor_id": "TZ-THT-02",
-            "resolved_model": "TZ-THT-02",
-            "matched_alias": "TZ THT-02",
+            "resolution": "exact",
+            "identity_status": resolved["identity_status"] ?? "matched",
+            "sensor_id": sensorId,
+            "resolved_model": sensorId,
+            "matched_alias": resolved["matched_alias"] ?? "TZ THT-02",
             "confidence": 0.99,
+            "context": ctxDict,
             "manual_page": 9,
             "diagnosis": msg,
             "assistant_message": msg,

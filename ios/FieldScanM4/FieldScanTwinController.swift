@@ -198,4 +198,353 @@ public enum FieldScanTwinController {
 
         return nil
     }
+
+    private static let wordPinNumberMap: [String: Int] = [
+        "1": 1, "one": 1, "2": 2, "two": 2, "3": 3, "three": 3, "4": 4, "four": 4,
+        "5": 5, "five": 5, "6": 6, "six": 6, "7": 7, "seven": 7, "8": 8, "eight": 8,
+    ]
+
+    private static func extractSinglePinReference(_ query: String) -> Int? {
+        let pattern = "\\bpin\\s*#?\\s*(1|2|3|4|5|6|7|8|one|two|three|four|five|six|seven|eight)\\b"
+        guard let rx = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let m = rx.firstMatch(in: query, range: NSRange(query.startIndex..., in: query)),
+              let r = Range(m.range(at: 1), in: query) else {
+            return nil
+        }
+        return wordPinNumberMap[String(query[r]).lowercased()]
+    }
+
+    /// Context-aware `twin_action_v1` & ambiguity resolver (`M4-VOICE-01..03`, `Section 5.4`).
+    public static func prepareVisualAction(
+        query: String,
+        descriptor: [String: Any]?,
+        zoneHint: String? = nil,
+        currentDipAddress: Int = 1,
+        sceneGeneration: Int = 1,
+        turnId: String? = nil
+    ) -> [String: Any] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let tid = turnId ?? ("turn-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10)).lowercased())
+        let ctx = (descriptor?["context"] as? [String: Any]) ?? [:]
+        let manifestSha = (ctx["manifest_sha256"] as? String) ?? "bundle-tzone-tht02-v2.1"
+        let sceneOrigin = (descriptor?["scene_origin"] as? String) ?? "bundled_parametric"
+
+        if sceneOrigin == "docs_only_no_3d" {
+            return [
+                "ambiguous": false,
+                "clarification_required": false,
+                "clarification_prompt": NSNull(),
+                "candidate_part_ids": [],
+                "twin_action": NSNull(),
+                "twin_action_v1": NSNull(),
+                "turn_id": tid,
+                "scene_generation": sceneGeneration,
+                "manifest_sha256": manifestSha,
+            ]
+        }
+
+        let hasDipQualifier = ["dip", "switch", "switches", "sw1", "rocker", "slave", "address", "binary"].contains(where: { q.contains($0) })
+        let hasRearQualifier = ["rear", "connector", "m12", "plug", "cable", "wire", "wiring", "terminal", "gland", "back"].contains(where: { q.contains($0) })
+
+        if sceneOrigin == "catalog_glb", let twin = descriptor?["twin"] as? [String: Any] {
+            let parts = (twin["parts"] as? [[String: Any]]) ?? []
+            let actions = (twin["actions"] as? [[String: Any]]) ?? []
+
+            // 1. Ambiguous single-pin check (`M4-VOICE-03`: e.g. `dip.pin_1` vs `rear.pin_1`)
+            if let pinNum = extractSinglePinReference(q) {
+                let groupKey = "pin_\(pinNum)"
+                let matchingPinParts = parts.filter {
+                    (($0["ambiguous_group"] as? String) == groupKey)
+                        || ((($0["part_id"] as? String) ?? "").hasSuffix(".pin_\(pinNum)"))
+                }
+                if matchingPinParts.count > 1 && !hasDipQualifier && !hasRearQualifier {
+                    let labels = matchingPinParts.map {
+                        "\(($0["label"] as? String) ?? "") (\(($0["part_id"] as? String) ?? ""))"
+                    }
+                    let cands = matchingPinParts.compactMap { $0["part_id"] as? String }
+                    return [
+                        "ambiguous": true,
+                        "clarification_required": true,
+                        "clarification_prompt": "Ambiguous component reference for Pin \(pinNum). Please specify which Pin \(pinNum) to highlight: \(labels.joined(separator: " or "))?",
+                        "candidate_part_ids": cands,
+                        "twin_action": NSNull(),
+                        "twin_action_v1": NSNull(),
+                        "turn_id": tid,
+                        "scene_generation": sceneGeneration,
+                        "manifest_sha256": manifestSha,
+                    ]
+                }
+                if matchingPinParts.count >= 1 {
+                    let chosen: [String: Any]? = {
+                        if hasDipQualifier {
+                            return matchingPinParts.first(where: { (($0["part_id"] as? String) ?? "").contains("dip") }) ?? matchingPinParts.first
+                        }
+                        if hasRearQualifier {
+                            return matchingPinParts.first(where: { (($0["part_id"] as? String) ?? "").contains("rear") }) ?? matchingPinParts.first
+                        }
+                        return matchingPinParts.count == 1 ? matchingPinParts.first : nil
+                    }()
+                    if let cp = chosen, let pid = cp["part_id"] as? String {
+                        let lbl = (cp["label"] as? String) ?? pid
+                        let sum = (cp["summary"] as? String) ?? ""
+                        let cit = cp["citation_id"] as? String
+                        let viewId = pid.contains("dip") ? "open_dip" : (pid.contains("rear") ? "rear_connector" : "isometric_home")
+                        let v1: [String: Any] = [
+                            "schema": "twin_action_v1",
+                            "kind": "highlight_part",
+                            "part_id": pid,
+                            "view_id": viewId,
+                            "citation_id": cit ?? NSNull(),
+                            "simulated_state": NSNull(),
+                            "callout_title": lbl.uppercased(),
+                            "callout_body": sum,
+                            "turn_id": tid,
+                            "scene_generation": sceneGeneration,
+                            "manifest_sha256": manifestSha,
+                            "requires_scene_ready": true,
+                        ]
+                        let legacy: [String: Any] = [
+                            "action": "focus_part",
+                            "part_id": pid,
+                            "view_id": viewId,
+                            "explode_pcb": viewId == "open_dip",
+                            "callout_title": lbl.uppercased(),
+                            "callout_body": sum,
+                        ]
+                        return [
+                            "ambiguous": false,
+                            "clarification_required": false,
+                            "clarification_prompt": NSNull(),
+                            "candidate_part_ids": [],
+                            "twin_action": legacy,
+                            "twin_action_v1": v1,
+                            "turn_id": tid,
+                            "scene_generation": sceneGeneration,
+                            "manifest_sha256": manifestSha,
+                        ]
+                    }
+                }
+            }
+
+            // 2. Match explicit `twin.actions.json` triggers OR linked part aliases/labels (`PR #4` & `PR #5` parity)
+            let resetPhrasesV1 = ["reset view", "reset 3d", "close housing", "close the housing", "close the sensor", "reassemble", "default overview", "full view"]
+            if resetPhrasesV1.contains(where: { q.contains($0) }),
+               let resetAct = actions.first(where: { ($0["kind"] as? String) == "reset_view" }) {
+                let vid = (resetAct["view_id"] as? String) ?? "default_overview"
+                let v1: [String: Any] = [
+                    "schema": "twin_action_v1",
+                    "kind": "reset_view",
+                    "part_id": resetAct["part_id"] ?? NSNull(),
+                    "view_id": vid,
+                    "citation_id": resetAct["citation_id"] ?? NSNull(),
+                    "simulated_state": NSNull(),
+                    "callout_title": "ASSEMBLED OVERVIEW",
+                    "callout_body": "Resetting verified 3D Digital Twin to assembled overview.",
+                    "turn_id": tid,
+                    "scene_generation": sceneGeneration,
+                    "manifest_sha256": manifestSha,
+                    "requires_scene_ready": true,
+                ]
+                let legacy: [String: Any] = [
+                    "action": "reset_view",
+                    "part_id": resetAct["part_id"] ?? NSNull(),
+                    "view_id": vid,
+                    "explode_pcb": false,
+                    "callout_title": "ASSEMBLED OVERVIEW",
+                    "callout_body": "Resetting verified 3D Digital Twin to assembled overview.",
+                ]
+                return [
+                    "ambiguous": false,
+                    "clarification_required": false,
+                    "clarification_prompt": NSNull(),
+                    "candidate_part_ids": [],
+                    "twin_action": legacy,
+                    "twin_action_v1": v1,
+                    "turn_id": tid,
+                    "scene_generation": sceneGeneration,
+                    "manifest_sha256": manifestSha,
+                ]
+            }
+
+            for act in actions {
+                let kind = (act["kind"] as? String) ?? "focus_part"
+                let triggers = ((act["triggers"] as? [String]) ?? []).map { $0.lowercased() }.filter { !$0.isEmpty }
+                if kind == "reset_view" && triggers.isEmpty {
+                    continue
+                }
+                let pid = act["part_id"] as? String
+                let matchedPart = parts.first(where: { ($0["part_id"] as? String) == pid })
+                var partTerms: [String] = []
+                if let mp = matchedPart {
+                    for al in ((mp["aliases"] as? [String]) ?? []) {
+                        let clean = al.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        if !clean.isEmpty { partTerms.append(clean) }
+                    }
+                    for key in ["label", "legacy_zone_id"] {
+                        if let v = (mp[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !v.isEmpty {
+                            partTerms.append(v)
+                        }
+                    }
+                }
+                if triggers.contains(where: { q.contains($0) })
+                    || (pid != nil && q.contains(pid!.lowercased()))
+                    || partTerms.contains(where: { q.contains($0) }) {
+                    let vid = (act["view_id"] as? String) ?? "isometric_home"
+                    let cit = act["citation_id"] as? String
+                    let lbl = (matchedPart?["label"] as? String) ?? (pid ?? vid)
+                    let sum = (matchedPart?["summary"] as? String) ?? "Verified 3D catalog twin inspection view."
+                    let v1: [String: Any] = [
+                        "schema": "twin_action_v1",
+                        "kind": kind,
+                        "part_id": pid ?? NSNull(),
+                        "view_id": vid,
+                        "citation_id": cit ?? NSNull(),
+                        "simulated_state": NSNull(),
+                        "callout_title": lbl.uppercased(),
+                        "callout_body": sum,
+                        "turn_id": tid,
+                        "scene_generation": sceneGeneration,
+                        "manifest_sha256": manifestSha,
+                        "requires_scene_ready": true,
+                    ]
+                    let legacy: [String: Any] = [
+                        "action": kind == "reset_view" ? "reset_view" : "focus_part",
+                        "part_id": pid ?? NSNull(),
+                        "view_id": vid,
+                        "explode_pcb": vid == "open_dip",
+                        "callout_title": lbl.uppercased(),
+                        "callout_body": sum,
+                    ]
+                    return [
+                        "ambiguous": false,
+                        "clarification_required": false,
+                        "clarification_prompt": NSNull(),
+                        "candidate_part_ids": [],
+                        "twin_action": legacy,
+                        "twin_action_v1": v1,
+                        "turn_id": tid,
+                        "scene_generation": sceneGeneration,
+                        "manifest_sha256": manifestSha,
+                    ]
+                }
+            }
+
+            // 3. Direct part_id / label / aliases match in `twin.parts.json`
+            for p in parts {
+                let pid = (p["part_id"] as? String) ?? ""
+                let lbl = (p["label"] as? String) ?? pid
+                let aliases = ((p["aliases"] as? [String]) ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty }
+                let legacyZ = ((p["legacy_zone_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if !pid.isEmpty && (
+                    q.contains(pid.lowercased())
+                    || q.contains(lbl.lowercased())
+                    || (!legacyZ.isEmpty && q.contains(legacyZ))
+                    || aliases.contains(where: { q.contains($0) })
+                ) {
+                    let vid = pid.contains("dip") ? "open_dip" : (pid.contains("rear") ? "rear_connector" : (pid.contains("probe") ? "probe_tip" : "isometric_home"))
+                    let sum = (p["summary"] as? String) ?? ""
+                    let v1: [String: Any] = [
+                        "schema": "twin_action_v1",
+                        "kind": "focus_part",
+                        "part_id": pid,
+                        "view_id": vid,
+                        "citation_id": p["citation_id"] ?? NSNull(),
+                        "simulated_state": NSNull(),
+                        "callout_title": lbl.uppercased(),
+                        "callout_body": sum,
+                        "turn_id": tid,
+                        "scene_generation": sceneGeneration,
+                        "manifest_sha256": manifestSha,
+                        "requires_scene_ready": true,
+                    ]
+                    let legacy: [String: Any] = [
+                        "action": "focus_part",
+                        "part_id": pid,
+                        "view_id": vid,
+                        "explode_pcb": vid == "open_dip",
+                        "callout_title": lbl.uppercased(),
+                        "callout_body": sum,
+                    ]
+                    return [
+                        "ambiguous": false,
+                        "clarification_required": false,
+                        "clarification_prompt": NSNull(),
+                        "candidate_part_ids": [],
+                        "twin_action": legacy,
+                        "twin_action_v1": v1,
+                        "turn_id": tid,
+                        "scene_generation": sceneGeneration,
+                        "manifest_sha256": manifestSha,
+                    ]
+                }
+            }
+        }
+
+        // Bundled parametric `TZ THT-02` path: check ambiguous single-pin ("show me pin one") first (`M4-VOICE-03`)
+        if let pinNum = extractSinglePinReference(q), (1...4).contains(pinNum), !hasDipQualifier && !hasRearQualifier {
+            return [
+                "ambiguous": true,
+                "clarification_required": true,
+                "clarification_prompt": "Ambiguous reference for Pin \(pinNum). Do you want to highlight SW1 DIP-8 Switch Pin \(pinNum) (dip.pin_\(pinNum)) or Rear 4-Wire Lead #\(pinNum) (rear.pin_\(pinNum))?",
+                "candidate_part_ids": ["dip.pin_\(pinNum)", "rear.pin_\(pinNum)"],
+                "twin_action": NSNull(),
+                "twin_action_v1": NSNull(),
+                "turn_id": tid,
+                "scene_generation": sceneGeneration,
+                "manifest_sha256": manifestSha,
+            ]
+        }
+
+        guard let legacy = resolveTwinAction(query: query, zoneHint: zoneHint, currentDipAddress: currentDipAddress) else {
+            return [
+                "ambiguous": false,
+                "clarification_required": false,
+                "clarification_prompt": NSNull(),
+                "candidate_part_ids": [],
+                "twin_action": NSNull(),
+                "twin_action_v1": NSNull(),
+                "turn_id": tid,
+                "scene_generation": sceneGeneration,
+                "manifest_sha256": manifestSha,
+            ]
+        }
+
+        let actType = (legacy["action"] as? String) ?? "focus_zone"
+        let kind: String = {
+            if actType == "reset_view" { return "reset_view" }
+            if actType == "configure_dip" { return "simulate_state" }
+            if actType == "xray_view" { return "show_view" }
+            return "focus_part"
+        }()
+        let fz = legacy["focus_zone"] as? String
+        let mp = legacy["manual_page"] as? Int
+        let simState: Any = (actType == "configure_dip")
+            ? ["visual_dip_address": legacy["target_slave_id"] ?? currentDipAddress, "dip_bits": legacy["dip_bits"] ?? [], "bus_target_mutated": false]
+            : NSNull()
+        let v1: [String: Any] = [
+            "schema": "twin_action_v1",
+            "kind": kind,
+            "part_id": fz ?? NSNull(),
+            "view_id": (legacy["camera_pose"] as? String) ?? "overview",
+            "citation_id": (mp != nil) ? "tht02_manual_v1_1:p\(mp!):\(mp!).1" : NSNull(),
+            "simulated_state": simState,
+            "callout_title": legacy["callout_title"] ?? "",
+            "callout_body": legacy["callout_body"] ?? "",
+            "turn_id": tid,
+            "scene_generation": sceneGeneration,
+            "manifest_sha256": manifestSha,
+            "requires_scene_ready": false,
+        ]
+        return [
+            "ambiguous": false,
+            "clarification_required": false,
+            "clarification_prompt": NSNull(),
+            "candidate_part_ids": [],
+            "twin_action": legacy,
+            "twin_action_v1": v1,
+            "turn_id": tid,
+            "scene_generation": sceneGeneration,
+            "manifest_sha256": manifestSha,
+        ]
+    }
 }

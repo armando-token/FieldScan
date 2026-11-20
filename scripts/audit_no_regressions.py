@@ -100,7 +100,14 @@ def audit_python_dependency_dag(errors: list[str]) -> dict[str, list[str]]:
             dfs(m, [m])
 
     # Leaf modules must never import server.py or lfm_engine.py
-    for leaf_mod in ("manual_navigator", "twin_controller", "scene_and_chat_router", "profiles_and_manual"):
+    for leaf_mod in (
+        "manual_navigator",
+        "twin_controller",
+        "scene_and_chat_router",
+        "profiles_and_manual",
+        "catalog_store",
+        "catalog_client",
+    ):
         bad = set(graph.get(leaf_mod, [])) & {"server", "lfm_engine"}
         if bad:
             _fail(errors, f"[DAG] Modular leaf `{leaf_mod}` must not import top-level orchestrators: {sorted(bad)}")
@@ -124,9 +131,9 @@ def audit_english_only_gate(errors: list[str]) -> int:
     for path in PROJECT_ROOT.rglob("*"):
         if any(part in skip_dirs for part in path.parts) or not path.is_file():
             continue
-        if path.name == "golden_contracts_v2_1.json":
+        if path.name == "golden_contracts_v2_1.json" or path.name.startswith("MEGAPLAN_"):
             continue
-        if path.suffix in {".py", ".html", ".css", ".js", ".json", ".sh"}:
+        if path.suffix in {".py", ".swift", ".md", ".html", ".css", ".js", ".json", ".sh"}:
             if path.name == "audit_no_regressions.py" or path.name == "test_fieldscan_glue.py":
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
@@ -171,13 +178,18 @@ def audit_frontend_ptt_bargein_twin_and_manual(errors: list[str]) -> None:
     if ".fault-callout.is-guided" not in styles_css:
         _fail(errors, "[3D-TWIN] `.fault-callout.is-guided` cyan styling missing in static/styles.css")
 
-    # 6. Working Datasheet Section Lookup & 9-Page Navigator intact
-    for req_dom in ("manualSectionBanner", "lightboxSectionBanner", "manualQuickPills"):
+    # 6. Working Datasheet Section Lookup & 9-Page Navigator intact + Dynamic Cloud Catalog UI
+    for req_dom in ("manualSectionBanner", "lightboxSectionBanner", "manualQuickPills", "catalogModal", "manualDocSelect"):
         if req_dom not in index_html or req_dom not in app_js:
-            _fail(errors, f"[MANUAL] `{req_dom}` missing from index.html or app.js (regression on datasheet highlight!)")
+            _fail(errors, f"[MANUAL/CATALOG] `{req_dom}` missing from index.html or app.js (regression!)")
     for page_num in range(1, 10):
         if f'data-page="{page_num}"' not in index_html:
             _fail(errors, f"[MANUAL] Quick pill P{page_num} missing from static/index.html")
+    for vendor_js in ("GLTFLoader.js", "BufferGeometryUtils.js"):
+        if not (PROJECT_ROOT / "static" / "vendor" / vendor_js).is_file():
+            _fail(errors, f"[3D-GLB] Missing local vendor module static/vendor/{vendor_js}")
+    if "function applyTwinActionV1(" not in app_js or "function loadCatalogSceneFromDescriptor(" not in app_js:
+        _fail(errors, "[3D-GLB] `applyTwinActionV1` or `loadCatalogSceneFromDescriptor` missing in static/app.js")
 
 
 def audit_swift_voice_bargein_twin_and_xcode(errors: list[str]) -> None:
@@ -187,6 +199,9 @@ def audit_swift_voice_bargein_twin_and_xcode(errors: list[str]) -> None:
 
     # Required modular Swift files in Xcode project
     for swift_name in (
+        "FieldScanCatalogModels.swift",
+        "FieldScanPackageStore.swift",
+        "FieldScanCatalogClient.swift",
         "FieldScanManualNavigator.swift",
         "FieldScanTwinController.swift",
         "FieldScanVisionDetector.swift",
@@ -198,7 +213,7 @@ def audit_swift_voice_bargein_twin_and_xcode(errors: list[str]) -> None:
         if swift_name not in pbxproj:
             _fail(errors, f"[XCODE] `{swift_name}` not registered in project.pbxproj")
 
-    # PTT & Barge-In invariants in StandaloneFieldScanServer.swift
+    # PTT, Barge-In, Loopback & Bus Isolation invariants in StandaloneFieldScanServer.swift
     required_markers = (
         ("pttRecordingActive", "[SWIFT-PTT] `pttRecordingActive` flag missing in StandaloneFieldScanServer.swift"),
         ("prevReq?.endAudio()", "[SWIFT-PTT] `endAudio()` flush before task cancel missing in StandaloneFieldScanServer.swift"),
@@ -208,6 +223,8 @@ def audit_swift_voice_bargein_twin_and_xcode(errors: list[str]) -> None:
         ("rebindSpeechRecognitionRequestAfterBargeIn", "[SWIFT-BARGE-IN] ASR pre-roll rebind after barge-in missing"),
         ('Locale(identifier: "en-US")', "[SWIFT-EN] `en-US` recognizer lock missing in StandaloneFieldScanServer.swift"),
         ('"twin_action":', "[SWIFT-3D-TWIN] `twin_action` missing from Swift `/api/diagnose` response"),
+        ("host: .ipv4(.loopback)", "[SWIFT-NET] `StandaloneFieldScanServer` must bind strictly to 127.0.0.1 loopback"),
+        ("simulatedVisualDipAddress", "[SWIFT-BUS] Visual DIP simulation state must remain isolated from targetSlaveId"),
     )
     for needle, err_msg in required_markers:
         if needle not in srv_swift:

@@ -17,6 +17,9 @@ public final class AppDelegate: UIResponder, UIApplicationDelegate {
         // Keep iPad Air M4 screen awake during live optical inspection & Modbus-RTU recovery
         application.isIdleTimerDisabled = true
 
+        // Recover local FieldScanCatalog store synchronously (< 2 ms, zero network wait) (`M4-BASE-01`, `M4-PKG-04`)
+        _ = FieldScanPackageStore.shared.recoverOnBoot()
+
         // Start in-process native HTTP/1.1 listener on 127.0.0.1:8088 immediately (< 5 ms)
         StandaloneFieldScanServer.shared.start()
 

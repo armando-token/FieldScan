@@ -21,6 +21,8 @@ from fieldscan.calibration_planned import (
     evaluate_calibration_comparison_contract,
     get_planned_calibration_card,
 )
+from fieldscan.catalog_client import FieldScanCatalogClient
+from fieldscan.catalog_store import CatalogDomainError, FieldScanPackageStore
 from fieldscan.lfm_engine import MANUAL_PAGE_TITLES, get_lfm_engine
 from fieldscan.live_repair import LiveRepairCoordinator
 from fieldscan.modbus_rtu import ModbusRTUScanner, discover_serial_ports
@@ -58,7 +60,81 @@ INITIAL_MODBUS_MODE = os.environ.get("FIELDSCAN_MODBUS_MODE", "auto")
 _SCANNER = VisionScanner(initial_mode=INITIAL_CAM_MODE, auto_start=False)
 _MODBUS = ModbusRTUScanner(initial_mode=INITIAL_MODBUS_MODE, target_slave_id=1, auto_start=False)
 _REPAIR = LiveRepairCoordinator()
-_SESSIONS = FieldScanSessionEngine(exports_dir=EXPORTS_DIR, project_root=PROJECT_ROOT)
+_CATALOG_STORE = FieldScanPackageStore(
+    catalog_root=PROJECT_ROOT / "data" / "FieldScanCatalog",
+    bundle_root=PROJECT_ROOT,
+)
+_CATALOG_CLIENT = FieldScanCatalogClient(_CATALOG_STORE)
+_SESSIONS = FieldScanSessionEngine(
+    exports_dir=EXPORTS_DIR,
+    project_root=PROJECT_ROOT,
+    catalog_store=_CATALOG_STORE,
+)
+
+_SIMULATED_VISUAL_DIP_ADDRESS: int = 1
+_ACTIVE_SCENE_GENERATION: int = 1
+_LATEST_SCENE_READY_TURN: dict[str, Any] = {}
+
+
+def _resolve_effective_context(
+    session_id: str | None = None,
+    manifest_sha256: str | None = None,
+) -> dict[str, Any]:
+    m_sha = (manifest_sha256 or "").strip()
+    if m_sha:
+        if m_sha == "bundle" or m_sha.startswith("bundle-"):
+            return _CATALOG_STORE.build_bundle_default_context()
+        try:
+            pkg = _CATALOG_STORE.get_installed_package(m_sha)
+            m_obj = pkg["manifest"]
+            homologated = bool(m_obj.get("bench_modbus_homologated", False))
+            return {
+                "product_id": pkg["product_id"],
+                "variant_id": pkg["variant_id"],
+                "title": m_obj.get("title") or f"{pkg['product_id']} ({pkg['variant_id']})",
+                "publication_seq": pkg["publication_seq"],
+                "manifest_sha256": m_sha,
+                "local_profile_id": m_obj.get("bench_profile_id") if homologated else None,
+                "content_origin": "catalog",
+                "bench_modbus_homologated": homologated,
+                "capabilities": pkg["capabilities"],
+            }
+        except CatalogDomainError:
+            pass
+
+    sid_to_check = (session_id or "").strip() or _SESSIONS._active_session_id
+    if sid_to_check:
+        try:
+            snap = _SESSIONS.get_session(sid_to_check)
+            if (snap.get("status") == "open" or bool(session_id)) and isinstance(snap.get("catalog_context"), dict):
+                cat_ctx = snap["catalog_context"]
+                if cat_ctx.get("content_origin") == "catalog" and cat_ctx.get("manifest_sha256"):
+                    return dict(cat_ctx)
+        except SessionDomainError:
+            pass
+    return _CATALOG_STORE.get_selected_context()
+
+
+def _enrich_vision_telemetry(raw_tel: dict[str, Any], eff_ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+    tel = dict(raw_tel or {})
+    ctx = eff_ctx or _resolve_effective_context()
+    is_calibrated_tht02 = ctx.get("product_id") == "tzone_tht02" and ctx.get("content_origin") != "catalog"
+    occluded = bool(
+        tel.get("hand_detected")
+        or tel.get("tool_detected")
+        or tel.get("white_sticker_occluded")
+        or not tel.get("detected", False)
+    )
+    tel["detector_applicability"] = (
+        "calibrated_tht02_140x16mm" if is_calibrated_tht02 else "generic_cylinder_manual_confirmation"
+    )
+    if not is_calibrated_tht02:
+        tel["evidence_state"] = "manual_confirmation_required"
+    elif occluded:
+        tel["evidence_state"] = "uncertain_occluded"
+    else:
+        tel["evidence_state"] = "observed"
+    return tel
 
 
 def _jpeg_to_png_bytes(jpeg_bytes: bytes) -> bytes | None:
@@ -149,13 +225,18 @@ def _evaluate_live_reactive_watch() -> None:
 
 def _build_unified_status(run_socket_test: bool = False) -> dict[str, Any]:
     _evaluate_live_reactive_watch()
-    vision_tel = _SCANNER.get_telemetry()
+    eff_ctx = _resolve_effective_context()
+    vision_tel = _enrich_vision_telemetry(_SCANNER.get_telemetry(), eff_ctx)
     modbus_tel = _MODBUS.get_telemetry()
     repair_state = _REPAIR.get_state()
     engine = get_lfm_engine()
     vm = psutil.virtual_memory()
     ram_used_gb = round((vm.total - vm.available) / (1024**3), 2)
     ram_total_gb = round(vm.total / (1024**3), 2)
+
+    sync_tel = _CATALOG_CLIENT.get_sync_telemetry()
+    sync_on = bool(sync_tel.get("sync_enabled"))
+    https_emitted = int(sync_tel.get("https_requests_emitted") or 0)
 
     if run_socket_test or GLOBAL_OFFLINE_GUARD.verified_at is None:
         offline_info = GLOBAL_OFFLINE_GUARD.self_test()
@@ -168,6 +249,15 @@ def _build_unified_status(run_socket_test: bool = False) -> dict[str, Any]:
             "loopback_connections": GLOBAL_OFFLINE_GUARD.loopback_connections,
             "verified_at": GLOBAL_OFFLINE_GUARD.verified_at,
         }
+    strictly_offline = bool(offline_info["offline_verified"]) and (not sync_on) and (https_emitted == 0)
+    offline_info = {
+        **offline_info,
+        "offline_verified": strictly_offline,
+        "external_egress_blocked": bool(offline_info["external_egress_blocked"]) and (not sync_on),
+        "egress_policy": sync_tel["egress_policy"],
+        "local_listener_scope": "loopback_127.0.0.1",
+        "https_requests_emitted": https_emitted,
+    }
 
     sys_info = {
         "model_name": engine.last_model_label,
@@ -178,12 +268,19 @@ def _build_unified_status(run_socket_test: bool = False) -> dict[str, Any]:
         "tokens_per_sec": engine.last_tokens_per_sec,
     }
 
+    sensor_id_out = "TZ-THT-02" if eff_ctx.get("product_id") == "tzone_tht02" else str(eff_ctx.get("product_id", "")).upper()
     return {
         "status": "ok",
         "contract_version": CONTRACT_VERSION,
-        "sensor_id": "TZ-THT-02",
-        "offline_verified": bool(offline_info["offline_verified"]),
+        "sensor_id": sensor_id_out,
+        "active_context": eff_ctx,
+        "scene_generation": _ACTIVE_SCENE_GENERATION,
+        "simulated_visual_dip_address": _SIMULATED_VISUAL_DIP_ADDRESS,
+        "authorized_bus_slave_id": int(modbus_tel.get("target_slave_id") or 1),
+        "local_listener_scope": "loopback_127.0.0.1",
+        "offline_verified": strictly_offline,
         "blocked_external_attempts": offline_info["blocked_external_attempts"],
+        "catalog_sync": sync_tel,
         "fps": vision_tel.get("fps", 30.0),
         "vision": vision_tel,
         "modbus": modbus_tel,
@@ -269,6 +366,7 @@ def _build_capabilities_payload() -> dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _CATALOG_STORE.recover_on_boot()
     GLOBAL_OFFLINE_GUARD.self_test()
     inspect_pdf_document(DEFAULT_PDF_PATH)
     load_tht02_spec()
@@ -289,6 +387,14 @@ app = FastAPI(
 @app.exception_handler(SessionDomainError)
 async def _handle_session_domain_error(_request: Request, exc: SessionDomainError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
+
+
+@app.exception_handler(CatalogDomainError)
+async def _handle_catalog_domain_error(_request: Request, exc: CatalogDomainError) -> JSONResponse:
+    body = exc.to_dict()
+    if hasattr(exc, "retry_after_s"):
+        body["retry_after_s"] = getattr(exc, "retry_after_s")
+    return JSONResponse(status_code=exc.status_code, content=body)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
@@ -314,16 +420,50 @@ async def api_status() -> dict[str, Any]:
 async def api_offline_verify() -> dict[str, Any]:
     report = GLOBAL_OFFLINE_GUARD.self_test()
     status = await asyncio.to_thread(_build_unified_status, False)
+    sync_tel = status["catalog_sync"]
+    strictly_offline = (
+        bool(report["offline_verified"])
+        and (not sync_tel["sync_enabled"])
+        and (int(sync_tel["https_requests_emitted"]) == 0)
+    )
     status.update(report)
+    status["offline_verified"] = strictly_offline
+    status["offline"]["offline_verified"] = strictly_offline
     return status
 
 
 @app.get("/api/spec")
-async def api_spec() -> dict[str, Any]:
+async def api_spec(
+    query: str | None = None,
+    session_id: str | None = None,
+    manifest_sha256: str | None = None,
+) -> dict[str, Any]:
+    if query and query.strip():
+        resolved = await asyncio.to_thread(_CATALOG_STORE.resolve_asset_query, query.strip())
+        if not resolved.get("matched"):
+            return {
+                "matched": False,
+                "resolution": resolved.get("resolution", "unknown"),
+                "identity_status": resolved.get("identity_status", "unknown_pending_identity"),
+                "sensor_id": None,
+                "resolved_model": None,
+                "spec": None,
+                "candidates": resolved.get("candidates", []),
+                "discriminant_prompt": resolved.get("discriminant_prompt"),
+            }
+    eff_ctx = _resolve_effective_context(session_id=session_id, manifest_sha256=manifest_sha256)
     spec = load_tht02_spec()
     pdf_doc = inspect_pdf_document(DEFAULT_PDF_PATH)
+    try:
+        descriptor = _CATALOG_STORE.build_scene_and_manual_descriptor(eff_ctx)
+    except CatalogDomainError:
+        descriptor = _CATALOG_STORE.build_scene_and_manual_descriptor(_CATALOG_STORE.build_bundle_default_context())
+    sensor_id_out = "TZ-THT-02" if eff_ctx.get("product_id") == "tzone_tht02" else str(eff_ctx.get("product_id") or "").upper()
     return {
-        "sensor_id": spec["sensor_id"],
+        "sensor_id": sensor_id_out,
+        "active_context": eff_ctx,
+        "catalog_descriptor": descriptor,
+        "cad_exports_supported": descriptor.get("cad_exports_supported", ["dxf", "stl", "pdf", "json"]),
         "spec": spec,
         "pdf_document": pdf_doc,
         "camera_modes": _SCANNER.list_modes(),
@@ -333,34 +473,111 @@ async def api_spec() -> dict[str, Any]:
 
 @app.post("/api/sensor/load")
 async def api_sensor_load(payload: dict[str, Any]) -> dict[str, Any]:
+    global _ACTIVE_SCENE_GENERATION
+    has_explicit_key = any(k in payload for k in ("query", "sensor_query", "sensor_id"))
     raw_query = (
         payload.get("query")
-        or payload.get("sensor_query")
-        or payload.get("sensor_id")
-        or "TZ THT-02"
+        if payload.get("query") is not None
+        else (
+            payload.get("sensor_query")
+            if payload.get("sensor_query") is not None
+            else (payload.get("sensor_id") if payload.get("sensor_id") is not None else ("" if has_explicit_key else "TZ THT-02"))
+        )
     )
-    match = match_and_load_sensor(str(raw_query))
-    spec = match["spec"]
+    resolved = await asyncio.to_thread(_CATALOG_STORE.resolve_asset_query, str(raw_query))
+    if not resolved.get("matched"):
+        if resolved.get("resolution") == "ambiguous":
+            prompt = str(resolved.get("discriminant_prompt") or "Multiple variants match; select exact hardware variant.")
+            return {
+                "matched": False,
+                "resolution": "ambiguous",
+                "identity_status": resolved.get("identity_status", "identify_variant"),
+                "sensor_id": None,
+                "resolved_model": None,
+                "spec": None,
+                "discriminant_field": resolved.get("discriminant_field"),
+                "discriminant_prompt": prompt,
+                "candidates": resolved.get("candidates", []),
+                "diagnosis": prompt,
+                "assistant_message": prompt,
+                "citations": [],
+                "manual_citations": [],
+            }
+        unknown_msg = (
+            f"No local verified profile matches '{raw_query}'. Automatic TZONE THT-02 register mapping is inhibited; "
+            "import a signed package or enable Cloud Catalog search."
+        )
+        return {
+            "matched": False,
+            "resolution": "unknown",
+            "identity_status": "unknown_pending_identity",
+            "sensor_id": None,
+            "resolved_model": None,
+            "spec": None,
+            "confidence": 0.0,
+            "can_query_cloud_catalog": True,
+            "suggested_cloud_query": resolved.get("suggested_cloud_query", {}),
+            "candidates": [],
+            "diagnosis": unknown_msg,
+            "assistant_message": unknown_msg,
+            "citations": [],
+            "manual_citations": [],
+        }
+
+    ctx = resolved["context"]
+    sensor_id = str(resolved.get("sensor_id") or "TZ-THT-02")
+    spec = load_tht02_spec()
+    engine = get_lfm_engine()
+
+    if ctx.get("content_origin") == "catalog" and ctx.get("manifest_sha256"):
+        sel_ctx = await asyncio.to_thread(_CATALOG_STORE.select_context_for_next_session, str(ctx["manifest_sha256"]))
+        desc = await asyncio.to_thread(_CATALOG_STORE.build_scene_and_manual_descriptor, sel_ctx)
+        _ACTIVE_SCENE_GENERATION += 1
+        doc_count = len(desc.get("documents", []))
+        msg = f"Verified signed catalog package loaded for {sel_ctx['title']} (publication seq #{sel_ctx['publication_seq']}, {doc_count} document(s))."
+        audio_b64 = await asyncio.to_thread(engine.synthesize_speech_b64, msg)
+        return {
+            "matched": True,
+            "resolution": "exact",
+            "identity_status": resolved.get("identity_status", "matched"),
+            "sensor_id": sensor_id,
+            "resolved_model": sensor_id,
+            "matched_alias": resolved.get("matched_alias", sensor_id),
+            "confidence": 0.99,
+            "context": sel_ctx,
+            "catalog_descriptor": desc,
+            "scene_generation": _ACTIVE_SCENE_GENERATION,
+            "diagnosis": msg,
+            "assistant_message": msg,
+            "citations": [],
+            "manual_citations": [],
+            "audio_wav_b64": audio_b64,
+            "spec": spec,
+        }
+
+    match = match_and_load_sensor(str(raw_query) or "TZ THT-02")
     dims = spec["dimensions_mm"]
     msg = (
         f"Local datasheet verified ({match['pdf_document']['page_count']} pages, "
         f"{match['pdf_document']['inspected_in_ms']} ms): input '{raw_query}' resolved to "
-        f"{spec['name']} ({spec['sensor_id']}). Parametric CAD blueprint loaded: total length "
+        f"{sensor_id}. Parametric CAD blueprint loaded: total length "
         f"{dims['total_length']} mm x outer diameter {dims['outer_diameter']} mm, SHT30/SHT3X CMOSens "
         f"probe element, and RS-485 Modbus-RTU bus."
     )
-    engine = get_lfm_engine()
     audio_b64 = await asyncio.to_thread(engine.synthesize_speech_b64, msg)
     citations = [
         {"page": 1, "label": MANUAL_PAGE_TITLES[1]},
         {"page": 9, "label": MANUAL_PAGE_TITLES[9]},
     ]
     return {
-        "matched": match["matched"],
-        "sensor_id": match["sensor_id"],
-        "resolved_model": match["sensor_id"],
-        "matched_alias": match["matched_alias"],
-        "confidence": match["confidence"],
+        "matched": True,
+        "resolution": "exact",
+        "identity_status": resolved.get("identity_status", "matched"),
+        "sensor_id": sensor_id,
+        "resolved_model": sensor_id,
+        "matched_alias": resolved.get("matched_alias") or match["matched_alias"],
+        "confidence": 0.99,
+        "context": ctx,
         "manual_page": 9,
         "diagnosis": msg,
         "assistant_message": msg,
@@ -374,7 +591,7 @@ async def api_sensor_load(payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/api/video/telemetry")
 async def api_video_telemetry() -> dict[str, Any]:
-    return _SCANNER.get_telemetry()
+    return _enrich_vision_telemetry(_SCANNER.get_telemetry())
 
 
 @app.get("/api/video/snapshot")
@@ -496,9 +713,19 @@ async def api_modbus_telemetry() -> dict[str, Any]:
     return tel
 
 
-@app.post("/api/modbus/mode")
-async def api_modbus_mode(payload: dict[str, Any]) -> dict[str, Any]:
+@app.post("/api/modbus/mode", response_model=None)
+async def api_modbus_mode(payload: dict[str, Any]) -> Response | dict[str, Any]:
     mode = str(payload.get("mode") or "auto").strip()
+    eff_ctx = _resolve_effective_context(session_id=payload.get("session_id"))
+    if not mode.lower().startswith("sim_") and mode.lower() != "auto" and not eff_ctx.get("bench_modbus_homologated", True):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "error_code": "PROFILE_NOT_HOMOLOGATED_FOR_BUS",
+                "message": f"Active profile '{eff_ctx.get('product_id')}/{eff_ctx.get('variant_id')}' is not homologated for hardware Modbus polling.",
+            },
+        )
     slave_id = payload.get("target_slave_id") or payload.get("slave_id")
     baud_bps = payload.get("baud_bps")
     pusr_host = payload.get("pusr_host") or payload.get("gateway_host")
@@ -516,6 +743,48 @@ async def api_modbus_mode(payload: dict[str, Any]) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return await asyncio.to_thread(_build_unified_status, False)
+
+
+@app.post("/api/modbus/target_slave", response_model=None)
+async def api_modbus_target_slave(payload: dict[str, Any]) -> Response | dict[str, Any]:
+    global _SIMULATED_VISUAL_DIP_ADDRESS
+    if not bool(payload.get("confirmed", False)):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "error_code": "CONFIRMATION_REQUIRED",
+                "message": "Changing the authorized Modbus polling target requires explicit confirmed=true.",
+            },
+        )
+    raw_sid = payload.get("slave_id") if payload.get("slave_id") is not None else payload.get("target_slave_id")
+    try:
+        sid = int(raw_sid)
+    except (TypeError, ValueError):
+        sid = -1
+    if not (1 <= sid <= 247):
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error_code": "INVALID_SLAVE_ID", "message": "Modbus Slave ID must be in 1..247."},
+        )
+    eff_ctx = _resolve_effective_context(session_id=payload.get("session_id"))
+    if not eff_ctx.get("bench_modbus_homologated", True):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "error_code": "PROFILE_NOT_HOMOLOGATED_FOR_BUS",
+                "message": f"Profile '{eff_ctx.get('product_id')}/{eff_ctx.get('variant_id')}' is not homologated for Modbus register polling.",
+            },
+        )
+    await asyncio.to_thread(_MODBUS.set_target_slave, sid)
+    _SIMULATED_VISUAL_DIP_ADDRESS = sid
+    return {
+        "ok": True,
+        "target_slave_id": sid,
+        "simulated_visual_dip_address": sid,
+        "modbus": _MODBUS.get_telemetry(),
+    }
 
 
 @app.post("/api/modbus/scan")
@@ -620,8 +889,19 @@ async def _handle_multimodal_or_live_repair_query(
     zone_hint: str | None,
     dip_address: int | None,
     cad_views_b64: dict[str, str] | None = None,
+    session_id: str | None = None,
+    manifest_sha256: str | None = None,
+    scene_generation: int | None = None,
+    turn_id: str | None = None,
 ) -> dict[str, Any]:
+    global _SIMULATED_VISUAL_DIP_ADDRESS
     engine = get_lfm_engine()
+    eff_ctx = _resolve_effective_context(session_id=session_id, manifest_sha256=manifest_sha256)
+    try:
+        cat_desc = _CATALOG_STORE.build_scene_and_manual_descriptor(eff_ctx)
+    except CatalogDomainError:
+        cat_desc = _CATALOG_STORE.build_scene_and_manual_descriptor(_CATALOG_STORE.build_bundle_default_context())
+    eff_scene_gen = int(scene_generation if scene_generation is not None else _ACTIVE_SCENE_GENERATION)
     intent = _detect_conversational_repair_intent(query)
 
     if intent == "inspect_open":
@@ -632,14 +912,19 @@ async def _handle_multimodal_or_live_repair_query(
             _SCANNER.get_latest_jpeg(),
             engine.synthesize_speech_b64,
         )
-        from fieldscan.twin_controller import resolve_twin_action
+        from fieldscan.twin_controller import prepare_visual_action
 
-        res.setdefault("language", "en")
-        res["twin_action"] = resolve_twin_action(
+        prep = prepare_visual_action(
             query,
+            descriptor=cat_desc,
             zone_hint="upper_barrel_dip",
-            current_dip_address=dip_address or 1,
+            current_dip_address=dip_address or _SIMULATED_VISUAL_DIP_ADDRESS,
+            scene_generation=eff_scene_gen,
+            turn_id=turn_id,
         )
+        res.setdefault("language", "en")
+        res["twin_action"] = prep["twin_action"]
+        res["twin_action_v1"] = prep["twin_action_v1"]
         return res
 
     if intent == "guide_dip":
@@ -651,15 +936,24 @@ async def _handle_multimodal_or_live_repair_query(
             engine.synthesize_speech_b64,
         )
         target_sid = int(res["target_slave_id"])
-        await asyncio.to_thread(_MODBUS.set_target_slave, target_sid)
-        from fieldscan.twin_controller import resolve_twin_action
+        # Conversational/voice requests update ONLY visual DIP simulation, NEVER `_MODBUS.target_slave_id` (`M4-BUS-01`)
+        _SIMULATED_VISUAL_DIP_ADDRESS = target_sid
+        from fieldscan.twin_controller import prepare_visual_action
 
-        res.setdefault("language", "en")
-        res["twin_action"] = resolve_twin_action(
+        prep = prepare_visual_action(
             query,
+            descriptor=cat_desc,
             zone_hint="upper_barrel_dip",
             current_dip_address=target_sid,
+            scene_generation=eff_scene_gen,
+            turn_id=turn_id,
         )
+        res.setdefault("language", "en")
+        res["simulated_visual_dip_address"] = target_sid
+        res["authorized_bus_slave_id"] = int(_MODBUS.get_telemetry().get("target_slave_id") or 1)
+        res["bus_target_mutated"] = False
+        res["twin_action"] = prep["twin_action"]
+        res["twin_action_v1"] = prep["twin_action_v1"]
         return res
 
     if intent == "signoff_report":
@@ -713,7 +1007,7 @@ async def _handle_multimodal_or_live_repair_query(
         frame_jpg = None
     mb_tel = _MODBUS.get_telemetry()
 
-    return await asyncio.to_thread(
+    diag_out = await asyncio.to_thread(
         engine.diagnose_sensor,
         query=query,
         spec=spec,
@@ -721,9 +1015,19 @@ async def _handle_multimodal_or_live_repair_query(
         scanner_telemetry=tel,
         modbus_telemetry=mb_tel,
         zone_hint=zone_hint,
-        dip_address=dip_address,
+        dip_address=dip_address if dip_address is not None else _SIMULATED_VISUAL_DIP_ADDRESS,
         raw_frame_jpeg=raw_jpg,
+        catalog_descriptor=cat_desc,
+        scene_generation=eff_scene_gen,
+        turn_id=turn_id,
     )
+    ta = diag_out.get("twin_action")
+    if isinstance(ta, dict) and isinstance(ta.get("target_slave_id"), int) and (1 <= int(ta["target_slave_id"]) <= 247):
+        _SIMULATED_VISUAL_DIP_ADDRESS = int(ta["target_slave_id"])
+    diag_out["simulated_visual_dip_address"] = _SIMULATED_VISUAL_DIP_ADDRESS
+    diag_out["authorized_bus_slave_id"] = int(mb_tel.get("target_slave_id") or 1)
+    diag_out["bus_target_mutated"] = False
+    return diag_out
 
 
 @app.post("/api/diagnose")
@@ -744,6 +1048,10 @@ async def api_diagnose(payload: dict[str, Any]) -> dict[str, Any]:
         zone_hint=zone_hint,
         dip_address=dip_address if isinstance(dip_address, int) else None,
         cad_views_b64=payload.get("cad_views_b64"),
+        session_id=payload.get("session_id"),
+        manifest_sha256=payload.get("manifest_sha256"),
+        scene_generation=payload.get("scene_generation"),
+        turn_id=payload.get("turn_id"),
     )
 
 
@@ -890,9 +1198,19 @@ async def api_modbus_gateway(payload: dict[str, Any]) -> Response | dict[str, An
     }
 
 
-@app.post("/api/modbus/poll")
-async def api_modbus_poll(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+@app.post("/api/modbus/poll", response_model=None)
+async def api_modbus_poll(payload: dict[str, Any] | None = None) -> Response | dict[str, Any]:
     body = payload or {}
+    eff_ctx = _resolve_effective_context(session_id=body.get("session_id"))
+    if not eff_ctx.get("bench_modbus_homologated", True):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "error_code": "PROFILE_NOT_HOMOLOGATED_FOR_BUS",
+                "message": f"Active profile '{eff_ctx.get('product_id')}/{eff_ctx.get('variant_id')}' is not homologated for TZONE Modbus register polling.",
+            },
+        )
     tel = await asyncio.to_thread(_MODBUS.step_once)
     session_id = str(body.get("session_id") or "").strip()
     session_snap = None
@@ -985,3 +1303,250 @@ async def api_calibration_planned() -> dict[str, Any]:
 @app.post("/api/calibration/compare")
 async def api_calibration_compare(payload: dict[str, Any]) -> dict[str, Any]:
     return evaluate_calibration_comparison_contract(payload)
+
+
+# ==========================================================================
+# CLOUD & INSTALLED SIGNED CATALOG ROUTES + CAD EXPORT GUARD (`MEGAPLAN`)
+# ==========================================================================
+@app.post("/api/export/{fmt}", response_model=None)
+async def api_export_cad_format(fmt: str, payload: dict[str, Any] | None = None) -> Response | dict[str, Any]:
+    body = payload or {}
+    clean_fmt = fmt.strip().lower()
+    if clean_fmt not in ("dxf", "stl"):
+        raise HTTPException(status_code=404, detail=f"Unsupported CAD format '{fmt}'")
+    eff_ctx = _resolve_effective_context(
+        session_id=body.get("session_id"),
+        manifest_sha256=body.get("manifest_sha256"),
+    )
+    desc = await asyncio.to_thread(_CATALOG_STORE.build_scene_and_manual_descriptor, eff_ctx)
+    supported = list(desc.get("cad_exports_supported") or ["dxf", "stl", "pdf", "json"])
+    if clean_fmt not in supported:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "error_code": "CAD_EXPORT_UNSUPPORTED_FOR_GLB",
+                "message": (
+                    f"Parametric AutoCAD .{clean_fmt.upper()} generation is available only for the bundled TZ THT-02 "
+                    f"engineering model; catalog GLB package '{eff_ctx.get('product_id')}/{eff_ctx.get('variant_id')}' "
+                    f"supports {', '.join(supported)}."
+                ),
+                "cad_exports_supported": supported,
+            },
+        )
+    pkg = await api_repair_signoff(body)
+    return {
+        "ok": True,
+        "format": clean_fmt,
+        "url": pkg["dxf_url"] if clean_fmt == "dxf" else pkg["stl_url"],
+        "path": pkg["dxf_path"] if clean_fmt == "dxf" else pkg["stl_path"],
+    }
+
+
+@app.get("/api/catalog/status")
+async def api_catalog_status() -> dict[str, Any]:
+    selected = await asyncio.to_thread(_CATALOG_STORE.get_selected_context)
+    installed = await asyncio.to_thread(_CATALOG_STORE.list_installed_packages)
+    pinned_ctx: dict[str, Any] | None = None
+    update_ready_for_next = False
+    active_sid = _SESSIONS._active_session_id
+    if active_sid:
+        try:
+            snap = await asyncio.to_thread(_SESSIONS.get_session, active_sid)
+            if snap.get("status") == "open" and isinstance(snap.get("catalog_context"), dict):
+                pinned_ctx = snap["catalog_context"]
+                p_prod = pinned_ctx.get("product_id")
+                p_var = pinned_ctx.get("variant_id")
+                p_seq = int(pinned_ctx.get("publication_seq") or 0)
+                if any(
+                    p["product_id"] == p_prod and p["variant_id"] == p_var and int(p["publication_seq"]) > p_seq
+                    for p in installed
+                ):
+                    update_ready_for_next = True
+        except SessionDomainError:
+            pass
+    return {
+        "ok": True,
+        "sync": _CATALOG_CLIENT.get_sync_telemetry(),
+        "selected_context": selected,
+        "pinned_session_context": pinned_ctx,
+        "update_ready_for_next_session": update_ready_for_next,
+        "installed_count": len(installed),
+        "scene_generation": _ACTIVE_SCENE_GENERATION,
+        "latest_scene_ready": _LATEST_SCENE_READY_TURN,
+    }
+
+
+@app.get("/api/catalog/packages")
+async def api_catalog_packages() -> dict[str, Any]:
+    pkgs = await asyncio.to_thread(_CATALOG_STORE.list_installed_packages)
+    sel = await asyncio.to_thread(_CATALOG_STORE.get_selected_context)
+    return {"ok": True, "packages": pkgs, "selected_context": sel}
+
+
+@app.post("/api/catalog/select")
+async def api_catalog_select(payload: dict[str, Any]) -> dict[str, Any]:
+    global _ACTIVE_SCENE_GENERATION
+    m_sha = payload.get("manifest_sha256")
+    ctx = await asyncio.to_thread(_CATALOG_STORE.select_context_for_next_session, str(m_sha) if m_sha else None)
+    desc = await asyncio.to_thread(_CATALOG_STORE.build_scene_and_manual_descriptor, ctx)
+    _ACTIVE_SCENE_GENERATION += 1
+    return {
+        "ok": True,
+        "selected_context": ctx,
+        "catalog_descriptor": desc,
+        "scene_generation": _ACTIVE_SCENE_GENERATION,
+    }
+
+
+@app.post("/api/catalog/import")
+async def api_catalog_import(request: Request) -> dict[str, Any]:
+    import base64
+    import tempfile
+
+    ctype = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" in ctype:
+        form = await request.form()
+        cand = form.get("file") or form.get("package") or next(iter(form.values()), None)
+        if cand is None or not hasattr(cand, "read"):
+            raise CatalogDomainError("INVALID_ENVELOPE", "Missing package archive in multipart form")
+        raw = await cand.read()
+        with tempfile.NamedTemporaryFile(dir=str(_CATALOG_STORE.staging_dir), suffix=".zip", delete=False) as tf:
+            tf.write(raw)
+            tmp_p = Path(tf.name)
+        try:
+            pkg = await asyncio.to_thread(_CATALOG_STORE.import_package_from_path, tmp_p)
+            return {"ok": True, "package": pkg}
+        finally:
+            tmp_p.unlink(missing_ok=True)
+
+    body = await request.json()
+    if body.get("path"):
+        cand_p = Path(str(body["path"])).resolve()
+        allowed_roots = [
+            _CATALOG_STORE.staging_dir.resolve(),
+            (PROJECT_ROOT / "knowledge" / "fixtures").resolve(),
+            Path(tempfile.gettempdir()).resolve(),
+        ]
+        if not any(cand_p == r or r in cand_p.parents for r in allowed_roots):
+            raise CatalogDomainError(
+                "UNTRUSTED_IMPORT_PATH",
+                "Direct path import is restricted to authorized fixture, temporary, or staging directories.",
+                status_code=403,
+            )
+        pkg = await asyncio.to_thread(_CATALOG_STORE.import_package_from_path, cand_p)
+        return {"ok": True, "package": pkg}
+    if body.get("archive_b64"):
+        b64_s = str(body["archive_b64"])
+        if "," in b64_s and b64_s.startswith("data:"):
+            b64_s = b64_s.split(",", 1)[1]
+        raw = base64.b64decode(b64_s)
+        with tempfile.NamedTemporaryFile(dir=str(_CATALOG_STORE.staging_dir), suffix=".zip", delete=False) as tf:
+            tf.write(raw)
+            tmp_p = Path(tf.name)
+        try:
+            pkg = await asyncio.to_thread(_CATALOG_STORE.import_package_from_path, tmp_p)
+            return {"ok": True, "package": pkg}
+        finally:
+            tmp_p.unlink(missing_ok=True)
+    raise CatalogDomainError("INVALID_ENVELOPE", "Provide path, archive_b64, or multipart file")
+
+
+@app.post("/api/catalog/sync_config")
+async def api_catalog_sync_config(payload: dict[str, Any]) -> dict[str, Any]:
+    base_url = str(payload.get("base_url") or "")
+    sync_en = payload.get("sync_enabled")
+    auth_tok = payload.get("auth_token")
+    boat_tok = payload.get("boat_port_auth_token")
+    signers = payload.get("trusted_signers")
+    if isinstance(signers, list):
+        for s in signers:
+            if isinstance(s, dict) and s.get("key_id") and s.get("public_key_b64"):
+                await asyncio.to_thread(
+                    _CATALOG_STORE.register_trusted_signer,
+                    str(s["key_id"]),
+                    str(s["public_key_b64"]),
+                )
+    tel = await asyncio.to_thread(
+        _CATALOG_CLIENT.configure_endpoint,
+        base_url,
+        sync_enabled=bool(sync_en) if sync_en is not None else None,
+        auth_token=str(auth_tok) if auth_tok is not None else None,
+        boat_port_auth_token=str(boat_tok) if boat_tok is not None else None,
+    )
+    return {"ok": True, "sync": tel}
+
+
+@app.get("/api/catalog/healthz")
+async def api_catalog_healthz() -> dict[str, Any]:
+    return await asyncio.to_thread(_CATALOG_CLIENT.check_health)
+
+
+@app.post("/api/catalog/resolve")
+async def api_catalog_resolve(payload: dict[str, Any]) -> dict[str, Any]:
+    model = str(payload.get("model") or "").strip()
+    if not model:
+        raise CatalogDomainError("INVALID_ENVELOPE", "model is required")
+    return await asyncio.to_thread(
+        _CATALOG_CLIENT.resolve_catalog,
+        manufacturer=payload.get("manufacturer"),
+        model=model,
+        variant=payload.get("variant"),
+        hardware_revision=payload.get("hardware_revision"),
+    )
+
+
+@app.get("/api/catalog/jobs/{job_id}")
+async def api_catalog_poll_job(job_id: str) -> dict[str, Any]:
+    return await asyncio.to_thread(_CATALOG_CLIENT.poll_job, job_id)
+
+
+@app.post("/api/catalog/install")
+async def api_catalog_install(payload: dict[str, Any]) -> dict[str, Any]:
+    pid = str(payload.get("product_id") or "").strip()
+    vid = str(payload.get("variant_id") or "").strip()
+    if not pid or not vid:
+        raise CatalogDomainError("INVALID_ENVELOPE", "product_id and variant_id are required")
+    channel = str(payload.get("channel") or "default")
+    return await asyncio.to_thread(_CATALOG_CLIENT.fetch_and_install_variant, pid, vid, channel=channel)
+
+
+@app.post("/api/catalog/scene_ready")
+async def api_catalog_scene_ready(payload: dict[str, Any]) -> dict[str, Any]:
+    global _LATEST_SCENE_READY_TURN
+    gen = int(payload.get("scene_generation") or 1)
+    accepted = gen >= _ACTIVE_SCENE_GENERATION
+    if accepted:
+        _LATEST_SCENE_READY_TURN = {
+            "scene_generation": gen,
+            "turn_id": payload.get("turn_id"),
+            "manifest_sha256": payload.get("manifest_sha256"),
+            "status": str(payload.get("status") or "ready"),
+        }
+    return {"ok": True, "accepted": accepted, "active_scene_generation": _ACTIVE_SCENE_GENERATION}
+
+
+@app.api_route(
+    "/api/catalog/installed/{manifest_sha256}/objects/{object_sha256}",
+    methods=["GET", "HEAD"],
+    response_model=None,
+)
+async def api_catalog_installed_object(
+    manifest_sha256: str,
+    object_sha256: str,
+    request: Request,
+) -> Response:
+    range_hdr = request.headers.get("range")
+    res = await asyncio.to_thread(
+        _CATALOG_STORE.read_object_range,
+        manifest_sha256,
+        object_sha256,
+        range_hdr,
+    )
+    body_bytes = b"" if request.method == "HEAD" else res["body"]
+    return Response(
+        content=body_bytes,
+        status_code=int(res["status_code"]),
+        media_type=str(res["mime_type"]),
+        headers=dict(res["headers"]),
+    )

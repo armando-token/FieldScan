@@ -13,6 +13,7 @@ import re
 from typing import Any
 import unicodedata
 
+from fieldscan.catalog_store import sanitize_reference_text
 from fieldscan.profiles_and_manual import (
     MANUAL_INDEX_PATH,
     PROJECT_ROOT,
@@ -309,7 +310,7 @@ MANUAL_TOPIC_CATALOG: list[dict[str, Any]] = [
 ]
 
 _EXPLICIT_MANUAL_REQUEST_RE = re.compile(
-    r"\b(?:manual|datasheet|page|pag\.?|section|where\s+in\s+the\s+manual|where\s+is\s+the\s+section|"
+    r"\b(?:manual|datasheet|bulletin|page|pag\.?|section|where\s+in\s+the\s+manual|where\s+is\s+the\s+section|"
     r"which\s+page|what\s+page|what\s+section|open\s+the\s+manual|open\s+datasheet|in\s+the\s+datasheet|in\s+the\s+manual)\b",
     re.IGNORECASE,
 )
@@ -319,11 +320,16 @@ _EXPLICIT_PAGE_NUMBER_RE = re.compile(
     re.IGNORECASE,
 )
 
+_ANY_PAGE_NUMBER_RE = re.compile(
+    r"\b(?:page|pag\.?|p)\s*#?\s*(\d{1,3})\b",
+    re.IGNORECASE,
+)
+
 
 def is_explicit_manual_lookup_query(query: str) -> bool:
     """Return True when the operator asks to open/locate/read something in the datasheet or manual."""
     norm = strip_accents_lower(query)
-    if _EXPLICIT_PAGE_NUMBER_RE.search(norm):
+    if _ANY_PAGE_NUMBER_RE.search(norm):
         return True
     if _EXPLICIT_MANUAL_REQUEST_RE.search(norm):
         return True
@@ -452,4 +458,208 @@ def lookup_manual_for_query(
         "citations": citations,
         "manual_section": manual_section,
         "answer": answer,
+    }
+
+
+def _build_descriptor_page_response(
+    doc: dict[str, Any],
+    page_obj: dict[str, Any],
+    *,
+    open_lightbox: bool,
+) -> dict[str, Any]:
+    doc_id = str(doc.get("document_id") or "doc_1")
+    doc_title = sanitize_reference_text(str(doc.get("title") or doc_id))
+    doc_rev = sanitize_reference_text(str(doc.get("revision") or "rev-1"))
+    pnum = int(page_obj.get("page") or 1)
+    printed = sanitize_reference_text(str(page_obj.get("printed_page") or pnum))
+    sec_id = sanitize_reference_text(str(page_obj.get("section_id") or f"{pnum}.1"))
+    pg_title = sanitize_reference_text(str(page_obj.get("title") or f"Page {pnum}"))
+    excerpt = sanitize_reference_text(str(page_obj.get("verified_excerpt") or pg_title))
+    img_url = page_obj.get("image_url")
+    pdf_fallback = page_obj.get("pdf_fallback_url") or doc.get("pdf_url")
+    citation_id = f"{doc_id}:p{pnum}:{sec_id}"
+    heading = f"{doc_title} ({doc_rev}) · Page {pnum} (Printed {printed}) · Section {sec_id} — {pg_title}"
+    answer = f"In {doc_title} ({doc_rev}), Physical Page {pnum} (Printed {printed}, Section {sec_id} · {pg_title}): {excerpt}"
+
+    cit = {
+        "citation_id": citation_id,
+        "document_id": doc_id,
+        "document_title": doc_title,
+        "revision": doc_rev,
+        "page": pnum,
+        "printed_page": printed,
+        "section_id": sec_id,
+        "label": f"{doc_title} · P{pnum} ({printed})",
+        "image_url": img_url,
+        "pdf_fallback_url": pdf_fallback,
+    }
+    sec_dict = {
+        "document_id": doc_id,
+        "page": pnum,
+        "printed_page": printed,
+        "section_id": sec_id,
+        "heading": heading,
+        "verified_excerpt": excerpt,
+        "citation_id": citation_id,
+        "image_url": img_url,
+        "pdf_fallback_url": pdf_fallback,
+    }
+    return {
+        "matched": True,
+        "page_out_of_range": False,
+        "document_id": doc_id,
+        "document_title": doc_title,
+        "document_revision": doc_rev,
+        "language": "en",
+        "open_manual": True,
+        "open_manual_lightbox": open_lightbox,
+        "manual_page": pnum,
+        "printed_page": printed,
+        "citation_id": citation_id,
+        "cited_pages": [pnum],
+        "citations": [cit],
+        "manual_section": sec_dict,
+        "image_url": img_url,
+        "pdf_fallback_url": pdf_fallback,
+        "answer": answer,
+    }
+
+
+def lookup_manual_in_descriptor(
+    query: str,
+    descriptor: dict[str, Any],
+    *,
+    preferred_document_id: str | None = None,
+) -> dict[str, Any]:
+    """Context-aware multi-document & 12+ page manual lookup (`M4-DOC-01..03`)."""
+    docs = list(descriptor.get("documents") or [])
+    scene_origin = str(descriptor.get("scene_origin") or "bundled_parametric")
+    norm = strip_accents_lower(query)
+    any_page_m = _ANY_PAGE_NUMBER_RE.search(norm)
+
+    if scene_origin == "bundled_parametric" and len(docs) <= 1 and int((docs[0] if docs else {}).get("page_count") or 9) == 9:
+        if any_page_m:
+            req_p = int(any_page_m.group(1))
+            if req_p < 1 or req_p > 9:
+                return {
+                    "matched": False,
+                    "page_out_of_range": True,
+                    "error_code": "PAGE_OUT_OF_RANGE",
+                    "requested_page": req_p,
+                    "max_page": 9,
+                    "language": "en",
+                    "open_manual": False,
+                    "open_manual_lightbox": False,
+                    "manual_page": None,
+                    "cited_pages": [],
+                    "citations": [],
+                    "manual_section": None,
+                    "answer": f"Page {req_p} is outside the verified 9-page range (Pages 1..9) of TZ THT-02 Manual V1.1.",
+                }
+        res = lookup_manual_for_query(query, lang="en")
+        res["page_out_of_range"] = False
+        res["document_id"] = "tht02_manual_v1_1"
+        res["document_title"] = "TZ THT-02 User's Manual V1.1"
+        res["document_revision"] = "V1.1"
+        res["printed_page"] = str(res["manual_page"]) if res.get("manual_page") else None
+        return res
+
+    if not docs:
+        return {
+            "matched": False,
+            "page_out_of_range": False,
+            "error_code": "MANUAL_UNAVAILABLE",
+            "language": "en",
+            "open_manual": False,
+            "open_manual_lightbox": False,
+            "manual_page": None,
+            "cited_pages": [],
+            "citations": [],
+            "manual_section": None,
+            "answer": "No verified manual documents are available in the active package.",
+        }
+
+    target_doc = docs[0]
+    if preferred_document_id:
+        for d in docs:
+            if d.get("document_id") == preferred_document_id:
+                target_doc = d
+                break
+    else:
+        for d in docs:
+            did = str(d.get("document_id") or "").lower()
+            dtitle = str(d.get("title") or "").lower()
+            if (
+                (did and did.replace("_", " ") in norm)
+                or ("bulletin" in norm and ("bulletin" in did or "bulletin" in dtitle))
+                or ("m12" in norm and "pinout" in norm and "m12" in dtitle)
+            ):
+                target_doc = d
+                break
+
+    doc_id = str(target_doc.get("document_id") or "doc_1")
+    doc_title = sanitize_reference_text(str(target_doc.get("title") or doc_id))
+    pages = list(target_doc.get("pages") or [])
+    max_page = max(len(pages), int(target_doc.get("page_count") or 1))
+
+    if any_page_m:
+        req_p = int(any_page_m.group(1))
+        pg_match = next((p for p in pages if int(p.get("page") or 0) == req_p), None)
+        if req_p < 1 or req_p > max_page or pg_match is None:
+            return {
+                "matched": False,
+                "page_out_of_range": True,
+                "error_code": "PAGE_OUT_OF_RANGE",
+                "document_id": doc_id,
+                "requested_page": req_p,
+                "max_page": max_page,
+                "language": "en",
+                "open_manual": False,
+                "open_manual_lightbox": False,
+                "manual_page": None,
+                "cited_pages": [],
+                "citations": [],
+                "manual_section": None,
+                "answer": f"Page {req_p} is out of range for {doc_title} (valid physical pages: 1..{max_page}).",
+            }
+        return _build_descriptor_page_response(target_doc, pg_match, open_lightbox=True)
+
+    best_doc: dict[str, Any] | None = None
+    best_page: dict[str, Any] | None = None
+    best_score = 0
+    tokens = [t for t in re.findall(r"[a-z0-9]+", norm) if len(t) >= 3]
+    for d in docs:
+        for pg in d.get("pages", []):
+            kws = [str(k).lower() for k in pg.get("keywords", [])]
+            title_low = str(pg.get("title") or "").lower()
+            ex_low = str(pg.get("verified_excerpt") or "").lower()
+            sc = sum(12 for kw in kws if kw in norm)
+            for tok in tokens:
+                if tok in title_low:
+                    sc += 5
+                if tok in ex_low:
+                    sc += 3
+            if sc > best_score:
+                best_score = sc
+                best_doc = d
+                best_page = pg
+
+    if best_doc is not None and best_page is not None:
+        return _build_descriptor_page_response(best_doc, best_page, open_lightbox=is_explicit_manual_lookup_query(query))
+
+    if is_explicit_manual_lookup_query(query) and pages:
+        return _build_descriptor_page_response(target_doc, pages[0], open_lightbox=True)
+
+    return {
+        "matched": False,
+        "page_out_of_range": False,
+        "document_id": doc_id,
+        "language": "en",
+        "open_manual": False,
+        "open_manual_lightbox": False,
+        "manual_page": None,
+        "cited_pages": [],
+        "citations": [],
+        "manual_section": None,
+        "answer": "",
     }

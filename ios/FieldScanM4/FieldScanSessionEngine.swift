@@ -37,6 +37,7 @@ public final class FieldScanSessionEngine {
     public let evidenceDirectoryURL: URL
     public let dbFileURL: URL
     public let bundleKnowledgeRootURL: URL?
+    public var packageStore: FieldScanPackageStore
     public var minFreeDiskBytes: Int64 = 2 * 1024 * 1024
 
     private var activeSessionId: String?
@@ -70,16 +71,17 @@ public final class FieldScanSessionEngine {
                 }
             }
         }
-        self.init(baseDirectory: docs, bundleRoot: kRoot)
+        self.init(baseDirectory: docs, bundleRoot: kRoot, packageStore: FieldScanPackageStore.shared)
     }
 
-    public init(baseDirectory: URL, bundleRoot: URL?) {
+    public init(baseDirectory: URL, bundleRoot: URL?, packageStore: FieldScanPackageStore = FieldScanPackageStore.shared) {
         self.baseDocumentsURL = baseDirectory
         self.exportsDirectoryURL = baseDirectory.appendingPathComponent("exports", isDirectory: true)
         self.evidenceDirectoryURL = exportsDirectoryURL.appendingPathComponent("session_evidence", isDirectory: true)
         let dataDir = baseDirectory.appendingPathComponent("data", isDirectory: true)
         self.dbFileURL = dataDir.appendingPathComponent("fieldscan_sessions.sqlite3")
         self.bundleKnowledgeRootURL = bundleRoot
+        self.packageStore = packageStore
 
         let fm = FileManager.default
         for dir in [exportsDirectoryURL, evidenceDirectoryURL, dataDir] {
@@ -494,7 +496,8 @@ public final class FieldScanSessionEngine {
     public func applyDeterministicGroundingFilter(
         candidateText: String,
         profile: [String: Any],
-        verifiedTelemetry: [String: Any]?
+        verifiedTelemetry: [String: Any]?,
+        maxPageCount: Int = 9
     ) -> [String: Any] {
         var reasons: [String] = []
         let trimmed = candidateText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -515,7 +518,7 @@ public final class FieldScanSessionEngine {
             let matches = regex.matches(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed))
             for m in matches {
                 if let r = Range(m.range(at: 1), in: trimmed), let p = Int(trimmed[r]) {
-                    if p < 1 || p > 9 {
+                    if p < 1 || p > max(1, maxPageCount) {
                         reasons.append("invalid_page_citation:\(p)")
                     }
                 }
@@ -688,8 +691,11 @@ public final class FieldScanSessionEngine {
         let serialNumber = (payload["serial_number"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let lang = ((payload["language"] as? String) ?? preferredLanguage).lowercased() == "es" ? "es" : "en"
         let isSim = transportMode.hasPrefix("sim") || ((payload["simulation"] as? Bool) ?? false)
+        let reqCtx = payload["catalog_context"] as? [String: Any]
+        let reqManifestSha = ((reqCtx?["manifest_sha256"] as? String) ?? (payload["manifest_sha256"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let reqOrigin = ((reqCtx?["content_origin"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let canonReq: [String: Any] = [
+        var canonReq: [String: Any] = [
             "profile_query": profileQuery,
             "transport_mode": transportMode,
             "asset_tag": assetTag ?? "",
@@ -697,11 +703,28 @@ public final class FieldScanSessionEngine {
             "simulation": isSim,
             "language": lang,
         ]
+        if !reqManifestSha.isEmpty {
+            canonReq["manifest_sha256"] = reqManifestSha
+        }
         let reqHash = canonicalJSONHash(canonReq)
         if let ik = idemKey, !ik.isEmpty {
             if let replay = try checkIdempotencyUnlocked(scopeKey: "create_session:\(ik)", payloadHash: reqHash) {
                 return replay
             }
+        }
+
+        let isCatalogRequested = (reqOrigin == "catalog") || (!reqManifestSha.isEmpty && reqManifestSha != "bundle" && !reqManifestSha.hasPrefix("bundle-"))
+        var installedCatalogPkg: [String: Any]? = nil
+        if isCatalogRequested {
+            guard !reqManifestSha.isEmpty,
+                  let pkg = try? packageStore.getInstalledPackage(manifestSha256: reqManifestSha) else {
+                throw FieldScanDomainError(
+                    code: "PACKAGE_NOT_INSTALLED",
+                    message: "Catalog package '\(reqManifestSha)' is not installed locally and cannot be pinned to a session.",
+                    statusCode: 404
+                )
+            }
+            installedCatalogPkg = pkg
         }
 
         if let prevId = activeSessionId, let db = db {
@@ -715,15 +738,88 @@ public final class FieldScanSessionEngine {
         }
         connectionGeneration += 1
 
-        let prof = resolveDeviceProfile(profileQuery)
+        var prof = resolveDeviceProfile(profileQuery)
         let sessionId = "ses-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12)).lowercased()
         let nowUTC = Self.utcNowISO()
         let nowMono = ProcessInfo.processInfo.systemUptime
-        let pid = (prof["profile_id"] as? String) ?? "tzone_tht02"
-        let pRev = (prof["tested_profile_revision"] as? String) ?? "draft"
-        let pSha = (prof["_profile_sha256"] as? String) ?? ""
-        let mSha = (prof["references"] as? [String: Any])?["manual_sha256"] as? String
-        let idPending = (prof["identity_pending"] as? Bool) ?? false
+        var pid = (prof["profile_id"] as? String) ?? "tzone_tht02"
+        var pRev = (prof["tested_profile_revision"] as? String) ?? "draft"
+        var pSha = (prof["_profile_sha256"] as? String) ?? ""
+        var mSha = (prof["references"] as? [String: Any])?["manual_sha256"] as? String
+        var idPending = (prof["identity_pending"] as? Bool) ?? false
+        var maxManualPages = 9
+        let catalogContextDict: [String: Any]
+
+        if let pkg = installedCatalogPkg {
+            let mObj = (pkg["manifest"] as? [String: Any]) ?? [:]
+            let cProductId = (pkg["product_id"] as? String) ?? "catalog_device"
+            let cVariantId = (pkg["variant_id"] as? String) ?? "default"
+            let cPubSeq = (pkg["publication_seq"] as? Int) ?? 1
+            let homologated = (mObj["bench_modbus_homologated"] as? Bool) ?? false
+            let localProfId = homologated ? ((mObj["bench_profile_id"] as? String) ?? "tzone_tht02") : nil
+            let caps = (pkg["capabilities"] as? [String: Bool]) ?? [:]
+            let title = (mObj["title"] as? String) ?? "\(cProductId) (\(cVariantId))"
+
+            if let lp = localProfId, let bProf = loadAllProfiles()[lp] {
+                prof = bProf
+                prof["identity_pending"] = false
+                prof["auto_decode_allowed"] = true
+                pid = lp
+            } else {
+                pid = "\(cProductId)_\(cVariantId)"
+                prof = [
+                    "profile_id": pid,
+                    "sensor_id": (mObj["sensor_id"] as? String) ?? cProductId.uppercased(),
+                    "model": (mObj["model"] as? String) ?? title,
+                    "tested_profile_revision": "catalog-seq-\(cPubSeq)",
+                    "validation_status": homologated ? "supported_bench_readonly" : "catalog_reference_only",
+                    "identity_pending": false,
+                    "auto_decode_allowed": homologated,
+                    "bench_modbus_homologated": homologated,
+                    "_profile_sha256": reqManifestSha,
+                    "procedure": Self.defaultTHT02Procedure(),
+                ]
+            }
+            pRev = "pub-seq-\(cPubSeq)"
+            pSha = reqManifestSha
+            let arts = (pkg["artifacts"] as? [[String: Any]]) ?? []
+            if let pdfArt = arts.first(where: { ($0["role"] as? String) == "manual_pdf" }) {
+                mSha = pdfArt["sha256"] as? String
+            }
+            idPending = false
+
+            let ctxObj = SessionContentContext(
+                productId: cProductId,
+                variantId: cVariantId,
+                title: title,
+                publicationSeq: cPubSeq,
+                manifestSha256: reqManifestSha,
+                localProfileId: localProfId,
+                contentOrigin: "catalog",
+                benchModbusHomologated: homologated,
+                capabilities: caps
+            )
+            catalogContextDict = ctxObj.toDictionary()
+            if let desc = try? packageStore.buildSceneAndManualDescriptor(context: ctxObj),
+               let docs = desc["documents"] as? [[String: Any]] {
+                maxManualPages = max(1, docs.compactMap { $0["page_count"] as? Int }.max() ?? 9)
+            }
+        } else if pid == "tzone_tht02" {
+            catalogContextDict = packageStore.buildBundleDefaultContext().toDictionary()
+        } else {
+            catalogContextDict = SessionContentContext(
+                productId: pid,
+                variantId: idPending ? "pending_identity" : "bundled_default",
+                title: (prof["model"] as? String) ?? pid,
+                publicationSeq: 0,
+                manifestSha256: pSha,
+                localProfileId: idPending ? nil : pid,
+                contentOrigin: "bundle",
+                benchModbusHomologated: !idPending,
+                capabilities: ["documentation": false, "interactive_twin": false, "procedures": true]
+            ).toDictionary()
+        }
+
         let assetConfirmed = (!idPending && ((assetTag != nil && !assetTag!.isEmpty) || (serialNumber != nil && !serialNumber!.isEmpty)))
 
         let stateDoc: [String: Any] = [
@@ -738,6 +834,8 @@ public final class FieldScanSessionEngine {
             "missing_evidence": [],
             "connection_generation": connectionGeneration,
             "profile_snapshot": prof,
+            "catalog_context": catalogContextDict,
+            "max_manual_page_count": maxManualPages,
         ]
         let stateData = (try? JSONSerialization.data(withJSONObject: stateDoc)) ?? Data("{}".utf8)
         let stateStr = String(data: stateData, encoding: .utf8) ?? "{}"
@@ -1082,7 +1180,55 @@ public final class FieldScanSessionEngine {
             responseNote["citations_verification"] = verifyAndResolveCitations(profile: prof, requestedPages: [cid == "upper_barrel_dip" ? 5 : 1])
         } else if action == "show_manual" {
             let p = (workingPayload["page"] as? Int) ?? 1
-            responseNote["citations_verification"] = verifyAndResolveCitations(profile: prof, requestedPages: [p])
+            let catCtx = (stateDoc["catalog_context"] as? [String: Any]) ?? [:]
+            if (catCtx["content_origin"] as? String) == "catalog",
+               let mSha = catCtx["manifest_sha256"] as? String {
+                let maxP = (stateDoc["max_manual_page_count"] as? Int) ?? 9
+                if p < 1 || p > maxP {
+                    responseNote["citations_verification"] = [
+                        "verified": false,
+                        "error_code": "PAGE_OUT_OF_RANGE",
+                        "instruction_blocked": true,
+                        "citations": [],
+                        "missing_pages": [p],
+                    ]
+                } else if (try? packageStore.getInstalledPackage(manifestSha256: mSha)) == nil {
+                    responseNote["citations_verification"] = [
+                        "verified": false,
+                        "error_code": "HISTORICAL_SOURCE_UNAVAILABLE",
+                        "instruction_blocked": true,
+                        "citations": [],
+                        "missing_pages": [p],
+                    ]
+                } else {
+                    responseNote["citations_verification"] = [
+                        "verified": true,
+                        "instruction_blocked": false,
+                        "citations": [["page": p, "manifest_sha256": mSha]],
+                        "missing_pages": [],
+                    ]
+                }
+            } else {
+                responseNote["citations_verification"] = verifyAndResolveCitations(profile: prof, requestedPages: [p])
+            }
+        } else if action == "execute_procedure_step" {
+            let instId = ((workingPayload["instruction_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !instId.isEmpty else {
+                throw FieldScanDomainError(code: "MISSING_INSTRUCTION_ID", message: "execute_procedure_step requires instruction_id.", statusCode: 400)
+            }
+            let catCtx = (stateDoc["catalog_context"] as? [String: Any]) ?? [:]
+            let cProd = (catCtx["product_id"] as? String) ?? ((snap["profile_id"] as? String) ?? "tzone_tht02")
+            let cVar = (catCtx["variant_id"] as? String) ?? "bundled_v1_1"
+            let revocations = packageStore.getRevokedInstructions(productId: cProd, variantId: cVar)
+            if let hit = revocations.first(where: { ($0["instruction_id"] as? String) == instId }) {
+                let reason = (hit["reason"] as? String) ?? "Revoked by product safety/technical update"
+                throw FieldScanDomainError(
+                    code: "INSTRUCTION_REVOKED",
+                    message: "Instruction '\(instId)' is revoked (\(reason)) and cannot be executed.",
+                    statusCode: 409
+                )
+            }
+            responseNote["executed_instruction_id"] = instId
         } else if action == "read_current" {
             responseNote["freshness"] = evaluateSampleFreshness(sessionSnap: snap)
         } else if action == "repeat_step" || action == "start_readonly_check" || action == "request_capture" {
@@ -1426,6 +1572,15 @@ public final class FieldScanSessionEngine {
                 "manual_sha256": snap["manual_sha256"] ?? NSNull(),
                 "serial_number": maskedSerial,
             ],
+            "catalog_context": snap["catalog_context"] ?? [:],
+            "historical_source_status": snap["historical_source_status"] ?? [:],
+            "revoked_instructions": snap["revoked_instructions"] ?? [],
+            "evidence_states_legend": [
+                "documented": "Verified product manual or cryptographically signed catalog package",
+                "simulated": "Visual 3D twin or DIP simulation only (zero Modbus/hardware mutation)",
+                "observed": "Operator or physical camera observation recorded in session",
+                "measured": "Verified read-only Modbus response from physical sensor",
+            ],
             "scope_limitations": [
                 "verified_scope": isSim ? "simulation" : (isPartial ? "partial_observation" : "sensor_communication"),
                 "plc_verified": false,
@@ -1502,8 +1657,14 @@ public final class FieldScanSessionEngine {
             "Generated UTC: \(record["generated_at_utc"] ?? "") | Profile: \(record["export_profile"] ?? "")",
             isSim ? "SIMULATION ONLY: Synthetic data does not verify physical sensor hardware." : "Scope: Bench Read-Only Modbus Communication (PLC/SCADA & Calibration Not Verified).",
             "Confirmed Physical Changes: \(changes.count) (0 = inspection only, zero modifications)",
-            "Observations (\(observations.count)) & Ordered Events (\(events.count)):",
         ]
+        if let catCtx = record["catalog_context"] as? [String: Any] {
+            summaryLines.append("Content Origin: \(catCtx["content_origin"] ?? "bundle") | Variant: \(catCtx["product_id"] ?? "")/\(catCtx["variant_id"] ?? "") (seq \(catCtx["publication_seq"] ?? 1)) | Manifest: \((catCtx["manifest_sha256"] as? String ?? "").prefix(20))")
+        }
+        if let hist = record["historical_source_status"] as? [String: Any], (hist["available"] as? Bool) == false {
+            summaryLines.append("NOTICE: \(hist["message"] ?? "Historical source unavailable")")
+        }
+        summaryLines.append("Observations (\(observations.count)) & Ordered Events (\(events.count)):")
         for ev in events {
             summaryLines.append("  seq=\(ev["seq"] ?? 0) | \(ev["occurred_at_utc"] ?? "") | \(ev["kind"] ?? "") | step=\(ev["step_id"] ?? "")")
         }
@@ -1935,6 +2096,33 @@ public final class FieldScanSessionEngine {
             sqlite3_finalize(evStmt)
         }
 
+        let catCtx: [String: Any] = (stateObj["catalog_context"] as? [String: Any]) ?? [
+            "product_id": profileId,
+            "variant_id": profileId == "tzone_tht02" ? "bundled_v1_1" : "default",
+            "publication_seq": profileId == "tzone_tht02" ? 1 : 0,
+            "manifest_sha256": profileSha,
+            "local_profile_id": idPending ? NSNull() : profileId,
+            "content_origin": "bundle",
+            "bench_modbus_homologated": !idPending,
+        ]
+        let cOrigin = (catCtx["content_origin"] as? String) ?? "bundle"
+        let cProd = (catCtx["product_id"] as? String) ?? profileId
+        let cVar = (catCtx["variant_id"] as? String) ?? "bundled_v1_1"
+        let histStatus: [String: Any]
+        if cOrigin == "catalog", let mSha = catCtx["manifest_sha256"] as? String {
+            if (try? packageStore.getInstalledPackage(manifestSha256: mSha)) != nil {
+                histStatus = ["available": true, "state": "available", "message": NSNull()]
+            } else {
+                histStatus = ["available": false, "state": "historical_source_unavailable", "message": "Historical source unavailable"]
+            }
+        } else {
+            histStatus = ["available": true, "state": "bundled", "message": NSNull()]
+        }
+        let revocations = packageStore.getRevokedInstructions(productId: cProd, variantId: cVar)
+        let revBanner: Any = revocations.isEmpty
+            ? NSNull()
+            : "Safety/technical notice: \(revocations.count) instruction(s) in \(cProd)/\(cVar) have been revoked by a newer catalog publication."
+
         var snap: [String: Any] = [
             "contract_version": Self.contractVersion,
             "session_id": sessionId,
@@ -1955,6 +2143,11 @@ public final class FieldScanSessionEngine {
             "simulation": sim,
             "build_id": buildId,
             "language": lang,
+            "catalog_context": catCtx,
+            "historical_source_status": histStatus,
+            "revoked_instructions": revocations,
+            "has_revoked_instructions": !revocations.isEmpty,
+            "revocation_banner": revBanner,
             "state": stateObj,
             "events": events,
         ]

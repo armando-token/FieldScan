@@ -16,7 +16,7 @@ from fieldscan_cloud.db import (
 )
 from fieldscan_cloud.sources.context_client import ContextSearchClient, ContextSearchError
 from fieldscan_cloud.sources.downloader import SourceDownloadError, download_allowlisted_source
-from fieldscan_cloud.sources.registry import filter_artifacts_by_permission
+from fieldscan_cloud.sources.registry import document_confirms_model, filter_artifacts_by_permission
 from fieldscan_cloud.worker import process_single_job
 
 
@@ -95,6 +95,18 @@ def test_source_permission_policy_filtering():
     f_rest, r_rest = filter_artifacts_by_permission(arts, permission_policy="restricted")
     assert [a["role"] for a in f_rest] == ["document_index"]
     assert "SOURCE_RIGHTS_RESTRICTED" in r_rest
+
+    # §8.2 steps 3-4 / CL-SRC-01: Do not infer applicability from generic OEM software manuals
+    assert document_confirms_model(
+        "Temp (RH) Management Software User Manual V1.2 for TZONE Cloud Platform",
+        manufacturer="TZONE",
+        model="TZ THT-03R",
+    ) is False
+    assert document_confirms_model(
+        "TZ THT-03R Industrial RS-485 Temperature and Humidity Transmitter Manual",
+        manufacturer="TZONE",
+        model="TZ THT-03R",
+    ) is True
 
 
 def test_context_client_quota_and_rate_limit_classification():

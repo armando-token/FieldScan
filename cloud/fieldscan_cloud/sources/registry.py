@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
+from fieldscan_cloud.models import normalize_token
 from fieldscan_cloud.sources.context_client import SearchCandidate
 
 ALLOWED_OEM_DOMAINS: dict[str, set[str]] = {
@@ -118,3 +120,37 @@ def filter_artifacts_by_permission(
         return filtered, ["SOURCE_RIGHTS_DERIVED_ONLY"]
     filtered = [a for a in artifacts if a.get("role") == "document_index"]
     return filtered, ["SOURCE_RIGHTS_RESTRICTED"]
+
+
+def document_confirms_model(
+    extracted_text: str,
+    *,
+    manufacturer: str,
+    model: str,
+) -> bool:
+    """
+    Verify that extracted PDF content explicitly identifies the requested model (§8.2 steps 3-4, CL-SRC-01).
+    Prevents generic OEM software/cloud manuals or unrelated series brochures from being published as the model.
+    """
+    doc_norm = normalize_token(extracted_text)
+    if not doc_norm:
+        return False
+
+    full_model_norm = normalize_token(model)
+    if not full_model_norm or len(full_model_norm) < 3:
+        return False
+
+    tokens = [normalize_token(t) for t in re.split(r"[\s\-_/]+", model.strip()) if normalize_token(t)]
+    mfr_norm = normalize_token(manufacturer)
+    # Strip short brand prefix like "tz" or full manufacturer prefix when followed by model core (e.g. "TZ THT-03R" -> "tht03r")
+    core_tokens = list(tokens)
+    if len(core_tokens) > 1 and (core_tokens[0] == mfr_norm or mfr_norm.startswith(core_tokens[0])):
+        core_tokens = core_tokens[1:]
+    core_norm = "".join(core_tokens)
+
+    if full_model_norm in doc_norm:
+        return True
+    if len(core_norm) >= 4 and core_norm in doc_norm:
+        return True
+    return False
+

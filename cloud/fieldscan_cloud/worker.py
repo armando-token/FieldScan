@@ -52,6 +52,7 @@ from fieldscan_cloud.sources.registry import (
     ALLOWED_OEM_DOMAINS,
     SEED_TZONE_THT02_SOURCES,
     classify_search_candidate,
+    document_confirms_model,
     filter_artifacts_by_permission,
 )
 from fieldscan_cloud.twin.generator import build_twin_from_recipe
@@ -670,21 +671,23 @@ def process_single_job(
                         ),
                     )
 
-        # Attempt defensive download only on allowlisted OEM PDF candidates (§8.3)
+        # Attempt defensive download & model applicability verification on up to 3 allowlisted OEM PDFs (§8.2-§8.3)
         allowed_domains = ALLOWED_OEM_DOMAINS.get(mfr_norm, set())
-        downloaded_doc: tuple[Any, Any] | None = None
+        verified_doc: tuple[Any, Any, Path, Any] | None = None
         download_errors: list[str] = []
+        checked_pdfs = 0
         for cand in classified:
             if not cand.allowed_for_download:
                 continue
+            if checked_pdfs >= 3:
+                break
+            checked_pdfs += 1
             try:
                 dl = download_allowlisted_source(
                     cand.url,
                     allowed_domains=allowed_domains,
                     expected_kind="pdf",
                 )
-                downloaded_doc = (cand, dl)
-                break
             except SourceDownloadError as err:
                 download_errors.append(err.code)
                 record_source_event(
@@ -693,8 +696,48 @@ def process_single_job(
                     event_type="oem_download_rejected",
                     detail={"url": cand.url, "error_code": err.code},
                 )
+                continue
 
-        if downloaded_doc is None:
+            cand_stage = staging_dir / f"cand_{checked_pdfs}"
+            cand_stage.mkdir(parents=True, exist_ok=True)
+            pdf_stage_file = cand_stage / "downloaded.pdf"
+            pdf_stage_file.write_bytes(dl.content)
+            temp_doc_id = f"src_{mfr_norm}_{normalize_token(model)}_{dl.sha256[:10]}"
+            try:
+                cand_doc_out = process_pdf_document(
+                    pdf_stage_file,
+                    work_dir=cand_stage / "docs",
+                    document_id=temp_doc_id,
+                    revision_label="discovered",
+                    title=cand.title or f"{manufacturer} {model}",
+                    run_ocr=True,
+                    max_ocr_pages=6,
+                )
+            except Exception as doc_exc:
+                download_errors.append("SOURCE_PDF_UNPARSEABLE")
+                record_source_event(
+                    conn,
+                    job_id=job_id,
+                    event_type="oem_pdf_parse_failed",
+                    detail={"url": cand.url, "error": type(doc_exc).__name__},
+                )
+                continue
+
+            combined_text = "\n".join(p.text for p in cand_doc_out.pages)
+            if not document_confirms_model(combined_text, manufacturer=manufacturer, model=model):
+                download_errors.append("OEM_CANDIDATE_MODEL_UNCONFIRMED")
+                record_source_event(
+                    conn,
+                    job_id=job_id,
+                    event_type="oem_pdf_model_mismatch",
+                    detail={"url": cand.url, "sha256": dl.sha256, "requested_model": model},
+                )
+                continue
+
+            verified_doc = (cand, dl, pdf_stage_file, cand_doc_out)
+            break
+
+        if verified_doc is None:
             reasons = list(download_errors)
             if oem_hits:
                 reasons.append("OEM_REFERENCE_CANDIDATES_DETECTED")
@@ -720,14 +763,11 @@ def process_single_job(
             )
             return
 
-        # Downloaded an allowlisted OEM PDF -> build partial documentation-only publication!
-        cand, dl = downloaded_doc
-        pdf_stage_file = staging_dir / "downloaded.pdf"
-        pdf_stage_file.write_bytes(dl.content)
-
+        # Verified OEM PDF explicitly matching requested model -> build partial documentation publication!
+        cand, dl, pdf_stage_file, doc_out = verified_doc
         product_id = f"{mfr_norm}_{normalize_token(model)}"
         variant_id = normalize_token(variant) or normalize_token(hardware_revision) or "oem_discovered"
-        source_id = f"src_{product_id}_{dl.sha256[:10]}"
+        source_id = doc_out.document_id
 
         upsert_product_and_variant(
             conn,
@@ -742,16 +782,6 @@ def process_single_job(
             discriminant_hint=f"Discovered from {cand.domain}",
             aliases=[f"{manufacturer} {model}", model],
             bench_support_status="candidate",
-        )
-
-        doc_out = process_pdf_document(
-            pdf_stage_file,
-            work_dir=staging_dir / "docs",
-            document_id=source_id,
-            revision_label="discovered",
-            title=cand.title or f"{manufacturer} {model}",
-            run_ocr=True,
-            max_ocr_pages=12,
         )
         stored_pdf = store_file_atomically(
             conn, data_dir=config.data_dir, source_path=pdf_stage_file, media_type="application/pdf"

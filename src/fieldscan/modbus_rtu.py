@@ -793,21 +793,33 @@ class ModbusRTUScanner:
                     transaction_id=res.get("transaction_id"),
                     crc_checked_by_client=False,
                     mbap_valid=True,
+                    gateway_connected=True,
                 )
             err_code = str(res.get("error_code") or "READ_TIMEOUT")
             err_detail = str(res.get("error_detail") or err_code)
+            if err_code == "BACKOFF_ACTIVE" and self._latest_telemetry.get("mode") == "pusr_tcp":
+                gw_connected = bool(self._latest_telemetry.get("gateway_connected", False))
+            else:
+                gw_connected = bool(res.get("gateway_connected", False))
+            if err_code == "MODBUS_EXCEPTION":
+                gw_status = f"PUSR :{self._pusr_port} CONNECTED · MODBUS EXCEPTION"
+            elif gw_connected:
+                gw_status = f"PUSR :{self._pusr_port} CONNECTED · NO RS-485 SENSOR REPLY"
+            else:
+                gw_status = f"PUSR {err_code} · {err_detail[:42]}"
             return self._record_telemetry(
                 online=False,
                 source="physical_tcp_gateway",
                 port=gw_uri,
-                adapter_present=False,
+                adapter_present=gw_connected,
+                gateway_connected=gw_connected,
                 mode=mode,
                 baud_bps=active_baud,
                 decoded=None,
                 tx_hex=res.get("tx_hex", ""),
                 rx_hex=res.get("rx_hex", ""),
                 roundtrip_ms=float(res.get("roundtrip_ms", 0.0)),
-                status_label=f"PUSR {err_code} · {err_detail[:42]}",
+                status_label=gw_status,
                 protocol="modbus_tcp_mbap",
                 transaction_id=res.get("transaction_id"),
                 error_code=err_code,
@@ -1092,6 +1104,7 @@ class ModbusRTUScanner:
         crc_checked_by_client: bool = False,
         mbap_valid: bool | None = None,
         preserve_original_timestamp: bool = False,
+        gateway_connected: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
             self._poll_seq += 1
@@ -1110,7 +1123,7 @@ class ModbusRTUScanner:
             slave_id = decoded["reported_slave_id"] if decoded else self.target_slave_id
             dip_bits = decoded["dip_bits"] if decoded else address_to_dip_bits(self.target_slave_id)
             healthy = bool(online and not abnormal and temp_c is not None and hum_rh is not None)
-            andon_light = "GREEN" if healthy else "RED"
+            andon_light = "GREEN" if healthy else ("AMBER" if (gateway_connected and not abnormal) else "RED")
 
             if online and decoded is not None:
                 if not preserve_original_timestamp or self._last_valid_historical is None:
@@ -1192,6 +1205,7 @@ class ModbusRTUScanner:
                 "error_detail": error_detail,
                 "source": source,
                 "port": port,
+                "gateway_connected": bool(gateway_connected),
                 "adapter_present": adapter_present,
                 "baud_bps": baud_bps,
                 "frame_format": "8N1",

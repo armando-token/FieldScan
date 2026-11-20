@@ -182,6 +182,7 @@ const state = {
   pusrGatewayHost: '',
   pusrGatewayPort: 502,
   pusrGatewayTopology: 'ap_direct',
+  pusrGatewayConnected: false,
   aiStripOverrideUntil: 0,
   chatUnreadCount: 0,
   selectedCatalogContext: null,
@@ -3684,6 +3685,15 @@ function updateAndonAndBanners({ healthy, abn7fff, mb, repair }) {
 
   const isSimMb = Boolean(mb?.simulation || String(mb?.source || '').startsWith('simulator'));
   const hasHistorical = Boolean(!healthy && mb?.historical_sample);
+  const gwConnected = Boolean(!healthy && !abn7fff && !hasHistorical && mb?.gateway_connected);
+  if (gwConnected && andon === 'RED') {
+    andon = 'AMBER';
+    dom.andonStack.dataset.andon = andon;
+    if (dom.andonColumn) dom.andonColumn.dataset.andon = andon;
+    dom.andonRed.classList.toggle('is-active', false);
+    dom.andonAmber.classList.toggle('is-active', true);
+    dom.andonGreen.classList.toggle('is-active', false);
+  }
 
   if (andon === 'GREEN') {
     dom.systemStateBanner.classList.add('is-green');
@@ -3712,16 +3722,29 @@ function updateAndonAndBanners({ healthy, abn7fff, mb, repair }) {
     dom.systemStateBanner.classList.add('is-amber');
     dom.scadaStatusBadge.classList.add('is-amber');
     const targetSid = mb?.target_slave_id || computeDipAddress() || 1;
-    dom.systemStateText.textContent = 'INSPECTING · DIP-8';
-    dom.systemStateSub.textContent = `Set SW1 DIP-8 to Slave #${targetSid} · Close Housing & Poll Bus`;
     dom.scadaLiveCard.dataset.scadaState = 'amber';
-    dom.scadaStatusBadge.textContent = 'AWAIT';
-    dom.scadaStatusBadge.title = 'AMBER: AWAITING SENSOR RESPONSE';
+    if (gwConnected) {
+      const gwLabel = mb?.port || (state.pusrGatewayHost ? `tcp://${state.pusrGatewayHost}:${state.pusrGatewayPort}` : 'PUSR :502');
+      dom.systemStateText.textContent = 'PUSR CONNECTED · NO SENSOR';
+      dom.systemStateSub.textContent = `PUSR Wi-Fi Gateway (${gwLabel}) LINKED · Awaiting THT-02 RS-485 reply (Slave #${targetSid})`;
+      dom.scadaStatusBadge.textContent = 'PUSR OK';
+      dom.scadaStatusBadge.title = 'AMBER: PUSR WI-FI GATEWAY CONNECTED · NO RS-485 SENSOR REPLY';
+      if (!keepAiStrip) {
+        dom.nextStepTitle.textContent = 'PUSR :502 LINKED';
+        dom.nextStepBody.innerHTML =
+          'PUSR Wi-Fi gateway is <strong>CONNECTED</strong>. Power THT-02 (5–24V DC), check RS-485 A+/B- &amp; Modbus TCP 9600 8N1, or tap <strong>Scan</strong>.';
+      }
+    } else {
+      dom.systemStateText.textContent = 'INSPECTING · DIP-8';
+      dom.systemStateSub.textContent = `Set SW1 DIP-8 to Slave #${targetSid} · Close Housing & Poll Bus`;
+      dom.scadaStatusBadge.textContent = 'AWAIT';
+      dom.scadaStatusBadge.title = 'AMBER: AWAITING SENSOR RESPONSE';
 
-    if (!keepAiStrip) {
-      dom.nextStepTitle.textContent = `STEP 3 · POLL #${targetSid}`;
-      dom.nextStepBody.innerHTML =
-        'Verify DIP-8 switches in the macro inset, close the housing, and run <strong>Read-Only Poll</strong>.';
+      if (!keepAiStrip) {
+        dom.nextStepTitle.textContent = `STEP 3 · POLL #${targetSid}`;
+        dom.nextStepBody.innerHTML =
+          'Verify DIP-8 switches in the macro inset, close the housing, and run <strong>Read-Only Poll</strong>.';
+      }
     }
   } else {
     dom.systemStateBanner.classList.add('is-red');
@@ -3983,6 +4006,10 @@ function applyTelemetryPayload(data) {
   const isSimMb = Boolean(mb.simulation || String(mb.source || '').startsWith('simulator'));
   state.modbusHealthy = healthy;
   state.modbusSimulation = isSimMb;
+  state.pusrGatewayConnected = Boolean(mb.gateway_connected);
+  if (dom.pusrGatewayModal && !dom.pusrGatewayModal.hidden) {
+    syncPusrGatewayModalUI();
+  }
 
   if (mb.mode && dom.selectModbusMode && dom.selectModbusMode.value !== mb.mode) {
     const hasMbOpt = Array.from(dom.selectModbusMode.options).some((o) => o.value === mb.mode);
@@ -4042,8 +4069,13 @@ function applyTelemetryPayload(data) {
     dom.scadaTempVal.textContent = '--.- °C';
     dom.scadaHumVal.textContent = '--.- %RH';
     dom.scadaSlaveVal.textContent = `Slave #${String(mb.target_slave_id || computeDipAddress() || 1).padStart(2, '0')} · ${isMbap ? 'MODBUS TCP' : `${mb.baud_bps || 9600} 8N1`}`;
-    dom.scadaCrcPill.textContent = mb.error_code || (mb.adapter_present ? 'BUS TIMEOUT' : 'NO SIGNAL');
-    dom.scadaFrameHex.textContent = `TX: ${mb.last_tx_hex || '01 03 00 00 00 08 44 0C'} · AWAITING RESPONSE`;
+    if (mb.gateway_connected) {
+      dom.scadaCrcPill.textContent = 'PUSR :502 OK · NO SENSOR';
+      dom.scadaFrameHex.textContent = `PUSR LINKED (${mb.port || ''}) · TX: ${mb.last_tx_hex || '00 01 00 00 00 06 01 03 00 00 00 08'} · AWAITING RS-485`;
+    } else {
+      dom.scadaCrcPill.textContent = mb.error_code || (mb.adapter_present ? 'BUS TIMEOUT' : 'NO SIGNAL');
+      dom.scadaFrameHex.textContent = `TX: ${mb.last_tx_hex || '01 03 00 00 00 08 44 0C'} · AWAITING RESPONSE`;
+    }
     pushScadaSample(null, null);
   }
 
@@ -6853,6 +6885,10 @@ function bindWorkstationEvents() {
     if (dom.pusrGatewayTopoBadge) {
       if (!state.pusrGatewayHost) {
         dom.pusrGatewayTopoBadge.textContent = 'AP-FIRST · NOT CONFIGURED';
+      } else if (state.pusrGatewayConnected) {
+        dom.pusrGatewayTopoBadge.textContent = state.pusrGatewayTopology === 'sta_lan'
+          ? 'CONNECTED · LAB STA (:502)'
+          : 'CONNECTED · DIRECT PUSR AP (:502)';
       } else if (state.pusrGatewayTopology === 'sta_lan') {
         dom.pusrGatewayTopoBadge.textContent = 'LAB ROUTER · STA MODE';
       } else {

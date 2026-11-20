@@ -436,6 +436,7 @@ class ModbusTCPClient:
             tx_hex = format_hex(req_bytes)
             t0 = time.perf_counter()
 
+            tcp_connected = False
             try:
                 if self._sock is None:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -472,6 +473,7 @@ class ModbusTCPClient:
                     }
                 )
                 self._sock.sendall(req_bytes)
+                tcp_connected = True
 
                 deadline = time.perf_counter() + max(0.1, float(self.timeout_s))
                 discarded_frames: list[dict[str, Any]] = []
@@ -483,6 +485,7 @@ class ModbusTCPClient:
                         backoff_s = self._record_failure_unlocked()
                         return {
                             "ok": False,
+                            "gateway_connected": True,
                             "error_code": "READ_TIMEOUT",
                             "error_detail": f"Timed out after {self.timeout_s:.2f}s awaiting MBAP TxID {tx_id}",
                             "protocol": "modbus_tcp_mbap",
@@ -504,6 +507,7 @@ class ModbusTCPClient:
                         backoff_s = self._record_failure_unlocked()
                         return {
                             "ok": False,
+                            "gateway_connected": False,
                             "error_code": "SOURCE_UNAVAILABLE",
                             "error_detail": "Gateway closed TCP connection before full MBAP frame arrived",
                             "protocol": "modbus_tcp_mbap",
@@ -557,6 +561,7 @@ class ModbusTCPClient:
                             rtt_ms = round((time.perf_counter() - t0) * 1000.0, 2)
                             return {
                                 "ok": False,
+                                "gateway_connected": True,
                                 "error_code": "WRONG_UNIT",
                                 "error_detail": f"Expected Unit ID {unit_id}, received Unit ID {frame.unit_id}",
                                 "protocol": "modbus_tcp_mbap",
@@ -577,6 +582,7 @@ class ModbusTCPClient:
                         if frame.is_exception:
                             return {
                                 "ok": False,
+                                "gateway_connected": True,
                                 "error_code": "MODBUS_EXCEPTION",
                                 "exception_code": frame.exception_code,
                                 "exception_name": frame.exception_name,
@@ -603,6 +609,7 @@ class ModbusTCPClient:
                         )
                         return {
                             "ok": True,
+                            "gateway_connected": True,
                             "error_code": None,
                             "protocol": "modbus_tcp_mbap",
                             "transport_status": "response_received",
@@ -623,6 +630,7 @@ class ModbusTCPClient:
                 backoff_s = self._record_failure_unlocked()
                 return {
                     "ok": False,
+                    "gateway_connected": tcp_connected,
                     "error_code": exc.code,
                     "error_detail": str(exc),
                     "protocol": "modbus_tcp_mbap",
@@ -640,6 +648,7 @@ class ModbusTCPClient:
                 backoff_s = self._record_failure_unlocked()
                 return {
                     "ok": False,
+                    "gateway_connected": tcp_connected,
                     "error_code": "READ_TIMEOUT",
                     "error_detail": f"Socket timeout ({self.timeout_s:.2f}s) connecting/reading {self.host}:{self.port}",
                     "protocol": "modbus_tcp_mbap",
@@ -657,6 +666,7 @@ class ModbusTCPClient:
                 backoff_s = self._record_failure_unlocked()
                 return {
                     "ok": False,
+                    "gateway_connected": False,
                     "error_code": "SOURCE_UNAVAILABLE",
                     "error_detail": f"TCP gateway {self.host}:{self.port} unreachable: {exc}",
                     "protocol": "modbus_tcp_mbap",
@@ -1052,6 +1062,104 @@ def send_pusr_udp_command(
                 pass
 
 
+def ensure_pusr_web_modbus_enabled(
+    host: str,
+    *,
+    baud: int = 9600,
+    force_restart: bool = False,
+) -> dict[str, Any]:
+    """Inspect `http://<host>/port_en.html` (strictly RFC1918 LAN) and enable USR-DR164 Modbus TCP Protocol Conversion."""
+    import base64
+    import re
+    import urllib.parse
+    import urllib.request
+    from fieldscan.offline_guard import authorized_bench_probe_scope
+
+    clean_host = (host or "").strip()
+    if not is_private_rfc1918_ipv4(clean_host):
+        return {
+            "checked": False,
+            "changed": False,
+            "restarted": False,
+            "modbus_mode": None,
+            "baud_read": None,
+            "log": [{"cmd": "HTTP port_en.html", "reply": "WAN_HOST_BLOCKED"}],
+        }
+
+    auth_hdr = "Basic " + base64.b64encode(b"admin:admin").decode("ascii")
+    log: list[dict[str, str]] = []
+
+    def _http(path: str, method: str = "GET", body: bytes | None = None, referer: str | None = None) -> tuple[int, str] | None:
+        req = urllib.request.Request(f"http://{clean_host}/{path}", data=body, method=method)
+        req.add_header("Authorization", auth_hdr)
+        if referer:
+            req.add_header("Referer", referer)
+        if body is not None:
+            req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        try:
+            with urllib.request.urlopen(req, timeout=2.2) as resp:
+                return int(resp.status), resp.read().decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
+    with authorized_bench_probe_scope([clean_host]):
+        res = _http("port_en.html")
+        if not res or res[0] != 200 or "modbus_mode_setting" not in res[1]:
+            return {"checked": False, "changed": False, "restarted": False, "modbus_mode": None, "baud_read": None, "log": log}
+        html = res[1]
+        m_mb = re.search(r'var\s+modbus_mode_setting\s*=\s*"([^"]*)"', html)
+        m_bd = re.search(r'var\s+uart_setting_baud\s*=\s*"([^"]*)"', html)
+        cur_mb = m_mb.group(1) if m_mb else None
+        cur_bd = m_bd.group(1) if m_bd else None
+        log.append({"cmd": "GET port_en.html", "reply": f"baud={cur_bd or '?'}, modbus_mode={cur_mb or '?'}"})
+
+        needs_update = (cur_mb not in ("1", "2")) or (cur_bd != str(baud))
+        changed = False
+        if needs_update:
+            payload = urllib.parse.urlencode(
+                [
+                    ("uart_setting_baud", str(baud)),
+                    ("uart_setting_data", "databit_8"),
+                    ("uart_setting_parity", "none"),
+                    ("uart_setting_stop", "stopbit_1"),
+                    ("uart_setting_fc", "NFC"),
+                    ("uart_setting_packtime", "20"),
+                    ("uart_setting_packsize", "1400"),
+                    ("com_setting_hearten", "0"),
+                    ("com_setting_hearttm", "60"),
+                    ("com_setting_heartdt", "5553522D4452313634"),
+                    ("com_setting_heartty", "0"),
+                    ("modbus_mode_setting", "1"),
+                    ("modbus_outt_setting", "200"),
+                    ("modbus_polt_setting", "10"),
+                    ("modbus_eack_setting", "0"),
+                ]
+            ).encode("utf-8")
+            pres = _http("do_cmd_en.html", method="POST", body=payload, referer=f"http://{clean_host}/port_en.html")
+            if pres and pres[0] == 200:
+                changed = ("Saved Successfully" in pres[1]) or ("RESTART" in pres[1])
+                log.append({"cmd": f"POST do_cmd_en.html (modbus=1, baud={baud})", "reply": "Saved Successfully" if changed else f"HTTP {pres[0]}"})
+
+        restarted = False
+        if changed or force_restart:
+            rres = _http("success_en.html", method="POST", body=b"HF_PROCESS_CMD=RESTART", referer=f"http://{clean_host}/restart_en.html")
+            if rres:
+                restarted = rres[0] == 200
+                log.append({"cmd": "POST success_en.html (RESTART)", "reply": f"HTTP {rres[0]}"})
+            else:
+                restarted = True
+                log.append({"cmd": "POST success_en.html (RESTART)", "reply": "REBOOTING"})
+
+    return {
+        "checked": True,
+        "changed": changed,
+        "restarted": restarted,
+        "modbus_mode": cur_mb,
+        "baud_read": cur_bd,
+        "log": log,
+    }
+
+
 def auto_provision_pusr_gateway(
     *,
     preferred_host: str | None = None,
@@ -1134,17 +1242,17 @@ def auto_provision_pusr_gateway(
 
         with authorized_bench_probe_scope(probe_list[:4]):
             for h in probe_list[:4]:
-                p502 = probe_tcp_port(h, port=clean_port, timeout_s=0.35)
+                p502 = probe_tcp_port(h, port=clean_port, timeout_s=0.75)
                 if p502.get("error_code") == "LOCAL_NETWORK_DENIED":
                     local_net_denied = True
                     break
                 if p502.get("reachable"):
                     host_502 = h
                     break
-                p8899 = probe_tcp_port(h, port=PUSR_FACTORY_TCP_PORT, timeout_s=0.30)
+                p8899 = probe_tcp_port(h, port=PUSR_FACTORY_TCP_PORT, timeout_s=0.35)
                 if p8899.get("reachable") and host_8899 is None:
                     host_8899 = h
-                p80 = probe_tcp_port(h, port=80, timeout_s=0.30)
+                p80 = probe_tcp_port(h, port=80, timeout_s=0.40)
                 if p80.get("reachable") and host_80 is None:
                     host_80 = h
 
@@ -1158,6 +1266,43 @@ def auto_provision_pusr_gateway(
             }
 
         if host_502:
+            web_res = ensure_pusr_web_modbus_enabled(host_502, baud=baud, force_restart=False)
+            if web_res["changed"] and web_res["restarted"]:
+                time.sleep(3.2)
+                reopened = False
+                with authorized_bench_probe_scope([host_502]):
+                    for _ in range(8):
+                        if probe_tcp_port(host_502, port=clean_port, timeout_s=0.40).get("reachable"):
+                            reopened = True
+                            break
+                        time.sleep(0.45)
+                if reopened:
+                    return {
+                        "ok": True,
+                        "status": "ready_on_502",
+                        "host": host_502,
+                        "port": clean_port,
+                        "topology": "ap_direct",
+                        "wifi_ip": wifi_ip,
+                        "udp_identity": udp_reply,
+                        "port_502_open": True,
+                        "port_8899_open": False,
+                        "at_log": web_res["log"],
+                        "message": f"Auto-enabled ModBUS Protocol Conversion + {baud} 8N1 on {host_502} and restarted cleanly. Gateway live on :{clean_port}; scanning RS-485 bus now.",
+                    }
+                return {
+                    "ok": True,
+                    "status": "provisioned_rebooting",
+                    "host": host_502,
+                    "port": clean_port,
+                    "topology": "ap_direct",
+                    "wifi_ip": wifi_ip,
+                    "udp_identity": udp_reply,
+                    "port_502_open": False,
+                    "port_8899_open": False,
+                    "at_log": web_res["log"],
+                    "message": f"Auto-enabled ModBUS Protocol Conversion + {baud} 8N1 on {host_502} and triggered software restart. Wait 5 seconds and tap 1-Tap Auto-Setup again.",
+                }
             return {
                 "ok": True,
                 "status": "ready_on_502",
@@ -1168,7 +1313,7 @@ def auto_provision_pusr_gateway(
                 "udp_identity": udp_reply,
                 "port_502_open": True,
                 "port_8899_open": False,
-                "at_log": [],
+                "at_log": web_res["log"],
                 "message": f"PUSR gateway is live on {host_502}:{clean_port} (Modbus TCP). Selected gateway and scanning RS-485 bus now.",
             }
 
@@ -1209,7 +1354,7 @@ def auto_provision_pusr_gateway(
                 if "ok" in _run_at("AT+WMODE=AP").lower():
                     applied_count += 1
 
-                u_resp = _run_at(f"AT+UART={baud},8,1,NONE,NFC")
+                u_resp = _run_at(f"AT+UART={baud},8,1,None,NFC")
                 if "ok" not in u_resp.lower():
                     u_resp = _run_at(f"AT+UART={baud},8,N,1")
                 if "ok" in u_resp.lower():
@@ -1225,15 +1370,14 @@ def auto_provision_pusr_gateway(
                 if "ok" in s_resp.lower():
                     applied_count += 1
 
-                m_resp = _run_at("AT+WKMOD=MODBUS")
-                if "ok" not in m_resp.lower():
-                    m_resp = _run_at("AT+MODBUS=ON")
-                if "ok" not in m_resp.lower():
-                    m_resp = _run_at("AT+TCPMB=ON")
-                if "ok" in m_resp.lower():
+                web_prov = ensure_pusr_web_modbus_enabled(found_host, baud=baud, force_restart=applied_count > 0)
+                at_log.extend(web_prov["log"])
+                if web_prov["changed"]:
                     applied_count += 1
+                if web_prov["restarted"]:
+                    reboot_sent = True
 
-                if applied_count > 0:
+                if not reboot_sent and applied_count > 0:
                     z_resp = _run_at("AT+Z")
                     reboot_sent = ("ok" in z_resp.lower()) or ("err" not in z_resp.lower())
 
@@ -1252,8 +1396,8 @@ def auto_provision_pusr_gateway(
                     "at_applied_count": applied_count,
                     "at_log": at_log,
                     "message": (
-                        f"Auto-configured PUSR at {found_host} (AP, {baud} 8N1, TCP Server :{clean_port}) and rebooted via AT+Z. "
-                        "Wait 5 seconds, ensure Wi-Fi stays on USR-DR164, then tap 1-Tap Auto-Setup again."
+                        f"Auto-configured PUSR at {found_host} (Pure AP, {baud} 8N1, TCP Server :{clean_port}, ModBUS Protocol Conversion) "
+                        "and triggered software restart. Wait 5 seconds, ensure Wi-Fi stays on USR-DR164, then tap 1-Tap Auto-Setup again."
                     ),
                 }
 

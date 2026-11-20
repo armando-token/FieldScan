@@ -1040,3 +1040,38 @@ def test_pusr_ap_first_discovery_candidates_rfc1918_guard_and_api() -> None:
 
         rep, sip, uerr = send_pusr_udp_command("8.8.8.8", "www.usr.cn")
         assert rep is None and sip is None and uerr == "WAN_HOST_BLOCKED"
+
+    # 7. Two-layer gateway_connected distinction: TCP connected + sensor timeout => gateway_connected=True & AMBER
+    from fieldscan.modbus_rtu import ModbusRTUScanner
+    from fieldscan.modbus_tcp import ensure_pusr_web_modbus_enabled
+
+    wan_web = ensure_pusr_web_modbus_enabled("8.8.8.8")
+    assert wan_web["checked"] is False and wan_web["log"][0]["reply"] == "WAN_HOST_BLOCKED"
+
+    srv_to, to_host, to_port, _ = start_mbap_test_gateway(mode="drop_silent")
+    try:
+        c_to = ModbusTCPClient(host=to_host, port=to_port, timeout_s=0.25)
+        r_to = c_to.read_tht02_holding(unit_id=1, respect_backoff=False)
+        assert r_to["ok"] is False
+        assert r_to["error_code"] == "READ_TIMEOUT"
+        assert r_to["gateway_connected"] is True
+        c_to.close()
+
+        svc = ModbusRTUScanner(initial_mode="pusr_tcp", auto_start=False)
+        svc.set_pusr_gateway(to_host, to_port, topology="ap_direct")
+        tel_gw = svc.step_once()
+        assert tel_gw["online"] is False
+        assert tel_gw["gateway_connected"] is True
+        assert tel_gw["adapter_present"] is True
+        assert tel_gw["andon_light"] == "AMBER"
+        assert "CONNECTED" in str(tel_gw["status_label"]).upper()
+    finally:
+        srv_to.shutdown()
+        srv_to.server_close()
+
+    # Unreachable closed port => gateway_connected=False & RED
+    c_dead = ModbusTCPClient(host="127.0.0.1", port=65530, timeout_s=0.2)
+    r_dead = c_dead.read_tht02_holding(unit_id=1, respect_backoff=False)
+    assert r_dead["ok"] is False
+    assert r_dead["gateway_connected"] is False
+    c_dead.close()

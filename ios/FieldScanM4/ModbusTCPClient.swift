@@ -557,6 +557,7 @@ public final class ModbusTCPClient {
             }
             return [
                 "ok": false,
+                "gateway_connected": false,
                 "error_code": errCode,
                 "error_detail": nsErr.localizedDescription,
                 "protocol": "modbus_tcp_mbap",
@@ -612,6 +613,7 @@ public final class ModbusTCPClient {
             let backoff = recordFailureUnlocked()
             return [
                 "ok": false,
+                "gateway_connected": false,
                 "error_code": "SOURCE_UNAVAILABLE",
                 "error_detail": "Failed transmitting MBAP FC03 request to \(host):\(port)",
                 "protocol": "modbus_tcp_mbap",
@@ -636,6 +638,7 @@ public final class ModbusTCPClient {
                 let backoff = recordFailureUnlocked()
                 return [
                     "ok": false,
+                    "gateway_connected": true,
                     "error_code": "READ_TIMEOUT",
                     "error_detail": String(format: "Timed out after %.2fs awaiting MBAP TxID %d", timeoutS, currentTxId),
                     "protocol": "modbus_tcp_mbap",
@@ -719,6 +722,7 @@ public final class ModbusTCPClient {
                     if frame.unitId != unitId {
                         return [
                             "ok": false,
+                            "gateway_connected": true,
                             "error_code": "WRONG_UNIT",
                             "error_detail": "Expected Unit ID \(unitId), received Unit ID \(frame.unitId)",
                             "protocol": "modbus_tcp_mbap",
@@ -738,6 +742,7 @@ public final class ModbusTCPClient {
                     if frame.isException {
                         return [
                             "ok": false,
+                            "gateway_connected": true,
                             "error_code": "MODBUS_EXCEPTION",
                             "exception_code": Int(frame.exceptionCode ?? 0),
                             "exception_name": frame.exceptionName ?? "Exception",
@@ -766,6 +771,7 @@ public final class ModbusTCPClient {
                     )
                     return [
                         "ok": true,
+                        "gateway_connected": true,
                         "error_code": NSNull(),
                         "protocol": "modbus_tcp_mbap",
                         "transport_status": "response_received",
@@ -785,6 +791,7 @@ public final class ModbusTCPClient {
                 let backoff = recordFailureUnlocked()
                 return [
                     "ok": false,
+                    "gateway_connected": true,
                     "error_code": fe.errorCode,
                     "error_detail": fe.errorDetail,
                     "protocol": "modbus_tcp_mbap",
@@ -802,6 +809,7 @@ public final class ModbusTCPClient {
                 let backoff = recordFailureUnlocked()
                 return [
                     "ok": false,
+                    "gateway_connected": true,
                     "error_code": "INVALID_REGISTER_DATA",
                     "error_detail": error.localizedDescription,
                     "protocol": "modbus_tcp_mbap",
@@ -1183,7 +1191,107 @@ public final class ModbusTCPClient {
         return (replyStr, senderIP, nil)
     }
 
-    /// 1-Tap PUSR USR-DR164 diagnostics & automatic UDP `48899` provisioning (`9600 8N1`, `TCP Server :502`, `Modbus TCP`, `AT+Z`).
+    /// Inspects `http://<host>/port_en.html` (strictly private RFC1918 LAN) and enables `USR-DR164` Modbus TCP
+    /// Protocol Conversion (`modbus_mode_setting=1`, `9600 8N1`) + clean software `HF_PROCESS_CMD=RESTART` if needed.
+    public static func ensurePusrWebModbusEnabled(
+        host: String,
+        baud: Int = 9600,
+        forceRestart: Bool = false
+    ) -> (checked: Bool, changed: Bool, restarted: Bool, modbusMode: String?, baudRead: String?, log: [[String: String]]) {
+        let cleanHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isPrivateRFC1918IPv4(cleanHost) else {
+            return (false, false, false, nil, nil, [["cmd": "HTTP port_en.html", "reply": "WAN_HOST_BLOCKED"]])
+        }
+        var log: [[String: String]] = []
+        let authHeader = "Basic " + Data("admin:admin".utf8).base64EncodedString()
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 2.0
+        config.timeoutIntervalForResource = 3.0
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+
+        func syncHTTP(path: String, method: String = "GET", body: String? = nil, referer: String? = nil) -> (Int, String)? {
+            guard let url = URL(string: "http://\(cleanHost)/\(path)") else { return nil }
+            var req = URLRequest(url: url)
+            req.httpMethod = method
+            req.setValue(authHeader, forHTTPHeaderField: "Authorization")
+            if let ref = referer { req.setValue(ref, forHTTPHeaderField: "Referer") }
+            if let b = body {
+                req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+                req.httpBody = Data(b.utf8)
+            }
+            let sem = DispatchSemaphore(value: 0)
+            var out: (Int, String)?
+            session.dataTask(with: req) { data, resp, _ in
+                if let http = resp as? HTTPURLResponse {
+                    let txt = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    out = (http.statusCode, txt)
+                }
+                sem.signal()
+            }.resume()
+            _ = sem.wait(timeout: .now() + 2.8)
+            return out
+        }
+
+        func extractJSVar(_ html: String, name: String) -> String? {
+            let pattern = "var\\s+\(name)\\s*=\\s*\"([^\"]*)\""
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+                  match.numberOfRanges >= 2,
+                  let range = Range(match.range(at: 1), in: html) else {
+                return nil
+            }
+            return String(html[range])
+        }
+
+        guard let (st, html) = syncHTTP(path: "port_en.html"), st == 200, html.contains("modbus_mode_setting") else {
+            return (false, false, false, nil, nil, log)
+        }
+        let curModbus = extractJSVar(html, name: "modbus_mode_setting")
+        let curBaud = extractJSVar(html, name: "uart_setting_baud")
+        log.append(["cmd": "GET port_en.html", "reply": "baud=\(curBaud ?? "?"), modbus_mode=\(curModbus ?? "?")"])
+
+        let needsUpdate = (curModbus != "1" && curModbus != "2") || (curBaud != String(baud))
+        var changed = false
+        if needsUpdate {
+            let formBody = [
+                "uart_setting_baud=\(baud)",
+                "uart_setting_data=databit_8",
+                "uart_setting_parity=none",
+                "uart_setting_stop=stopbit_1",
+                "uart_setting_fc=NFC",
+                "uart_setting_packtime=20",
+                "uart_setting_packsize=1400",
+                "com_setting_hearten=0",
+                "com_setting_hearttm=60",
+                "com_setting_heartdt=5553522D4452313634",
+                "com_setting_heartty=0",
+                "modbus_mode_setting=1",
+                "modbus_outt_setting=200",
+                "modbus_polt_setting=10",
+                "modbus_eack_setting=0",
+            ].joined(separator: "&")
+            if let (pst, ptxt) = syncHTTP(path: "do_cmd_en.html", method: "POST", body: formBody, referer: "http://\(cleanHost)/port_en.html"), pst == 200 {
+                changed = ptxt.contains("Saved Successfully") || ptxt.contains("RESTART")
+                log.append(["cmd": "POST do_cmd_en.html (modbus=1, baud=\(baud))", "reply": changed ? "Saved Successfully" : "HTTP \(pst)"])
+            }
+        }
+
+        var restarted = false
+        if changed || forceRestart {
+            if let (rst, _) = syncHTTP(path: "success_en.html", method: "POST", body: "HF_PROCESS_CMD=RESTART", referer: "http://\(cleanHost)/restart_en.html") {
+                restarted = (rst == 200)
+                log.append(["cmd": "POST success_en.html (RESTART)", "reply": "HTTP \(rst)"])
+            } else {
+                // Device often drops HTTP connection immediately upon reboot
+                restarted = true
+                log.append(["cmd": "POST success_en.html (RESTART)", "reply": "REBOOTING"])
+            }
+        }
+        return (true, changed, restarted, curModbus, curBaud, log)
+    }
+
+    /// 1-Tap PUSR USR-DR164 diagnostics & automatic UDP `48899` + Web `do_cmd_en.html` provisioning (`9600 8N1`, `TCP Server :502`, `Modbus TCP`, software Restart).
     public static func autoProvisionPusrGateway(
         preferredHost: String? = nil,
         baud: Int = 9600,
@@ -1265,12 +1373,12 @@ public final class ModbusTCPClient {
         var host8899: String?
         var host80: String?
         for h in probeList.prefix(4) {
-            let p502 = probeTCPPort(host: h, port: targetPort, timeoutS: 0.35)
+            let p502 = probeTCPPort(host: h, port: targetPort, timeoutS: 0.75)
             if p502.errorCode == "LOCAL_NETWORK_DENIED" { localNetDenied = true; break }
             if p502.reachable { host502 = h; break }
-            let p8899 = probeTCPPort(host: h, port: pusrFactoryTCPPort, timeoutS: 0.30)
+            let p8899 = probeTCPPort(host: h, port: pusrFactoryTCPPort, timeoutS: 0.35)
             if p8899.reachable && host8899 == nil { host8899 = h }
-            let p80 = probeTCPPort(host: h, port: 80, timeoutS: 0.30)
+            let p80 = probeTCPPort(host: h, port: 80, timeoutS: 0.40)
             if p80.reachable && host80 == nil { host80 = h }
         }
 
@@ -1284,8 +1392,49 @@ public final class ModbusTCPClient {
             ]
         }
 
-        // Case A: Already listening on Modbus TCP :502!
+        // Case A: Already listening on Modbus TCP :502! Verify USR-DR164 ModBUS Protocol Conversion is ON (not 0/OFF).
         if let readyHost = host502 {
+            let webRes = ensurePusrWebModbusEnabled(host: readyHost, baud: baud, forceRestart: false)
+            if webRes.changed && webRes.restarted {
+                // Wait briefly (~4.5s) for USR-DR164 to finish software reboot and reopen :502
+                Thread.sleep(forTimeInterval: 3.2)
+                var reopened = false
+                for _ in 0..<8 {
+                    if probeTCPPort(host: readyHost, port: targetPort, timeoutS: 0.40).reachable {
+                        reopened = true
+                        break
+                    }
+                    Thread.sleep(forTimeInterval: 0.45)
+                }
+                if reopened {
+                    return [
+                        "ok": true,
+                        "status": "ready_on_502",
+                        "host": readyHost,
+                        "port": targetPort,
+                        "topology": "ap_direct",
+                        "wifi_ip": wifiIP ?? NSNull(),
+                        "udp_identity": udpReply ?? NSNull(),
+                        "port_502_open": true,
+                        "port_8899_open": false,
+                        "at_log": webRes.log,
+                        "message": "Auto-enabled ModBUS Protocol Conversion + \(baud) 8N1 on \(readyHost) and restarted cleanly. Gateway live on :\(targetPort); scanning RS-485 bus now.",
+                    ]
+                }
+                return [
+                    "ok": true,
+                    "status": "provisioned_rebooting",
+                    "host": readyHost,
+                    "port": targetPort,
+                    "topology": "ap_direct",
+                    "wifi_ip": wifiIP ?? NSNull(),
+                    "udp_identity": udpReply ?? NSNull(),
+                    "port_502_open": false,
+                    "port_8899_open": false,
+                    "at_log": webRes.log,
+                    "message": "Auto-enabled ModBUS Protocol Conversion + \(baud) 8N1 on \(readyHost) and triggered software restart. Wait 5 seconds and tap 1-Tap Auto-Setup again.",
+                ]
+            }
             return [
                 "ok": true,
                 "status": "ready_on_502",
@@ -1296,12 +1445,12 @@ public final class ModbusTCPClient {
                 "udp_identity": udpReply ?? NSNull(),
                 "port_502_open": true,
                 "port_8899_open": false,
-                "at_log": [],
+                "at_log": webRes.log,
                 "message": "PUSR gateway is live on \(readyHost):\(targetPort) (Modbus TCP). Selected gateway and scanning RS-485 bus now.",
             ]
         }
 
-        // Case B: PUSR detected (via UDP 48899, factory :8899, or web :80) -> attempt 1-tap UDP Network AT auto-provisioning!
+        // Case B: PUSR detected (via UDP 48899, factory :8899, or web :80) -> attempt 1-tap UDP Network AT + Web HTTP provisioning!
         if let foundHost = udpHost ?? host8899 ?? host80 {
             var atLog: [[String: String]] = []
             var appliedCount = 0
@@ -1328,7 +1477,7 @@ public final class ModbusTCPClient {
                     let wResp = runAT("AT+WMODE=AP")
                     if wResp.lowercased().contains("ok") { appliedCount += 1 }
 
-                    var uResp = runAT("AT+UART=\(baud),8,1,NONE,NFC")
+                    var uResp = runAT("AT+UART=\(baud),8,1,None,NFC")
                     if !uResp.lowercased().contains("ok") {
                         uResp = runAT("AT+UART=\(baud),8,N,1")
                     }
@@ -1346,16 +1495,13 @@ public final class ModbusTCPClient {
                     }
                     if sResp.lowercased().contains("ok") { appliedCount += 1 }
 
-                    var mResp = runAT("AT+WKMOD=MODBUS")
-                    if !mResp.lowercased().contains("ok") {
-                        mResp = runAT("AT+MODBUS=ON")
-                    }
-                    if !mResp.lowercased().contains("ok") {
-                        mResp = runAT("AT+TCPMB=ON")
-                    }
-                    if mResp.lowercased().contains("ok") { appliedCount += 1 }
+                    // Also ensure USR-DR164 ModBUS Protocol Conversion via HTTP `do_cmd_en.html` + clean `HF_PROCESS_CMD=RESTART`
+                    let webProv = ensurePusrWebModbusEnabled(host: foundHost, baud: baud, forceRestart: appliedCount > 0)
+                    atLog.append(contentsOf: webProv.log)
+                    if webProv.changed { appliedCount += 1 }
+                    if webProv.restarted { rebootSent = true }
 
-                    if appliedCount > 0 {
+                    if !rebootSent && appliedCount > 0 {
                         let zResp = runAT("AT+Z")
                         rebootSent = zResp.lowercased().contains("ok") || !zResp.lowercased().contains("err")
                     }
@@ -1376,7 +1522,7 @@ public final class ModbusTCPClient {
                     "port_80_open": host80 != nil,
                     "at_applied_count": appliedCount,
                     "at_log": atLog,
-                    "message": "Auto-configured PUSR at \(foundHost) (AP, \(baud) 8N1, TCP Server :\(targetPort)) and rebooted via AT+Z. Wait 5 seconds, ensure iPad stays on USR-DR164 Wi-Fi, then tap 1-Tap Auto-Setup again.",
+                    "message": "Auto-configured PUSR at \(foundHost) (Pure AP, \(baud) 8N1, TCP Server :\(targetPort), ModBUS Protocol Conversion) and triggered software restart. Wait 5 seconds, ensure iPad stays on USR-DR164 Wi-Fi, then tap 1-Tap Auto-Setup again.",
                 ]
             }
 

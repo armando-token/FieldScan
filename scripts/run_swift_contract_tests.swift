@@ -606,6 +606,8 @@ func runSwiftContractSuite() throws {
     check(badUdpWan.reply == nil && badUdpWan.errorCode == "WAN_HOST_BLOCKED", "1-Tap PUSR Swift: UDP 48899 must block public WAN IP")
     let badAuto5502 = ModbusTCPClient.autoProvisionPusrGateway(preferredHost: "10.10.100.254", baud: 9600, targetPort: 5502)
     check((badAuto5502["ok"] as? Bool) == false && (badAuto5502["error_code"] as? String) == "PROTOCOL_MISMATCH", "1-Tap PUSR Swift: autoProvision must block :5502")
+    let badWebWan = ModbusTCPClient.ensurePusrWebModbusEnabled(host: "8.8.8.8")
+    check(badWebWan.checked == false && badWebWan.log.first?["reply"] == "WAN_HOST_BLOCKED", "1-Tap PUSR Swift: Web modbus helper must block public WAN IP")
 
     let summary: [String: Any] = [
         "swift_contract_suite": "PASS",

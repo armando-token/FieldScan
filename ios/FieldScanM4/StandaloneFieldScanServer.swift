@@ -2740,7 +2740,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 if !ok && errCode != "LOCAL_NETWORK_DENIED" && errCode != "SOURCE_UNAVAILABLE" && errCode != "PROTOCOL_MISMATCH" {
                     let probeClient = ModbusTCPClient(host: host, port: port, timeoutS: 0.35, pilotReadonly: true)
                     defer { probeClient.close() }
-                    let candidateIds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 176].filter { $0 != sid }
+                    let candidateIds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 16, 32, 64, 128, 176].filter { $0 != sid }
                     for candId in candidateIds {
                         scannedIds.append(candId)
                         let probe = probeClient.readTHT02Holding(unitId: UInt8(candId), startReg: 0x0000, count: 8, respectBackoff: false)
@@ -2879,6 +2879,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                     "mode": "pusr_tcp",
                     "source": "hardware:pusr_tcp:\(client.host):\(client.port)",
                     "port": "tcp://\(client.host):\(client.port)",
+                    "gateway_connected": true,
                     "adapter_present": true,
                     "baud_bps": dec["baud_bps"] ?? baud,
                     "frame_format": "MBAP/TCP -> 8N1",
@@ -2917,22 +2918,32 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                     }
                     stateLock.unlock()
                 }
+                let gwConnected = (res["gateway_connected"] as? Bool) ?? false
+                let statusLabel: String
+                if errCode == "MODBUS_EXCEPTION" {
+                    statusLabel = "PUSR :\(client.port) CONNECTED · MODBUS EXCEPTION (\(res["exception_name"] ?? "ERR"))"
+                } else if gwConnected {
+                    statusLabel = "PUSR :\(client.port) CONNECTED · NO RS-485 SENSOR REPLY"
+                } else {
+                    statusLabel = "NO MODBUS TCP RESPONSE (\(errCode))"
+                }
                 let dipBits = Self.addressToDipBits(sid)
                 let payload: [String: Any] = [
                     "online": false,
                     "healthy": false,
                     "fresh": false,
                     "simulation": false,
-                    "scope": "no_response",
+                    "scope": gwConnected ? "gateway_connected_no_sensor" : "no_response",
                     "protocol": "modbus_tcp_mbap",
                     "error_code": errCode,
                     "error_detail": res["error_detail"] ?? "",
-                    "andon_light": "RED",
+                    "andon_light": gwConnected ? "AMBER" : "RED",
                     "sensor_abnormal_7fff": false,
                     "mode": "pusr_tcp",
                     "source": "hardware:pusr_tcp:\(client.host):\(client.port)",
                     "port": "tcp://\(client.host):\(client.port)",
-                    "adapter_present": false,
+                    "gateway_connected": gwConnected,
+                    "adapter_present": gwConnected,
                     "baud_bps": baud,
                     "frame_format": "MBAP/TCP -> 8N1",
                     "slave_id": sid,
@@ -2950,7 +2961,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                     "crc_valid": NSNull(),
                     "mbap_valid": res["mbap_valid"] ?? false,
                     "roundtrip_ms": res["roundtrip_ms"] ?? 0.0,
-                    "status_label": errCode == "MODBUS_EXCEPTION" ? "MODBUS EXCEPTION (\(res["exception_name"] ?? "ERR"))" : "NO MODBUS TCP RESPONSE (\(errCode))",
+                    "status_label": statusLabel,
                     "historical_sample": histSnap ?? NSNull(),
                     "poll_seq": pollSeq,
                     "history": modbusHistory,

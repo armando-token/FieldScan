@@ -256,6 +256,7 @@ class VlmClient:
         self.api_key = api_key.strip()
         self.timeout_sec = timeout_sec
         self._transport = transport
+        self._max_images_per_prompt: int | None = None
         self.call_count: int = 0
         self.total_prompt_tokens: int = 0
         self.total_completion_tokens: int = 0
@@ -471,6 +472,8 @@ class VlmClient:
             return msgs
 
         active_images = list(encoded_images)
+        if self._max_images_per_prompt is not None and len(active_images) > self._max_images_per_prompt:
+            active_images = _pack_images_to_limit(active_images, self._max_images_per_prompt)
         payload: dict[str, Any] = {
             "model": self.model,
             "temperature": temperature,
@@ -494,6 +497,7 @@ class VlmClient:
             if img_cap_match:
                 cap = int(img_cap_match.group(1))
                 if cap >= 1 and len(active_images) > cap:
+                    self._max_images_per_prompt = cap
                     logger.info(
                         "VLM enforces max %d images/prompt; tiling %d images into labeled contact sheets",
                         cap,
@@ -942,6 +946,28 @@ def validate_recipe_schema(
     return len(errors) == 0, errors
 
 
+def _normalize_vlm_recipe(raw_recipe: dict[str, Any]) -> dict[str, Any]:
+    """Flatten common harmless VLM nesting variants (e.g. `part.geometry.{kind,...}` -> top-level part fields)."""
+    parts = raw_recipe.get("parts")
+    if isinstance(parts, list):
+        fixed_parts: list[Any] = []
+        for part in parts:
+            if isinstance(part, dict):
+                p = dict(part)
+                geom = p.get("geometry")
+                if not p.get("kind") and isinstance(geom, dict) and geom.get("kind"):
+                    p.pop("geometry", None)
+                    for k, v in geom.items():
+                        p.setdefault(k, v)
+                if not p.get("kind") and isinstance(p.get("children"), list) and p["children"]:
+                    p["kind"] = "composite_part"
+                fixed_parts.append(p)
+            else:
+                fixed_parts.append(part)
+        raw_recipe["parts"] = fixed_parts
+    return raw_recipe
+
+
 def build_recipe_synthesis_prompts(
     *,
     manufacturer: str,
@@ -969,17 +995,18 @@ def build_recipe_synthesis_prompts(
         "3. NEVER invent internal parts not documented in the datasheet. If dimensions or geometry cannot be "
         "determined with engineering fidelity, return {\"unconfirmed\": true, \"reason\": \"...\"}.\n"
         "4. Output ONLY valid JSON (English keys/labels only) conforming to recipe_schema_version=2.\n"
-        "SUPPORTED UNIVERSAL PRIMITIVES:\n"
-        "- lathe_profile: {kind, points_mm: [[r,z],...], segments, material}\n"
-        "- extruded_polygon: {kind, outer_mm: [[x,y],...], holes_mm: [[[x,y],...]], z_start_mm, z_end_mm, bevel_mm, material}\n"
-        "- slotted_cylinder: {kind, outer_diameter_mm, inner_diameter_mm, z_start_mm, z_end_mm, slot_count, slot_rows, core_diameter_mm, material}\n"
-        "- hex_prism: {kind, across_flats_mm, z_start_mm, z_end_mm, chamfer_mm, material}\n"
-        "- rounded_box: {kind, size_mm: [sx,sy,sz], center_mm: [cx,cy,cz], bevel_mm, material}\n"
-        "- tube_path: {kind, points_mm: [[x,y,z],...], diameter_mm, sections, material}\n"
-        "- pattern: {kind, mode: 'linear'|'radial', count, step_mm|radius_mm, item: <primitive>}\n"
-        "- composite_part: {kind, children: [<primitive>, ...]}\n"
-        "All parts must include part_id, node_id, aliases, citation_id (format '<document_id>:p<page>:section1'), "
-        "and page (integer 1..page_count)."
+        "SUPPORTED UNIVERSAL PRIMITIVES (place `kind` and primitive fields DIRECTLY on each item in `parts[]`, NOT nested inside a `geometry` wrapper):\n"
+        "- lathe_profile: {kind: 'lathe_profile', points_mm: [[r,z],...], segments: 36, material}\n"
+        "- extruded_polygon: {kind: 'extruded_polygon', outer_mm: [[x,y],...], circular_holes_mm: [{x,y,diameter_mm}], z_start_mm, z_end_mm, bevel_mm, material}\n"
+        "- slotted_cylinder: {kind: 'slotted_cylinder', outer_diameter_mm, inner_diameter_mm, z_start_mm, z_end_mm, slot_count, slot_rows, core_diameter_mm, material}\n"
+        "- hex_prism: {kind: 'hex_prism', across_flats_mm, z_start_mm, z_end_mm, chamfer_mm, material}\n"
+        "- rounded_box: {kind: 'rounded_box', size_mm: [sx,sy,sz], center_mm: [cx,cy,cz], bevel_mm, material}\n"
+        "- tube_path: {kind: 'tube_path', points_mm: [[x,y,z],...], diameter_mm, sections, material}\n"
+        "- pattern: {kind: 'pattern', mode: 'linear'|'radial', count, step_mm|radius_mm, item: <primitive>}\n"
+        "- composite_part: {kind: 'composite_part', children: [<primitive>, ...]}\n"
+        "Every item in `parts[]` MUST include top-level `part_id`, `node_id` (unique PascalCase), `aliases`, `kind`, `citation_id` (format '<document_id>:p<page>:section1'), and `page` (integer 1..page_count).\n"
+        "Use `material: {name, baseColorFactor: [r,g,b,1.0], metallicFactor, roughnessFactor}` for realistic PBR surfaces.\n"
+        "Keep `control_measurements_m` consistent with your actual part coordinates in meters (1 mm = 0.001 m)."
     )
 
     page_snippets = []
@@ -1117,6 +1144,7 @@ def synthesize_cad_recipe(
                 ref_image_count=len(refs),
             )
 
+        raw_recipe = _normalize_vlm_recipe(raw_recipe)
         raw_recipe.setdefault("product_id", product_id)
         raw_recipe.setdefault("variant_id", variant_id)
         raw_recipe.setdefault("recipe_schema_version", 2)

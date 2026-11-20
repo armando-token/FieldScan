@@ -187,10 +187,10 @@ public enum FieldScanManualNavigator {
 
     public static func isExplicitManualLookupQuery(_ query: String) -> Bool {
         let norm = stripAccentsLower(query)
-        if extractExplicitPageNumber(norm) != nil {
+        if extractAnyPageNumber(norm) != nil {
             return true
         }
-        let manualReqPattern = "\\b(manual|datasheet|page|pag\\.?|section|where\\s+in\\s+the\\s+manual|where\\s+is\\s+the\\s+section|which\\s+page|what\\s+page|what\\s+section|open\\s+the\\s+manual|open\\s+datasheet|in\\s+the\\s+datasheet|in\\s+the\\s+manual)\\b"
+        let manualReqPattern = "\\b(manual|datasheet|bulletin|page|pag\\.?|section|where\\s+in\\s+the\\s+manual|where\\s+is\\s+the\\s+section|which\\s+page|what\\s+page|what\\s+section|open\\s+the\\s+manual|open\\s+datasheet|in\\s+the\\s+datasheet|in\\s+the\\s+manual)\\b"
         if norm.range(of: manualReqPattern, options: .regularExpression) != nil {
             return true
         }
@@ -317,13 +317,237 @@ public enum FieldScanManualNavigator {
     }
 
     private static func extractExplicitPageNumber(_ norm: String) -> Int? {
-        let pattern = "\\b(?:page|pag\\.?|p)\\s*#?\\s*([1-9])\\b"
-        guard let rx = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-              let match = rx.firstMatch(in: norm, range: NSRange(norm.startIndex..., in: norm)),
-              let r = Range(match.range(at: 1), in: norm),
-              let p = Int(norm[r]), (1...9).contains(p) else {
+        guard let p = extractAnyPageNumber(norm), (1...9).contains(p) else {
             return nil
         }
         return p
+    }
+
+    public static func extractAnyPageNumber(_ norm: String) -> Int? {
+        let pattern = "\\b(?:page|pag\\.?|p)\\s*#?\\s*(\\d{1,3})\\b"
+        guard let rx = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = rx.firstMatch(in: norm, range: NSRange(norm.startIndex..., in: norm)),
+              let r = Range(match.range(at: 1), in: norm),
+              let p = Int(norm[r]) else {
+            return nil
+        }
+        return p
+    }
+
+    /// Context-aware multi-document & 12+ page manual lookup (`M4-DOC-01..03`).
+    public static func lookupManualInDescriptor(
+        query: String,
+        descriptor: [String: Any],
+        preferredDocumentId: String? = nil
+    ) -> [String: Any] {
+        let docs = (descriptor["documents"] as? [[String: Any]]) ?? []
+        let sceneOrigin = (descriptor["scene_origin"] as? String) ?? "bundled_parametric"
+        if sceneOrigin == "bundled_parametric" && docs.count <= 1 && ((docs.first?["page_count"] as? Int) ?? 9) == 9 {
+            let norm = stripAccentsLower(query)
+            if let reqP = extractAnyPageNumber(norm), !(1...9).contains(reqP) {
+                return [
+                    "matched": false,
+                    "page_out_of_range": true,
+                    "error_code": "PAGE_OUT_OF_RANGE",
+                    "requested_page": reqP,
+                    "max_page": 9,
+                    "open_manual": false,
+                    "open_manual_lightbox": false,
+                    "manual_page": NSNull(),
+                    "cited_pages": [],
+                    "citations": [],
+                    "answer": "Page \(reqP) is outside the verified 9-page range (Pages 1..9) of TZ THT-02 Manual V1.1.",
+                ]
+            }
+            let res = lookupManual(for: query, language: "en")
+            let cits: [[String: Any]] = res.citedPages.map { p in
+                [
+                    "document_id": "tht02_manual_v1_1",
+                    "page": p,
+                    "printed_page": "\(p)",
+                    "label": pageTitles[p] ?? "Page \(p)",
+                    "image_url": "/assets/manual_pages/page_\(p).png",
+                    "pdf_fallback_url": "/assets/THT02_Users_Manual_v1.1.pdf#page=\(p)",
+                ]
+            }
+            return [
+                "matched": res.matched,
+                "page_out_of_range": false,
+                "document_id": "tht02_manual_v1_1",
+                "document_title": "TZ THT-02 User's Manual V1.1",
+                "document_revision": "V1.1",
+                "open_manual": res.openManual,
+                "open_manual_lightbox": res.openLightbox,
+                "manual_page": res.primaryPage ?? NSNull(),
+                "printed_page": (res.primaryPage != nil) ? "\(res.primaryPage!)" : NSNull(),
+                "cited_pages": res.citedPages,
+                "citations": cits,
+                "manual_section": res.sectionDict ?? NSNull(),
+                "answer": res.localizedAnswer,
+            ]
+        }
+
+        guard !docs.isEmpty else {
+            return [
+                "matched": false,
+                "page_out_of_range": false,
+                "error_code": "MANUAL_UNAVAILABLE",
+                "open_manual": false,
+                "open_manual_lightbox": false,
+                "manual_page": NSNull(),
+                "cited_pages": [],
+                "citations": [],
+                "answer": "No verified manual documents are available in the active package.",
+            ]
+        }
+
+        let norm = stripAccentsLower(query)
+        let targetDoc: [String: Any] = {
+            if let pref = preferredDocumentId, let d = docs.first(where: { ($0["document_id"] as? String) == pref }) {
+                return d
+            }
+            for d in docs {
+                let did = ((d["document_id"] as? String) ?? "").lowercased()
+                let dtitle = ((d["title"] as? String) ?? "").lowercased()
+                if (!did.isEmpty && norm.contains(did.replacingOccurrences(of: "_", with: " ")))
+                    || (norm.contains("bulletin") && (did.contains("bulletin") || dtitle.contains("bulletin")))
+                    || (norm.contains("m12") && dtitle.contains("m12") && norm.contains("pinout")) {
+                    return d
+                }
+            }
+            return docs[0]
+        }()
+
+        let docId = (targetDoc["document_id"] as? String) ?? "doc_1"
+        let docTitle = FieldScanCatalogContract.sanitizeReferenceText((targetDoc["title"] as? String) ?? docId)
+        let pages = (targetDoc["pages"] as? [[String: Any]]) ?? []
+        let maxPage = max(pages.count, (targetDoc["page_count"] as? Int) ?? 1)
+
+        if let reqP = extractAnyPageNumber(norm) {
+            guard reqP >= 1 && reqP <= maxPage,
+                  let pg = pages.first(where: { ($0["page"] as? Int) == reqP }) else {
+                return [
+                    "matched": false,
+                    "page_out_of_range": true,
+                    "error_code": "PAGE_OUT_OF_RANGE",
+                    "document_id": docId,
+                    "requested_page": reqP,
+                    "max_page": maxPage,
+                    "open_manual": false,
+                    "open_manual_lightbox": false,
+                    "manual_page": NSNull(),
+                    "cited_pages": [],
+                    "citations": [],
+                    "answer": "Page \(reqP) is out of range for \(docTitle) (valid physical pages: 1..\(maxPage)).",
+                ]
+            }
+            return buildDescriptorPageResponse(doc: targetDoc, pageObj: pg, openLightbox: true)
+        }
+
+        // Score keyword & excerpt hits across ALL documents in the package (`M4-DOC-01`)
+        var bestDoc: [String: Any]?
+        var bestPage: [String: Any]?
+        var bestScore = 0
+        let tokens = norm.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count >= 3 }
+        for d in docs {
+            for pg in ((d["pages"] as? [[String: Any]]) ?? []) {
+                let kws = ((pg["keywords"] as? [String]) ?? []).map { $0.lowercased() }
+                let titleLow = ((pg["title"] as? String) ?? "").lowercased()
+                let exLow = ((pg["verified_excerpt"] as? String) ?? "").lowercased()
+                var sc = 0
+                for kw in kws where norm.contains(kw) { sc += 12 }
+                for tok in tokens {
+                    if titleLow.contains(tok) { sc += 5 }
+                    if exLow.contains(tok) { sc += 3 }
+                }
+                if sc > bestScore {
+                    bestScore = sc
+                    bestDoc = d
+                    bestPage = pg
+                }
+            }
+        }
+
+        if let bd = bestDoc, let bp = bestPage {
+            return buildDescriptorPageResponse(doc: bd, pageObj: bp, openLightbox: isExplicitManualLookupQuery(query))
+        }
+
+        if isExplicitManualLookupQuery(query), let firstPg = pages.first {
+            return buildDescriptorPageResponse(doc: targetDoc, pageObj: firstPg, openLightbox: true)
+        }
+
+        return [
+            "matched": false,
+            "page_out_of_range": false,
+            "document_id": docId,
+            "open_manual": false,
+            "open_manual_lightbox": false,
+            "manual_page": NSNull(),
+            "cited_pages": [],
+            "citations": [],
+            "answer": "",
+        ]
+    }
+
+    private static func buildDescriptorPageResponse(
+        doc: [String: Any],
+        pageObj: [String: Any],
+        openLightbox: Bool
+    ) -> [String: Any] {
+        let docId = (doc["document_id"] as? String) ?? "doc_1"
+        let docTitle = FieldScanCatalogContract.sanitizeReferenceText((doc["title"] as? String) ?? docId)
+        let docRev = FieldScanCatalogContract.sanitizeReferenceText((doc["revision"] as? String) ?? "rev-1")
+        let pnum = (pageObj["page"] as? Int) ?? 1
+        let printed = FieldScanCatalogContract.sanitizeReferenceText("\(pageObj["printed_page"] ?? pnum)")
+        let secId = FieldScanCatalogContract.sanitizeReferenceText((pageObj["section_id"] as? String) ?? "\(pnum).1")
+        let pgTitle = FieldScanCatalogContract.sanitizeReferenceText((pageObj["title"] as? String) ?? "Page \(pnum)")
+        let excerpt = FieldScanCatalogContract.sanitizeReferenceText((pageObj["verified_excerpt"] as? String) ?? pgTitle)
+        let imgURL = pageObj["image_url"] ?? NSNull()
+        let pdfFallback = pageObj["pdf_fallback_url"] ?? (doc["pdf_url"] ?? NSNull())
+        let citationId = "\(docId):p\(pnum):\(secId)"
+        let heading = "\(docTitle) (\(docRev)) · Page \(pnum) (Printed \(printed)) · Section \(secId) — \(pgTitle)"
+        let answer = "In \(docTitle) (\(docRev)), Physical Page \(pnum) (Printed \(printed), Section \(secId) · \(pgTitle)): \(excerpt)"
+
+        let cit: [String: Any] = [
+            "citation_id": citationId,
+            "document_id": docId,
+            "document_title": docTitle,
+            "revision": docRev,
+            "page": pnum,
+            "printed_page": printed,
+            "section_id": secId,
+            "label": "\(docTitle) · P\(pnum) (\(printed))",
+            "image_url": imgURL,
+            "pdf_fallback_url": pdfFallback,
+        ]
+        let secDict: [String: Any] = [
+            "document_id": docId,
+            "page": pnum,
+            "printed_page": printed,
+            "section_id": secId,
+            "heading": heading,
+            "verified_excerpt": excerpt,
+            "citation_id": citationId,
+            "image_url": imgURL,
+            "pdf_fallback_url": pdfFallback,
+        ]
+        return [
+            "matched": true,
+            "page_out_of_range": false,
+            "document_id": docId,
+            "document_title": docTitle,
+            "document_revision": docRev,
+            "open_manual": true,
+            "open_manual_lightbox": openLightbox,
+            "manual_page": pnum,
+            "printed_page": printed,
+            "citation_id": citationId,
+            "cited_pages": [pnum],
+            "citations": [cit],
+            "manual_section": secDict,
+            "image_url": imgURL,
+            "pdf_fallback_url": pdfFallback,
+            "answer": answer,
+        ]
     }
 }

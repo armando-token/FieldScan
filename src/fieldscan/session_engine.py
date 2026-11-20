@@ -37,6 +37,7 @@ import cv2
 import numpy as np
 import pymupdf
 
+from fieldscan.catalog_store import CatalogDomainError, FieldScanPackageStore
 from fieldscan.profiles_and_manual import (
     PROJECT_ROOT,
     resolve_device_profile,
@@ -341,6 +342,7 @@ def apply_deterministic_grounding_filter(
     profile: dict[str, Any],
     verified_telemetry: dict[str, Any] | None = None,
     project_root: Path = PROJECT_ROOT,
+    max_page_count: int | None = None,
 ) -> dict[str, Any]:
     """Reject or sanitize hallucinated manual pages, fake registers, or SCADA/calibration overclaims (`IA-04`)."""
     raw = (candidate_text or "").strip()
@@ -353,12 +355,17 @@ def apply_deterministic_grounding_filter(
             reasons.append(f"overclaim_blocked:{pat.pattern}")
             sanitized = pat.sub("bench sensor communication observed", sanitized)
 
-    # 2. Check cited page numbers against verified manual (`VIS-10`, `IA-04`)
+    # 2. Check cited page numbers against verified manual (`VIS-10`, `IA-04`, `M4-DOC-01`)
     mentioned_pages = [int(m) for m in re.findall(r"\bpage\s+(\d{1,3})\b", sanitized, flags=re.IGNORECASE)]
     if mentioned_pages:
-        cit_check = verify_and_resolve_citations(profile, mentioned_pages, project_root=project_root)
-        if not cit_check["verified"]:
-            reasons.append(f"invalid_page_citation:{cit_check['missing_pages']}")
+        if max_page_count is not None and max_page_count >= 1:
+            missing_p = [p for p in mentioned_pages if p < 1 or p > max_page_count]
+            if missing_p:
+                reasons.append(f"invalid_page_citation:{missing_p}")
+        else:
+            cit_check = verify_and_resolve_citations(profile, mentioned_pages, project_root=project_root)
+            if not cit_check["verified"]:
+                reasons.append(f"invalid_page_citation:{cit_check['missing_pages']}")
 
     # 3. Check register hex addresses (`0x0000..0x0007` only for TZ THT-02)
     if profile.get("profile_id") == "tzone_tht02":
@@ -407,6 +414,7 @@ class FieldScanSessionEngine:
         exports_dir: Path | None = None,
         project_root: Path = PROJECT_ROOT,
         *,
+        catalog_store: FieldScanPackageStore | None = None,
         clock_utc_fn: Any = utc_now_iso,
         monotonic_fn: Any = time.monotonic,
         min_free_disk_bytes: int = 2 * 1024 * 1024,
@@ -415,6 +423,10 @@ class FieldScanSessionEngine:
         self.exports_dir = Path(exports_dir or (self.project_root / "exports"))
         self.evidence_dir = self.exports_dir / "session_evidence"
         self.db_path = Path(db_path or (self.project_root / "data" / "fieldscan_sessions.sqlite3"))
+        self.catalog_store = catalog_store or FieldScanPackageStore(
+            catalog_root=self.db_path.parent / "FieldScanCatalog",
+            bundle_root=self.project_root,
+        )
 
         self.exports_dir.mkdir(parents=True, exist_ok=True)
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -620,8 +632,11 @@ class FieldScanSessionEngine:
             language = "en"
         build_id = str(payload.get("build_id") or "fieldscan-2.0.0-b200")
         is_sim = transport_mode.startswith("sim") or bool(payload.get("simulation", False))
+        req_ctx = payload.get("catalog_context") if isinstance(payload.get("catalog_context"), dict) else None
+        req_manifest_sha = str((req_ctx or {}).get("manifest_sha256") or payload.get("manifest_sha256") or "").strip()
+        req_origin = str((req_ctx or {}).get("content_origin") or "").strip()
 
-        canonical_req = {
+        canonical_req: dict[str, Any] = {
             "profile_query": profile_query,
             "transport_mode": transport_mode,
             "asset_tag": asset_tag,
@@ -629,6 +644,22 @@ class FieldScanSessionEngine:
             "simulation": is_sim,
             "language": language,
         }
+        if req_manifest_sha:
+            canonical_req["manifest_sha256"] = req_manifest_sha
+
+        is_catalog_requested = (req_origin == "catalog") or (
+            bool(req_manifest_sha) and req_manifest_sha != "bundle" and not req_manifest_sha.startswith("bundle-")
+        )
+        installed_catalog_pkg: dict[str, Any] | None = None
+        if is_catalog_requested:
+            try:
+                installed_catalog_pkg = self.catalog_store.get_installed_package(req_manifest_sha)
+            except CatalogDomainError as exc:
+                raise SessionDomainError(
+                    "PACKAGE_NOT_INSTALLED",
+                    f"Catalog package '{req_manifest_sha}' is not installed locally and cannot be pinned to a session.",
+                    status_code=404,
+                ) from exc
 
         with self._lock, self._connect_db() as conn:
             replay = self._check_idempotency(conn, "create_session", idem_key, canonical_req)
@@ -648,7 +679,75 @@ class FieldScanSessionEngine:
             now_mono = float(self._monotonic())
             session_id = f"ses-{uuid.uuid4().hex[:12]}"
             initial_step = str(prof.get("procedure", {}).get("initial_step", "identify"))
-            refs = prof.get("references") or {}
+            refs = dict(prof.get("references") or {})
+            max_manual_pages = 9
+
+            if installed_catalog_pkg is not None:
+                m_obj = installed_catalog_pkg["manifest"]
+                c_prod = installed_catalog_pkg["product_id"]
+                c_var = installed_catalog_pkg["variant_id"]
+                c_pub_seq = int(installed_catalog_pkg["publication_seq"])
+                homologated = bool(m_obj.get("bench_modbus_homologated", False))
+                local_prof_id = str(m_obj.get("bench_profile_id") or "tzone_tht02") if homologated else None
+                title = str(m_obj.get("title") or f"{c_prod} ({c_var})")
+
+                if local_prof_id:
+                    prof = resolve_device_profile(local_prof_id, profiles_dir=self.project_root / "knowledge" / "profiles")
+                    prof["identity_pending"] = False
+                    prof["auto_decode_allowed"] = True
+                else:
+                    default_tht = resolve_device_profile("tzone_tht02", profiles_dir=self.project_root / "knowledge" / "profiles")
+                    prof = {
+                        "profile_id": f"{c_prod}_{c_var}",
+                        "sensor_id": str(m_obj.get("sensor_id") or c_prod.upper()),
+                        "model": str(m_obj.get("model") or title),
+                        "tested_profile_revision": f"pub-seq-{c_pub_seq}",
+                        "validation_status": "supported_bench_readonly" if homologated else "catalog_reference_only",
+                        "identity_pending": False,
+                        "auto_decode_allowed": homologated,
+                        "bench_modbus_homologated": homologated,
+                        "_profile_sha256": req_manifest_sha,
+                        "procedure": default_tht.get("procedure", {"initial_step": "identify", "steps": []}),
+                        "references": {},
+                    }
+                prof["tested_profile_revision"] = f"pub-seq-{c_pub_seq}"
+                prof["_profile_sha256"] = req_manifest_sha
+                pdf_art = next((a for a in installed_catalog_pkg["artifacts"] if a["role"] == "manual_pdf"), None)
+                refs = dict(prof.get("references") or {})
+                if pdf_art:
+                    refs["manual_sha256"] = pdf_art["sha256"]
+
+                catalog_ctx = {
+                    "product_id": c_prod,
+                    "variant_id": c_var,
+                    "title": title,
+                    "publication_seq": c_pub_seq,
+                    "manifest_sha256": req_manifest_sha,
+                    "local_profile_id": local_prof_id,
+                    "content_origin": "catalog",
+                    "bench_modbus_homologated": homologated,
+                    "capabilities": installed_catalog_pkg["capabilities"],
+                }
+                try:
+                    desc = self.catalog_store.build_scene_and_manual_descriptor(catalog_ctx)
+                    max_manual_pages = max(1, max((int(d.get("page_count") or 1) for d in desc.get("documents", [])), default=9))
+                except Exception:
+                    max_manual_pages = 9
+            elif prof.get("profile_id") == "tzone_tht02":
+                catalog_ctx = self.catalog_store.build_bundle_default_context()
+            else:
+                id_pend = bool(prof.get("identity_pending"))
+                catalog_ctx = {
+                    "product_id": str(prof.get("profile_id") or "unknown"),
+                    "variant_id": "pending_identity" if id_pend else "bundled_default",
+                    "title": str(prof.get("model") or prof.get("profile_id") or "Unknown"),
+                    "publication_seq": 0,
+                    "manifest_sha256": str(prof.get("_profile_sha256") or ""),
+                    "local_profile_id": None if id_pend else str(prof.get("profile_id")),
+                    "content_origin": "bundle",
+                    "bench_modbus_homologated": not id_pend,
+                    "capabilities": {"documentation": False, "interactive_twin": False, "procedures": True},
+                }
 
             state_doc: dict[str, Any] = {
                 "as_found": None,
@@ -663,6 +762,8 @@ class FieldScanSessionEngine:
                 "missing_evidence": [],
                 "connection_generation": self._connection_generation,
                 "profile_snapshot": prof,
+                "catalog_context": catalog_ctx,
+                "max_manual_page_count": max_manual_pages,
             }
 
             conn.execute(
@@ -1427,8 +1528,56 @@ class FieldScanSessionEngine:
 
             elif action == "show_manual":
                 page_num = int(payload.get("page") or 1)
-                cit_res = verify_and_resolve_citations(prof, [page_num], project_root=self.project_root)
+                cat_ctx = state_doc.get("catalog_context") or {}
+                if cat_ctx.get("content_origin") == "catalog" and cat_ctx.get("manifest_sha256"):
+                    max_p = int(state_doc.get("max_manual_page_count") or 9)
+                    m_sha = str(cat_ctx["manifest_sha256"])
+                    if page_num < 1 or page_num > max_p:
+                        cit_res = {
+                            "verified": False,
+                            "error_code": "PAGE_OUT_OF_RANGE",
+                            "instruction_blocked": True,
+                            "citations": [],
+                            "missing_pages": [page_num],
+                        }
+                    else:
+                        try:
+                            _ = self.catalog_store.get_installed_package(m_sha)
+                            cit_res = {
+                                "verified": True,
+                                "instruction_blocked": False,
+                                "citations": [{"page": page_num, "manifest_sha256": m_sha}],
+                                "missing_pages": [],
+                            }
+                        except CatalogDomainError:
+                            cit_res = {
+                                "verified": False,
+                                "error_code": "HISTORICAL_SOURCE_UNAVAILABLE",
+                                "instruction_blocked": True,
+                                "citations": [],
+                                "missing_pages": [page_num],
+                            }
+                else:
+                    cit_res = verify_and_resolve_citations(prof, [page_num], project_root=self.project_root)
                 response_note["citations_verification"] = cit_res
+
+            elif action == "execute_procedure_step":
+                inst_id = str(payload.get("instruction_id") or "").strip()
+                if not inst_id:
+                    raise SessionDomainError("MISSING_INSTRUCTION_ID", "execute_procedure_step requires instruction_id.", status_code=400)
+                cat_ctx = state_doc.get("catalog_context") or {}
+                c_prod = str(cat_ctx.get("product_id") or row["profile_id"] or "tzone_tht02")
+                c_var = str(cat_ctx.get("variant_id") or "bundled_v1_1")
+                revocations = self.catalog_store.get_revoked_instructions(c_prod, c_var)
+                rev_hit = next((r for r in revocations if str(r.get("instruction_id")) == inst_id), None)
+                if rev_hit is not None:
+                    raise SessionDomainError(
+                        "INSTRUCTION_REVOKED",
+                        f"Instruction '{inst_id}' is revoked ({rev_hit.get('reason', 'safety/technical revocation')}) and cannot be executed.",
+                        status_code=409,
+                        details={"instruction_id": inst_id, "revocation": rev_hit},
+                    )
+                response_note["executed_instruction_id"] = inst_id
 
             elif action == "read_current":
                 snap_tmp = self._load_session_snapshot_unlocked(conn, session_id)
@@ -1714,6 +1863,15 @@ class FieldScanSessionEngine:
                     "serial_number": serial_out,
                     "asset_confirmed": snap["asset_confirmed"],
                 },
+                "catalog_context": snap["catalog_context"],
+                "historical_source_status": snap["historical_source_status"],
+                "revoked_instructions": snap["revoked_instructions"],
+                "evidence_states_legend": {
+                    "documented": "Verified product manual or cryptographically signed catalog package",
+                    "simulated": "Visual 3D twin or DIP simulation only (zero Modbus/hardware mutation)",
+                    "observed": "Operator or physical camera observation recorded in session",
+                    "measured": "Verified read-only Modbus response from physical sensor",
+                },
                 "scope_limitations": {
                     "verified_scope": "simulation" if is_sim else ("partial_observation" if is_partial else "sensor_communication"),
                     "plc_verified": False,
@@ -1852,12 +2010,16 @@ class FieldScanSessionEngine:
             lines.append("")
 
         dev = record["device"]
+        cat_ctx = record.get("catalog_context") or {}
+        hist_st = record.get("historical_source_status") or {}
         lines.extend(
             [
                 "1. ASSET & PROFILE IDENTITY",
                 f"   Profile ID & Revision : {dev['profile_id']} ({dev['profile_revision']})",
-                f"   Profile SHA-256       : {(dev['profile_sha256'] or '')[:24]}...",
+                f"   Content Origin        : {cat_ctx.get('content_origin', 'bundle')} | {cat_ctx.get('product_id', '')}/{cat_ctx.get('variant_id', '')} (seq {cat_ctx.get('publication_seq', 1)})",
+                f"   Manifest / Profile SHA: {(cat_ctx.get('manifest_sha256') or dev['profile_sha256'] or '')[:24]}...",
                 f"   Manual SHA-256        : {(dev['manual_sha256'] or 'N/A')[:24]}",
+                f"   Source Availability   : {hist_st.get('state', 'available')} ({hist_st.get('message') or 'verified'})",
                 f"   Asset Tag / Serial    : {dev['asset_tag'] or 'Unassigned'} / {dev['serial_number'] or 'Not recorded'}",
                 f"   Identity Confirmed    : {dev['asset_confirmed']} (Identity Pending = {dev['identity_pending']})",
                 "",
@@ -1986,6 +2148,38 @@ class FieldScanSessionEngine:
             )
 
         state_doc = json.loads(row["state_json"])
+        cat_ctx = state_doc.get("catalog_context") or {
+            "product_id": row["profile_id"],
+            "variant_id": "bundled_v1_1" if row["profile_id"] == "tzone_tht02" else "default",
+            "publication_seq": 1 if row["profile_id"] == "tzone_tht02" else 0,
+            "manifest_sha256": row["profile_sha256"],
+            "local_profile_id": None if bool(row["identity_pending"]) else row["profile_id"],
+            "content_origin": "bundle",
+            "bench_modbus_homologated": not bool(row["identity_pending"]),
+        }
+        c_origin = str(cat_ctx.get("content_origin") or "bundle")
+        c_prod = str(cat_ctx.get("product_id") or row["profile_id"])
+        c_var = str(cat_ctx.get("variant_id") or "bundled_v1_1")
+        if c_origin == "catalog" and cat_ctx.get("manifest_sha256"):
+            try:
+                _ = self.catalog_store.get_installed_package(str(cat_ctx["manifest_sha256"]))
+                hist_status = {"available": True, "state": "available", "message": None}
+            except CatalogDomainError:
+                hist_status = {
+                    "available": False,
+                    "state": "historical_source_unavailable",
+                    "message": "Historical source unavailable",
+                }
+        else:
+            hist_status = {"available": True, "state": "bundled", "message": None}
+
+        revocations = self.catalog_store.get_revoked_instructions(c_prod, c_var)
+        rev_banner = (
+            f"Safety/technical notice: {len(revocations)} instruction(s) in {c_prod}/{c_var} have been revoked by a newer catalog publication."
+            if revocations
+            else None
+        )
+
         snap = {
             "contract_version": CONTRACT_VERSION,
             "session_id": row["session_id"],
@@ -2006,6 +2200,11 @@ class FieldScanSessionEngine:
             "simulation": bool(row["simulation"]),
             "build_id": row["build_id"],
             "language": row["language"],
+            "catalog_context": cat_ctx,
+            "historical_source_status": hist_status,
+            "revoked_instructions": revocations,
+            "has_revoked_instructions": len(revocations) > 0,
+            "revocation_banner": rev_banner,
             "state": state_doc,
             "events": events,
         }

@@ -158,12 +158,66 @@ public final class FieldScanConversationEngine {
         vlmBaseURL: String?,
         vlmRunning: Bool,
         vlmModelLabel: String,
+        catalogDescriptor: [String: Any]? = nil,
+        sceneGeneration: Int = 1,
+        turnId: String? = nil,
         describeDipFn: (Int) -> [String: Any]
     ) -> [String: Any] {
         let classified = Self.classifyIntent(query: query, zoneHint: zoneHint, defaultLanguage: "en")
         let lang = "en"
         let history = snapshotHistory(maxMessages: 8)
         let norm = FieldScanManualNavigator.stripAccentsLower(query)
+
+        let preparedVisual: [String: Any] = (classified.intent == .sensorDiagnostics || classified.intent == .manualLookup)
+            ? FieldScanTwinController.prepareVisualAction(
+                query: query,
+                descriptor: catalogDescriptor,
+                zoneHint: zoneHint,
+                currentDipAddress: dipAddr,
+                sceneGeneration: sceneGeneration,
+                turnId: turnId
+            )
+            : [
+                "ambiguous": false,
+                "clarification_required": false,
+                "clarification_prompt": NSNull(),
+                "candidate_part_ids": [],
+                "twin_action": NSNull(),
+                "twin_action_v1": NSNull(),
+                "turn_id": turnId ?? ("turn-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10)).lowercased()),
+                "scene_generation": sceneGeneration,
+                "manifest_sha256": (catalogDescriptor?["context"] as? [String: Any])?["manifest_sha256"] ?? "bundle-tzone-tht02-v2.1",
+            ]
+
+        // Immediate English clarification without random 3D highlight on ambiguous reference (`M4-VOICE-03`)
+        if (preparedVisual["ambiguous"] as? Bool) == true,
+           let prompt = preparedVisual["clarification_prompt"] as? String {
+            recordTurn(userQuery: query, assistantReply: prompt, language: lang)
+            return [
+                "reply_text": prompt,
+                "model_used": "FieldScan Deterministic Ambiguity Guard · iPad M4",
+                "intent": classified.intent.rawValue,
+                "query_mode": classified.intent.rawValue,
+                "language": "en",
+                "clarification_required": true,
+                "candidate_part_ids": preparedVisual["candidate_part_ids"] ?? [],
+                "probable_causes": [],
+                "recommended_actions": [],
+                "target_zone": NSNull(),
+                "explode_pcb": false,
+                "dip_bits": NSNull(),
+                "twin_action": NSNull(),
+                "twin_action_v1": NSNull(),
+                "turn_id": preparedVisual["turn_id"] ?? "",
+                "scene_generation": preparedVisual["scene_generation"] ?? sceneGeneration,
+                "manifest_sha256": preparedVisual["manifest_sha256"] ?? "",
+                "open_manual": false,
+                "open_manual_lightbox": false,
+                "manual_page": NSNull(),
+                "manual_section": NSNull(),
+                "citations": [],
+            ]
+        }
 
         var replyText = ""
         var modelUsed = vlmModelLabel
@@ -176,14 +230,11 @@ public final class FieldScanConversationEngine {
         var manualSection: [String: Any]? = nil
         var targetZone: String? = nil
         var explodePcb = false
-        var twinAction: [String: Any]? = nil
-        if classified.intent == .sensorDiagnostics || classified.intent == .manualLookup {
-            twinAction = FieldScanTwinController.resolveTwinAction(
-                query: query,
-                zoneHint: zoneHint,
-                currentDipAddress: dipAddr
-            )
-        }
+        var dynamicCitations: [[String: Any]]? = nil
+        var documentIdOut: String? = nil
+        var printedPageOut: String? = nil
+        let twinAction = preparedVisual["twin_action"] as? [String: Any]
+        let twinActionV1 = preparedVisual["twin_action_v1"] as? [String: Any]
 
         switch classified.intent {
         case .generalChat:
@@ -241,35 +292,56 @@ public final class FieldScanConversationEngine {
             }
 
         case .manualLookup:
-            let lookup = FieldScanManualNavigator.lookupManual(for: query, language: "en")
-            openManual = lookup.openManual
-            openManualLightbox = lookup.openLightbox
-            primaryPage = lookup.primaryPage
-            citedPages = lookup.citedPages
-            manualSection = lookup.sectionDict
-
-            let sysPrompt = """
-            You are FieldScan AI, an expert on the TZ THT-02 User's Manual V1.1.
-            Respond strictly in clear, natural English in 2 to 4 concise sentences.
-            Explicitly state the exact Page number and Section number where the topic is located, confirm that you are opening the datasheet viewer to that page right now, and summarize the verified manual facts accurately.
-            Never invent unverified registers or calibration claims beyond the verified manual excerpt.
-            """
-            let userPrompt = """
-            Verified Datasheet Lookup:
-            \(lookup.localizedAnswer)
-
-            User question: \(query)
-            Answer in English citing the exact Page and Section:
-            """
-            if vlmRunning, let baseURL = vlmBaseURL,
-               let out = queryOpenAICompatibleVLM(baseURL: baseURL, systemPrompt: sysPrompt, history: Array(history.suffix(6)), userText: userPrompt, imageJpeg: nil, maxTokens: 165) {
-                replyText = out
-            } else if let appleOut = queryAppleFoundationModel(systemPrompt: sysPrompt, history: Array(history.suffix(6)), userText: userPrompt) {
-                replyText = appleOut
-                modelUsed = "Apple Intelligence FoundationModels · iPad M4"
-            } else {
-                replyText = lookup.localizedAnswer
+            let descRes = (catalogDescriptor != nil)
+                ? FieldScanManualNavigator.lookupManualInDescriptor(query: query, descriptor: catalogDescriptor!)
+                : nil
+            if let dr = descRes, (dr["page_out_of_range"] as? Bool) == true {
+                replyText = (dr["answer"] as? String) ?? "Requested manual page is out of range."
                 modelUsed = "FieldScan Verified Manual Navigator · iPad M4"
+                openManual = false
+                openManualLightbox = false
+            } else if let dr = descRes, (catalogDescriptor?["scene_origin"] as? String) != "bundled_parametric" {
+                openManual = (dr["open_manual"] as? Bool) ?? false
+                openManualLightbox = (dr["open_manual_lightbox"] as? Bool) ?? false
+                primaryPage = dr["manual_page"] as? Int
+                citedPages = (dr["cited_pages"] as? [Int]) ?? []
+                manualSection = dr["manual_section"] as? [String: Any]
+                dynamicCitations = dr["citations"] as? [[String: Any]]
+                documentIdOut = dr["document_id"] as? String
+                printedPageOut = dr["printed_page"] as? String
+                replyText = (dr["answer"] as? String) ?? "Opened verified catalog manual."
+                modelUsed = "FieldScan Verified Manual Navigator · iPad M4"
+            } else {
+                let lookup = FieldScanManualNavigator.lookupManual(for: query, language: "en")
+                openManual = lookup.openManual
+                openManualLightbox = lookup.openLightbox
+                primaryPage = lookup.primaryPage
+                citedPages = lookup.citedPages
+                manualSection = lookup.sectionDict
+
+                let sysPrompt = """
+                You are FieldScan AI, an expert on the TZ THT-02 User's Manual V1.1.
+                Respond strictly in clear, natural English in 2 to 4 concise sentences.
+                Explicitly state the exact Page number and Section number where the topic is located, confirm that you are opening the datasheet viewer to that page right now, and summarize the verified manual facts accurately.
+                Never invent unverified registers or calibration claims beyond the verified manual excerpt.
+                """
+                let userPrompt = """
+                Verified Datasheet Lookup:
+                \(lookup.localizedAnswer)
+
+                User question: \(query)
+                Answer in English citing the exact Page and Section:
+                """
+                if vlmRunning, let baseURL = vlmBaseURL,
+                   let out = queryOpenAICompatibleVLM(baseURL: baseURL, systemPrompt: sysPrompt, history: Array(history.suffix(6)), userText: userPrompt, imageJpeg: nil, maxTokens: 165) {
+                    replyText = out
+                } else if let appleOut = queryAppleFoundationModel(systemPrompt: sysPrompt, history: Array(history.suffix(6)), userText: userPrompt) {
+                    replyText = appleOut
+                    modelUsed = "Apple Intelligence FoundationModels · iPad M4"
+                } else {
+                    replyText = lookup.localizedAnswer
+                    modelUsed = "FieldScan Verified Manual Navigator · iPad M4"
+                }
             }
 
         case .sensorDiagnostics:
@@ -350,7 +422,8 @@ public final class FieldScanConversationEngine {
 
         recordTurn(userQuery: query, assistantReply: replyText, language: lang)
 
-        let citations: [[String: Any]] = citedPages.filter { (1...9).contains($0) }.map { p in
+        let maxPages = ((catalogDescriptor?["documents"] as? [[String: Any]])?.compactMap { $0["page_count"] as? Int }.max()) ?? 9
+        let citations: [[String: Any]] = dynamicCitations ?? citedPages.filter { (1...max(9, maxPages)).contains($0) }.map { p in
             ["page": p, "label": FieldScanManualNavigator.pageTitles[p] ?? "Page \(p) · Manual V1.1"]
         }
         let dipBitsOut = twinAction?["dip_bits"] as? [Int]
@@ -361,12 +434,19 @@ public final class FieldScanConversationEngine {
             "intent": classified.intent.rawValue,
             "query_mode": classified.intent.rawValue,
             "language": "en",
+            "clarification_required": false,
             "probable_causes": probableCauses,
             "recommended_actions": recommendedActions,
             "target_zone": targetZone as Any,
             "explode_pcb": explodePcb,
             "dip_bits": dipBitsOut as Any,
             "twin_action": twinAction as Any,
+            "twin_action_v1": twinActionV1 as Any,
+            "turn_id": preparedVisual["turn_id"] ?? "",
+            "scene_generation": preparedVisual["scene_generation"] ?? sceneGeneration,
+            "manifest_sha256": preparedVisual["manifest_sha256"] ?? "",
+            "document_id": documentIdOut as Any,
+            "printed_page": printedPageOut as Any,
             "open_manual": openManual,
             "open_manual_lightbox": openManualLightbox,
             "manual_page": primaryPage as Any,

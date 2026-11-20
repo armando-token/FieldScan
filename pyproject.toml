@@ -33,3 +33,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fieldscan"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["fieldscan_source_delivery", "vendor", "ios", ".venv", ".git"]

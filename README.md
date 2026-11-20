@@ -1,145 +1,157 @@
-# Industrial Datasheet + FieldScan
+# FieldScan CAD v2.1 — Offline Interactive 3D Digital Twin, Native iPad Air M4 App & Modbus SCADA (`TZ THT-02`)
 
-Field diagnosis and spare-part verification for a boat engine room, with
-realistic Three.js digital twins (normal, X-ray and exploded views) and a
-real-time assistant you can talk to.
+A **100% On-Device / Offline (Airplane Mode)** industrial field engineering, interactive **3D Digital Twin**, live optical vision, and **Modbus-RTU / Modbus-TCP (MBAP)** diagnostics platform engineered for:
+- **Apple iPad Air 11-inch (M4, 12 GB Unified Memory)** — Native standalone iOS/iPadOS application (`ios/FieldScanM4/`, Bundle ID `com.fieldscan.tht02.ipadm4`) with in-process Metal `llama-server` (`Qwen3-VL-4B-Instruct`), `AVFoundation` 30 FPS camera + `1.96 ms` integral-image optical detector, `.voiceChat` hardware AEC Hands-Free Barge-In, `NWConnection` Modbus TCP (`:502`), and `WKWebView` 60 FPS `Three.js` CAD studio.
+- **Mac Mini (`Apple Silicon Metal`) / Qualcomm Dragonwing IQ-9075 (`IQ9`) / Linux `x86_64`** — FastAPI + Uvicorn + OpenCV + `pyserial` (`FT2232HL` Dual-Channel Isolated RS-485) + local `llama.cpp` (`Qwen3-VL-4B-Instruct` / `LFM3-VL-2B` + `LFM3-Audio-2B`) + `Piper` Neural English TTS.
 
-Two cases run on the same session core:
+---
 
-1. **TZ THT-02 Modbus RTU diagnosis.** The master polls address 1, but the
-   sensor DIP is set to `0000 0010` (address 2). The sensor stays silent and
-   the master times out. The fix sets the DIP to `0000 0001`, and the reading
-   comes back as 23.4 °C / 57.8 %RH. Every frame is CRC-checked and every
-   explanation cites the manual sections.
-2. **4–20 mA spare verification.** The FMX11 replaces a WIKA LS-10 on loop
-   LT-301 (24 V / 12 V, config v1 / v2, empty-tank and open-wire scenarios).
-   The loop-load check runs separately from full replacement equivalence.
+## Key Capabilities in v2.1 (Contract `v2.1.0` · 100% English Software)
 
-The THT-02 bus and the installation are **simulated**. Every result says
-whether it is `observed`, `simulated` or `documented`, and the app never
-presents a simulated reading as a field measurement.
+1. **Interactive AI-Driven 3D Digital Twin (`twin_action` Contract · `60 FPS` Three.js v0.170)**:
+   - Parametric 1:1 CAD assembly (`140.0 mm × Ø16.0 mm`) across 6 canonical sub-assemblies (`strainer_head`, `upper_seal_ring`, `upper_barrel_dip`, `mounting_flange`, `lower_barrel_rs485`, `waterproof_gland_leads`).
+   - Natural English voice or text requests (whether **Hands-Free** is ON or OFF) actively manipulate the 3D Digital Twin—exploding/closing the housing, orbiting and zooming the 3D camera (`focusZone3DCamera`), toggling the 8-pin `SW1 DIP-8` 3D rockers to the requested Modbus Slave ID, switching to X-Ray wireframe view, and anchoring a live cyan 3D interactive guide callout while the operator replicates the step in front of the live camera.
+2. **Offline English Voice Loop: Hybrid Push-to-Talk + Real-Time Hands-Free Barge-In**:
+   - **Push-to-Talk (`#btnVoiceRecord`)**: Supports both **Press-and-Hold-to-Speak** (`>= 380 ms` hold auto-sends on release) and **Tap-to-Start / Tap-to-Send**, with live RMS metering, live partial transcription, `endAudio()` flush before task teardown, and `22 s` VLM completion budget.
+   - **Hands-Free Live Voice with Instant Barge-In**: Uses iPad M4 `.voiceChat` hardware Acoustic Echo Cancellation (and WebAudio RMS barge-in in browsers) while keeping `AVAudioEngine` live during TTS playback—speaking mid-sentence immediately interrupts AI speech (`stopTtsImmediatelyOnMain()`), preserves pre-roll PCM audio, and processes the operator's new question with zero restart lag.
+3. **30 FPS Optical Scanner, Hand/Tool Spatial Masking & Carpet-Proof Sensor Lock (`< 2 ms/frame`)**:
+   - Dual-space `YCrCb + HSV` skin locus masking and thin-shaft screwdriver vector exclusion prevent hands or tools from corrupting 3D sensor tracking.
+   - `O(1)` summed-area (integral-image) micro-grain suppression rejects textured carpets/floors while locking immediately onto the `140×16 mm` cylindrical sensor body and high-resolution 8-pin `SW1 DIP-8` metallic comb (`1.96 ms` on M4).
+   - Dedicated `scene_vision` intent inspects real camera surroundings (floor, carpet, desk, objects) via raw un-annotated camera frames + `Qwen3-VL-4B-Instruct` + Apple `Vision`.
+4. **Verified 9-Page Datasheet Navigator & Section Highlighter (`VIS-10`)**:
+   - SHA-256 verified against `assets/THT02_Users_Manual_v1.1.pdf` (`Pages 1..9`).
+   - Asking where any topic lives in the datasheet (e.g., factory calibration on **Page 3 · Section 3.1**, 4-wire RS-485 color code on **Page 4 · Section 4.1**, `SW1 DIP-8` weights on **Page 5 · Section 5.1**, `0x7FFF` fault sentinel on **Page 6 · Section 5.2**, CRC-16 `0xA001` & blueprint on **Page 9 · Section 6.1**) automatically expands the manual drawer, highlights the exact section excerpt, and opens the full-page lightbox.
+5. **Read-Only Pilot Modbus-RTU (`FT2232HL`) & Modbus-TCP MBAP (`PUSR USR-DR164 :502`)**:
+   - Strict read-only pilot safety gate (`pilot_readonly = true`, `allowed_function_codes_pilot = [0x03]`, `0` bus writes; explicitly rejects `:5502` raw RTU-over-TCP mismatch).
+   - Bounded MBAP TCP stream parser (`4096 B`), TxID/UnitID/generation correlation, CRC-16 (`0xA001`) validation on serial RTU, signed `0.1 °C` / `0.1 %RH` decoding, and `0x7FFF` probe-fault sentinel handling.
+6. **Authoritative Session Engine, Grounding Filter (`IA-04`) & Compliance Exports**:
+   - Persistent SQLite session state (`Identify -> As-Found -> Inspect -> Verify Modbus -> Review -> Close`) with explicit technician confirmation required before logging any physical change (`DAT-03` / `DAT-04`).
+   - Deterministic grounding filter (`0 False Claims`: blocks unverified `SCADA`, `PLC`, `calibrated`, or out-of-range page claims).
+   - Exports `.PDF` + `.JSON` maintenance dossiers (with `public_demo` serial masking), AutoCAD R12 `.DXF`, binary `.STL`, and 4-angle `.ZIP`/`.EML` sign-off bundles.
+7. **Permanent System-Wide Anti-Regression & Dependency Audit Gate**:
+   - `scripts/audit_no_regressions.py` + `tests/test_system_integrity_audit.py` run automatically inside `scripts/build_ipad_m4_app.sh` and `pytest`, enforcing acyclic module dependencies, 100% English-only source files, PTT/Barge-In/3D-Twin/Manual invariants, CoreAudio serial-queue isolation, and 100% SHA-256 `BundleResources` parity.
 
-## Run
+---
 
-The only requirement is Python 3.10+. The backend uses the standard library
-only.
+## Complete Repository Structure
 
+```text
+FieldScan/
+├── README.md                                  # Architecture, directory map, quick start & verification guide
+├── MEGAPLAN_IPAD_M4_12GB.md                   # Contract v2.1.0 specification & iPad Air M4 (12 GB) design
+├── pyproject.toml                             # Python 3.10+ project metadata & dependencies (uv / pytest)
+├── uv.lock                                    # Deterministic Python lockfile
+├── .gitignore                                 # Excludes weights (vendor/), .venv/, ios/build/, dylibs & runtime DBs
+│
+├── src/fieldscan/                             # Modular Python Backend & Shared Contract Reference
+│   ├── server.py                              # FastAPI HTTP/HTTPS studio server (:8088 / :8443) & REST endpoints
+│   ├── lfm_engine.py                          # Local VLM (Qwen3-VL-4B / LFM3-VL-2B), Audio ASR & Piper English TTS
+│   ├── manual_navigator.py                    # 9-page datasheet topic/section resolver & auto-open flags
+│   ├── twin_controller.py                     # Deterministic 3D Digital Twin manipulation (`twin_action`) leaf module
+│   ├── scene_and_chat_router.py               # Intent router (general_chat, scene_vision, manual_lookup, sensor_diagnostics)
+│   ├── video_scanner.py                       # 30 FPS OpenCV UVC scanner, skin/tool masking & DIP-8 deskewed macro
+│   ├── modbus_rtu.py                          # FT2232HL USB-RS485 Modbus-RTU master, CRC-16 (0xA001) & simulator
+│   ├── modbus_tcp.py                          # PUSR USR-DR164 (:502) MBAP stream parser & read-only FC03 client
+│   ├── session_engine.py                      # Authoritative SQLite session state machine, grounding filter & PDF/JSON exporter
+│   ├── profiles_and_manual.py                 # Versioned device profiles (tzone_tht02, tzone_tht03r) & SHA-256 verifier
+│   ├── calibration_contract.py                # Read-only reference thermometer/hygrometer comparison contract (CAL-00..09)
+│   ├── live_repair.py                         # 4-step closed-loop guided repair & Andon stack-light coordinator
+│   ├── cad_builder.py                         # Server-side parametric AutoCAD .DXF & binary .STL generator
+│   └── escalator.py                           # Offline store-and-forward .ZIP + RFC-5322 .EML sign-off packager
+│
+├── ios/                                       # Native Standalone iPad Air M4 (12 GB RAM) App (Swift / Xcode)
+│   ├── FieldScanM4.xcodeproj/                 # Xcode project (arm64-apple-ios17.0, Bundle ID com.fieldscan.tht02.ipadm4)
+│   └── FieldScanM4/
+│       ├── AppDelegate.swift                  # App lifecycle, Metal llama-server warmup & loopback HTTP startup
+│       ├── SceneDelegate.swift                # Full-screen iPadOS window & scene management
+│       ├── FieldScanWebViewController.swift   # WKWebView host, native JS bridge & share-sheet export handler
+│       ├── StandaloneFieldScanServer.swift    # Embedded NWListener HTTP server, en-US ASR/TTS, PTT & .voiceChat Barge-In
+│       ├── FieldScanConversationEngine.swift  # 1:1 Swift intent router, Qwen3-VL-4B / FoundationModels client & fallbacks
+│       ├── FieldScanTwinController.swift      # 1:1 Swift 3D Digital Twin controller (`twin_action` & DIP-8 rocker math)
+│       ├── FieldScanManualNavigator.swift     # 1:1 Swift 9-page datasheet section resolver & lightbox triggers
+│       ├── FieldScanVisionDetector.swift      # 1.96 ms O(1) integral-image carpet-proof cylinder & 8-pin DIP-8 detector
+│       ├── FieldScanSessionEngine.swift       # 1:1 Swift session engine, IA-04 grounding filter & CoreGraphics PDF builder
+│       ├── ModbusTCPClient.swift              # Native NWConnection MBAP TCP (:502) client & stream parser
+│       ├── NativeCameraBridge.swift           # 30 FPS AVFoundation back-camera capture & orientation normalization
+│       ├── LlamaServerBridge.swift            # Dynamic libllama-server-impl.dylib loader & health/warmup poller
+│       ├── FieldScanRuntimeConfig.swift       # M4 12 GB unified memory budget & runtime flags
+│       ├── PythonRuntimeBridge.swift          # Optional embedded runtime bridge stub
+│       ├── Info.plist                         # Camera, Microphone, Speech Recognition & Local Network permissions
+│       └── FieldScanM4.entitlements           # Increased memory limit entitlement for on-device VLM on iPad Air M4
+│
+├── static/                                    # Air-Gapped Widescreen SCADA & 3D Digital Twin HMI (0 External CDNs)
+│   ├── index.html                             # Widescreen studio layout, 3D stage, SCADA deck, chat & 9-page manual viewer
+│   ├── styles.css                             # Industrial dark-slate HMI tokens, Andon tower & cyan `.is-guided` 3D callouts
+│   ├── app.js                                 # Three.js 1:1 CAD rig, `applyTwinAction`, Spatial CV HUD, PTT & Barge-In VAD
+│   └── vendor/                                # Bundled Three.js v0.170, OrbitControls, STLExporter, uPlot, Lucide & Open Props
+│
+├── knowledge/                                 # Verified Device Profiles, Manual Index, Manifest & Golden Vectors
+│   ├── THT02_spec.json                        # Canonical dimensional, electrical, DIP-8 & fault specification
+│   ├── manual_index.json                      # Page-by-page verified section excerpts & SHA-256 index
+│   ├── resource_manifest.json                 # 26-file SHA-256 tree manifest synced into iOS BundleResources
+│   ├── profiles/                              # `tzone_tht02.json` & `tzone_tht03r.json`
+│   └── fixtures/golden_contracts_v2_1.json    # Golden MBAP frames, voice intents & adversarial safety test corpus
+│
+├── assets/                                    # Official TZ THT-02 Datasheet & Rendered High-DPI Pages
+│   ├── THT02_Users_Manual_v1.1.pdf            # Official 9-page datasheet (SHA-256 verified at runtime)
+│   └── manual_pages/page_1.png .. page_9.png  # Pre-rendered pages for offline drawer & full-screen lightbox
+│
+├── scripts/                                   # Build, Sync, Startup & Permanent Anti-Regression Tooling
+│   ├── download_assets.sh                     # Downloads llama.cpp + GGUF models + Piper voice into local `vendor/`
+│   ├── start_all.sh                           # Starts local VLM (:8091), Audio ASR (:8092), HTTP (:8088) & HTTPS (:8443)
+│   ├── sync_manifest.py                       # Verifies SHA-256 manifest & syncs `ios/FieldScanM4/BundleResources`
+│   ├── audit_no_regressions.py                # Permanent DAG, English-only, PTT, Barge-In, 3D Twin & Bundle audit gate
+│   ├── build_ipad_m4_app.sh                   # Full iPad Air M4 verification, Xcode build & USB-C deployment script
+│   └── run_swift_contract_tests.swift         # Native Swift CLI contract, MBAP, grounding, 3D Twin & vision test runner
+│
+├── tests/                                     # Automated Python + Swift Anti-Regression Suite (38 Tests)
+│   ├── test_system_integrity_audit.py         # Runs `audit_no_regressions.py` inside pytest
+│   ├── test_modular_ai_manual_vision.py       # Tests English intent router, `twin_action`, manual lookup & carpet vision
+│   ├── test_megaplan_contracts_and_matrix.py  # Tests Contract v2.1.0, MBAP TCP, SQLite sessions & Swift parity binary
+│   └── test_fieldscan_glue.py                 # Tests 100% English repo gate, CAD DXF/STL, Modbus CRC-16 & repair loop
+│
+└── docs/                                      # Hardware, AI, CAD, Modbus & iPad Air M4 Engineering Guides (01..11)
+    ├── 01_HARDWARE_USB_CAMERA_GLUE.md
+    ├── 02_LIQUID_LFM3_LLAMA_CPP_GLUE.md
+    ├── 03_PDF_TO_THREEJS_CAD_GLUE.md
+    ├── 04_VOICE_AND_OFFLINE_OUTBOX_GLUE.md
+    ├── 05_HACKATHON_2H_RECREATION_RUNBOOK.md
+    ├── 06_MODBUS_RS485_LIVE_REPAIR_GLUE.md
+    ├── 07_MAC_MINI_LOCAL_TESTING_GUIDE.md
+    ├── 08_IPAD_AIR_M4_12GB_NATIVE_APP_GLUE.md
+    ├── 09_BASELINE_AND_CAPABILITY_MATRIX.md
+    ├── 10_BENCH_SETUP_EVENT_RUNBOOK_AND_TEST_MATRIX.md
+    └── 11_SECTION14_EXECUTION_LOG.yaml
+```
+
+---
+
+## Quick Start
+
+### 1. Mac Mini / Linux Workstation
 ```bash
-python3 mvp.py --port 8765 --open          # local server + UI
-python3 mvp.py --self-test                 # Python golden vectors and flows
-python3 mvp.py --tool get_asset_status --args '{}'
-python3 mvp.py --mcp                       # MCP server over stdio
-python3 mvp.py --html FIELD_SCAN_DEMO.html # portable offline demo
-python3 -m unittest discover -s tests -t .
+# 1. Install Python environment via uv
+uv sync
+
+# 2. Download local GGUF models (Qwen3-VL-4B / LFM3) + llama.cpp + Piper voice into ./vendor/
+./scripts/download_assets.sh
+
+# 3. Launch full offline workstation (HTTP :8088 + USB-C iPad HTTPS :8443)
+./scripts/start_all.sh --usb-ipad
 ```
 
-`FIELD_SCAN_DEMO.html` is a single self-contained file. Open it directly from
-disk: it works in airplane mode with the same JS session core.
-
-To rebuild the frontend after editing `web/src`:
-
+### 2. Native iPad Air M4 (12 GB RAM) App
 ```bash
-npm install && npm run build   # esbuild → web/dist/app.js
+# Sync BundleResources, run anti-regression audit, typecheck Swift & build Release-iphoneos bundle
+./scripts/build_ipad_m4_app.sh --unsigned
+
+# Or open ios/FieldScanM4.xcodeproj in Xcode, select your iPad Air M4, and press Cmd+R
+open -a Xcode ios/FieldScanM4.xcodeproj
 ```
 
-## Demo script
-
-1. **Live view (1):** the FieldScan HUD recognizes the probe. Click **Capture frame**,
-   then **Confirm asset**.
-2. **THT-02 diagnosis (2):** ask *"Why does it fail?"*. The assistant explains
-   the timeout and cites §5, §6.4 and §6.10. Use **View manual** to read the
-   cited sections and check their validity.
-3. **Simulate DIP fix:** the probe opens in 3D and the DIP is set to address 1.
-   Ask *"Does it work now?"*. You can also click the DIP mirror switches
-   directly.
-4. **Inject faults:** bad CRC, foreign address or sensor 7FFF H. Watch the
-   RTU frames tab.
-5. **X-ray / Disassemble:** inspect the inside of the probe, gateway and loop.
-6. **4–20 mA spare (3):** switch to 12 V and watch the load check fail. Ask
-   *"Is the spare a valid replacement?"*.
-7. Ask *"Is everything OK?"* or *"run self-test"* for live diagnostics and
-   the JS/Python parity check.
-
-## Tool contracts
-
-All six tools are exposed through the HTTP API (`POST /api/tools/<name>`), the
-CLI (`--tool`) and MCP (`--mcp`). Every call returns an `event_id`. Session
-pins record `asset_id`, `product_id`, `catalog_version`, `rules_version` and
-the status of each source.
-
-| Tool | Purpose |
-|---|---|
-| `capture_frame` | Frame from the simulated scene. `uvc` reports that it is not integrated. |
-| `confirm_asset` | Pins the identity and lists the pending fields. |
-| `get_document` | Document, edition, date, URL, section and validity. |
-| `get_asset_status` | Simulated RTU reading. `rtu_bench` returns `no_evidence`. |
-| `simulate_fault` | Before / action / after evidence. |
-| `check_replacement` | Per-criterion verdict with margin and sources. |
-
-A missing manual, a variant mismatch or an unknown catalog or rules version
-returns `insufficient_evidence` instead of a guess.
-
-## Architecture
-
-```
-core/modbus.py         CRC-16/MODBUS, DIP mapping, THT-02 behaviour model, frame decoder
-core/fieldscan.py      Session, versioned catalog/documents, six tools, self-tests
-core/compatibility.py  4–20 mA loop-load engine
-edge/server.py         Loopback HTTP server, tools API, portable HTML builder
-edge/mcp_stdio.py      MCP stdio server (JSON-RPC 2.0, stdlib)
-adapters/ai.py         LLM adapter: on-device Liquid AI (auto-detected) or remote OpenAI-compatible
-scripts/               start_local_ai.sh (llama.cpp + LFM3-1.7B)
-web/src/               Three.js twins, JS session mirror, assistant, UI
-tests/                 unittest suite
-```
-
-The browser keeps a JS mirror of the Modbus core so the portable file works
-offline. The self-test checks it against the Python golden vectors.
-
-### On-device LLM (works offline)
-
-Commands, diagnoses and numbers always come from the deterministic local engine,
-with citations. For open conversation, the assistant uses a small **Liquid AI**
-model running on the same machine, so the crew can still talk to the platform
-when the boat has no Internet:
-
+### 3. Run Permanent Anti-Regression Audit & Full Test Suite
 ```bash
-brew install llama.cpp
-./scripts/start_local_ai.sh      # downloads LFM3-1.7B Q4_K_M (~1.1 GB) once, serves on :8080
-python3 mvp.py --port 8765 --open
+uv run python scripts/sync_manifest.py --sync-bundle --verify
+uv run python scripts/audit_no_regressions.py
+uv run pytest -q
 ```
-
-The server detects the model automatically at `AI_LOCAL_URL` (default
-`http://127.0.0.1:8080/v1`). The header pill then shows
-`Assistant · lfm3-1.7b · on-device`. The adapter disables the model's
-reasoning pass for fast, literal answers and grounds every reply in a fixed
-fact sheet plus the live session context.
-
-To use a remote OpenAI-compatible model instead, set `AI_BASE_URL`, `AI_MODEL`
-and `AI_API_KEY` on the server; they take precedence over the local model. No
-key ever reaches the browser. The portable `FIELD_SCAN_DEMO.html` uses the
-deterministic engine only.
-
-## FieldScan reuse vs. new work
-
-- **Reused from FieldScan
-  ([armando-token/beta_2](https://github.com/armando-token/beta_2)):** the
-  concept of a live camera with asset recognition, one session per asset, and
-  the voice and camera input paths. The UVC and voice adapters are planned
-  here, not wired.
-- **New in this project:** the THT-02 Modbus RTU model and diagnosis, versioned
-  evidence with session pins, the six tool contracts (HTTP, CLI and MCP), the
-  Three.js twins with X-ray and disassembly, the 4–20 mA verifier, and the
-  portable offline demo.
-
-## Sponsor integrations (planned)
-
-None of these integrations exist in this build yet. Each will be recorded with
-verifiable evidence once it is done.
-
-| Sponsor | Planned work |
-|---|---|
-| Boat.dev | Run the worker and tests on a persistent VM; package a catalog revision with a manifest and checksums. |
-| Context.dev | Real source search and a monitor on a verified OEM page (URL, date, SHA-256). |
-| NY Token Exchange | Confidential extraction of documented fields, validated against a schema and the source. |
-| Teamily AI | Agent review of a catalog diff, linked to the job. |

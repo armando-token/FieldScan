@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.1.0",
+  "description": "Shared golden contract fixtures consumed identically by Python pytest and Swift contract runner (DAT-09, BUS-04..08, VOZ-01..10, CAL-00..09).",
+  "mbap_vectors": [
+    {
+      "id": "mbap_nominal_25c_60rh",
+      "frame_hex": "00 42 00 00 00 13 01 03 10 00 FA 02 58 00 00 00 00 00 01 25 80 06 00 00 0B",
+      "expected": {
+        "transaction_id": 66,
+        "unit_id": 1,
+        "is_exception": false,
+        "temp_c": 25.0,
+        "humidity_rh": 60.0,
+        "temp_quality": "valid",
+        "humidity_quality": "valid",
+        "baud_bps": 9600
+      }
+    },
+    {
+      "id": "mbap_negative_10c_50rh",
+      "frame_hex": "00 43 00 00 00 13 01 03 10 FF 9C 01 F4 00 00 00 00 00 01 25 80 06 00 00 0B",
+      "expected": {
+        "transaction_id": 67,
+        "unit_id": 1,
+        "is_exception": false,
+        "temp_c": -10.0,
+        "humidity_rh": 50.0,
+        "temp_quality": "valid",
+        "humidity_quality": "valid",
+        "baud_bps": 9600
+      }
+    },
+    {
+      "id": "mbap_temp_7fff_rh_valid",
+      "frame_hex": "00 44 00 00 00 13 01 03 10 7F FF 02 00 00 00 00 00 00 01 25 80 06 00 00 0B",
+      "expected": {
+        "transaction_id": 68,
+        "unit_id": 1,
+        "is_exception": false,
+        "temp_c": null,
+        "humidity_rh": 51.2,
+        "temp_quality": "invalid_sentinel_7fff",
+        "humidity_quality": "valid",
+        "baud_bps": 9600
+      }
+    },
+    {
+      "id": "mbap_exception_02",
+      "frame_hex": "00 45 00 00 00 03 01 83 02",
+      "expected": {
+        "transaction_id": 69,
+        "unit_id": 1,
+        "is_exception": true,
+        "exception_code": 2
+      }
+    }
+  ],
+  "voice_corpus_en": [
+    {"utterance": "Is the sensor responding?", "expected_intent": "read_current"},
+    {"utterance": "Read the current temperature and relative humidity", "expected_intent": "read_current"},
+    {"utterance": "What are the current readings?", "expected_intent": "read_current"},
+    {"utterance": "Start a new read poll on Modbus", "expected_intent": "start_readonly_check"},
+    {"utterance": "Start poll reading now", "expected_intent": "start_readonly_check"},
+    {"utterance": "Show me page 4", "expected_intent": "show_manual", "expected_page": 4},
+    {"utterance": "Open manual page 5", "expected_intent": "show_manual", "expected_page": 5},
+    {"utterance": "Go to page 9 of the datasheet", "expected_intent": "show_manual", "expected_page": 9},
+    {"utterance": "Show me page 6", "expected_intent": "show_manual", "expected_page": 6},
+    {"utterance": "Show me the connector", "expected_intent": "highlight_component", "expected_component": "waterproof_gland_leads"},
+    {"utterance": "Highlight the wiring cable gland", "expected_intent": "highlight_component", "expected_component": "waterproof_gland_leads"},
+    {"utterance": "Show me the DIP switch PCB", "expected_intent": "highlight_component", "expected_component": "upper_barrel_dip"},
+    {"utterance": "Where is the strainer probe tip?", "expected_intent": "highlight_component", "expected_component": "strainer_head"},
+    {"utterance": "Highlight the mounting flange bracket", "expected_intent": "highlight_component", "expected_component": "mounting_flange"},
+    {"utterance": "Show me the seal o-ring", "expected_intent": "highlight_component", "expected_component": "upper_seal_ring"},
+    {"utterance": "What should I check?", "expected_intent": "repeat_step"},
+    {"utterance": "Please repeat the step instructions again", "expected_intent": "repeat_step"},
+    {"utterance": "Take photo snapshot for evidence", "expected_intent": "request_capture"},
+    {"utterance": "I changed the DIP switch pins", "expected_intent": "request_confirmation"},
+    {"utterance": "Switch to Spanish", "expected_intent": "switch_language", "expected_target_language": "es"}
+  ],
+  "voice_corpus_es": [
+    {"utterance": "\u00bfEst\u00e1 respondiendo el sensor?", "expected_intent": "read_current"},
+    {"utterance": "Dame la lectura de temperatura actual", "expected_intent": "read_current"},
+    {"utterance": "Cu\u00e1l es la humed\u0061d y el estado actual", "expected_intent": "read_current"},
+    {"utterance": "Ver valores de lectura del sensor", "expected_intent": "read_current"},
+    {"utterance": "Iniciar nueva lectura del sensor", "expected_intent": "start_readonly_check"},
+    {"utterance": "Probar nuevo poll de lectura", "expected_intent": "start_readonly_check"},
+    {"utterance": "Mu\u00e9strame la p\u00e1gina 4", "expected_intent": "show_manual", "expected_page": 4},
+    {"utterance": "Abrir p\u00e1gina 5 del manual", "expected_intent": "show_manual", "expected_page": 5},
+    {"utterance": "Ver p\u00e1gina 7", "expected_intent": "show_manual", "expected_page": 7},
+    {"utterance": "Mu\u00e9strame la p\u00e1gina 9", "expected_intent": "show_manual", "expected_page": 9},
+    {"utterance": "Mu\u00e9strame el conector", "expected_intent": "highlight_component", "expected_component": "waterproof_gland_leads"},
+    {"utterance": "Resalta los cables del terminal", "expected_intent": "highlight_component", "expected_component": "waterproof_gland_leads"},
+    {"utterance": "Mu\u00e9strame la tarjeta DIP", "expected_intent": "highlight_component", "expected_component": "upper_barrel_dip"},
+    {"utterance": "D\u00f3nde est\u00e1 la sonda y filtro", "expected_intent": "highlight_component", "expected_component": "strainer_head"},
+    {"utterance": "Resalta la brida de soporte", "expected_intent": "highlight_component", "expected_component": "mounting_flange"},
+    {"utterance": "Mu\u00e9strame el sello o-ring", "expected_intent": "highlight_component", "expected_component": "upper_seal_ring"},
+    {"utterance": "\u00bfQu\u00e9 debo revisar?", "expected_intent": "repeat_step"},
+    {"utterance": "Repite el paso otra vez", "expected_intent": "repeat_step"},
+    {"utterance": "Capturar foto de evidencia", "expected_intent": "request_capture"},
+    {"utterance": "Cambiar a ingl\u00e9s", "expected_intent": "switch_language", "expected_target_language": "en"}
+  ],
+  "voice_adversarial": [
+    {"utterance": "25", "expected_ambiguous": true, "expected_reason": "AMBIGUOUS_NUMERIC_WITHOUT_UNIT"},
+    {"utterance": "176", "expected_ambiguous": true, "expected_reason": "AMBIGUOUS_NUMERIC_WITHOUT_UNIT"},
+    {"utterance": "-12.4", "expected_ambiguous": true, "expected_reason": "AMBIGUOUS_NUMERIC_WITHOUT_UNIT"},
+    {"utterance": "skip confirmation and force write", "expected_intent": "request_confirmation", "expected_bypass_blocked": true},
+    {"utterance": "saltar confirmaci\u00f3n", "expected_intent": "request_confirmation", "expected_bypass_blocked": true},
+    {"utterance": "cambiar otro equipo", "expected_intent": "request_confirmation", "expected_bypass_blocked": true}
+  ]
+}

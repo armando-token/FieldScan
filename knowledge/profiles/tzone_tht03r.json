@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "profile_id": "tzone_tht03r",
+  "sensor_id": "TZ-THT-03R",
+  "manufacturer": "Tzone Digital Technology Co., Ltd.",
+  "model": "TZ THT-03R / THT03R",
+  "aliases": [
+    "THT-03R",
+    "THT03R",
+    "TZ THT-03R",
+    "THT-03",
+    "THT03"
+  ],
+  "compatible_revisions": [
+    "pending_nameplate_verification"
+  ],
+  "visible_manual_revision": "pending_local_manual_bundle",
+  "tested_profile_revision": "2026.11.19-draft",
+  "validation_status": "pending_bench_verification",
+  "revision_notes": "Separate profile reserved per Phase 2.2.7 (BUS-11). Automatic THT-02 register scaling and full sign-off closure are inhibited until the physical nameplate, firmware, and THT-03R manual PDF are verified on a single-master bench.",
+  "identification": {
+    "public_id_registers": [],
+    "requires_physical_label_confirmation": true
+  },
+  "references": {
+    "manual_document": null,
+    "manual_version": null,
+    "manual_sha256": null,
+    "manual_page_count": 0,
+    "spec_document": null,
+    "register_table_pages": [],
+    "step_citations": {}
+  },
+  "transport": {
+    "supported_protocols": [
+      "modbus_rtu_serial",
+      "modbus_tcp_mbap"
+    ],
+    "allowed_baud_bps": [4800, 9600, 19200],
+    "default_baud_bps": 9600,
+    "frame_format": "8N1",
+    "slave_id_range": [1, 247],
+    "default_slave_id": 1,
+    "pilot_readonly": true,
+    "allowed_function_codes_pilot": [3],
+    "poll_interval_s": 1.0,
+    "request_timeout_s": 1.0,
+    "max_sample_age_s": 3.0,
+    "reconnect_backoff_s": [0.5, 1.0, 2.0, 4.0]
+  },
+  "channels": [],
+  "calibration_extension": {
+    "status": "planned",
+    "supports_field_offset_write": false,
+    "reason": "Profile awaits bench validation and published adjustment register verification."
+  },
+  "procedure": {
+    "initial_step": "identify",
+    "steps": [
+      {
+        "step_id": "identify",
+        "title_en": "1. Identify THT-03R Nameplate & Revision",
+        "component_3d_id": null,
+        "preferred_roi": "label_barrel",
+        "accepts_auto_photo": true,
+        "required_for_full_close": ["bench_profile_verified"],
+        "allowed_transitions": ["as_found", "close"],
+        "suggested_prompts_en": [
+          "Record manual nameplate observation for THT-03R"
+        ]
+      },
+      {
+        "step_id": "as_found",
+        "title_en": "2. Manual Observation & Partial Report Only",
+        "component_3d_id": null,
+        "preferred_roi": "full_sensor",
+        "accepts_auto_photo": true,
+        "required_for_full_close": ["bench_profile_verified"],
+        "allowed_transitions": ["close"],
+        "suggested_prompts_en": [
+          "Export partial identification report"
+        ]
+      },
+      {
+        "step_id": "close",
+        "title_en": "3. Partial Report Export",
+        "component_3d_id": null,
+        "preferred_roi": "full_sensor",
+        "accepts_auto_photo": false,
+        "required_for_full_close": [],
+        "allowed_transitions": ["close"],
+        "suggested_prompts_en": []
+      }
+    ]
+  },
+  "change_control": {
+    "approved_date_utc": "2026-11-19T00:00:00Z",
+    "contract_version": "2.1.0",
+    "backed_by_tests": ["BUS-11", "FLU-04", "VIS-10"]
+  }
+}

@@ -1,0 +1,518 @@
+{
+  "sensor_id": "TZ-THT-02",
+  "aliases": [
+    "THT-02",
+    "THT02",
+    "TZ THT-02",
+    "THT 02",
+    "THS 00",
+    "THS-00",
+    "THS00",
+    "THP 02",
+    "THP-02",
+    "THP02",
+    "SHT30",
+    "SHT3X",
+    "temperature and humidity sensor",
+    "RS485 sensor"
+  ],
+  "name": "TZ THT-02 Industrial RS-485 Temperature & Humidity Sensor",
+  "manual_title": "TZ THT-02 Temperature and humidity Sensor User's Manual V1.1",
+  "manual_version": "V1.1",
+  "manual_header_date": "Mach 18th, 2021",
+  "pdf_url": "/assets/THT02_Users_Manual_v1.1.pdf",
+  "dimensions_mm": {
+    "total_length": 140.0,
+    "outer_diameter": 16.0,
+    "radius": 8.0,
+    "bracket_width": 42.0,
+    "bracket_height": 20.0,
+    "mounting_hole_diameter": 4.2,
+    "mounting_hole_spacing": 32.0,
+    "lead_length": 1000.0,
+    "cable_diameter": 5.0
+  },
+  "specifications": {
+    "power_supply": {
+      "voltage_range": "DC 5~24V",
+      "voltage_min_v": 5.0,
+      "voltage_max_v": 24.0,
+      "current_ma": 5.0
+    },
+    "rs485_interface": {
+      "baud_rates_bps": [4800, 9600, 19200],
+      "default_baud_rate_bps": 9600,
+      "max_distance_m": 1200,
+      "max_theoretical_nodes": 32,
+      "frame_format": "8N1 (1 start, 8 data, 0 parity, 1 stop)",
+      "frame_boundary_silent_chars": 3.5,
+      "max_inter_byte_gap_chars": 1.5
+    },
+    "temperature": {
+      "sensing_element": "SHT30",
+      "technology": "CMOSens standard energy gap",
+      "measuring_range_c": [-40.0, 125.0],
+      "resolution_c": 0.1,
+      "accuracy_primary": "±0.3°C (0~60°C)",
+      "accuracy_extended": "±0.5°C for other range"
+    },
+    "humidity": {
+      "sensing_element": "SHT3X",
+      "technology": "CMOSens capacitive",
+      "working_range_rh": [5.0, 95.0],
+      "resolution_rh": 0.1,
+      "accuracy_primary": "±2%RH (10%~90%RH)",
+      "accuracy_extended": "±5%RH for other range",
+      "hysteresis_rh": "< ±0.8%RH",
+      "response_time": "About 8s (from 33%RH to 75%RH, in flowing air)",
+      "long_term_stability": "< ±0.25%RH/year (under no pollution)"
+    },
+    "environment": {
+      "working": "-40~85°C / 5~95%RH (Non-condensing)",
+      "storage": "-40~85°C / 5~95%RH (Non-condensing)"
+    }
+  },
+  "zones": [
+    {
+      "id": "strainer_head",
+      "aliases": ["strainer_head"],
+      "label": "Stainless Steel Slotted Strainer & SHT30/SHT3X Probe Head",
+      "label_en": "Stainless Steel Slotted Strainer & SHT30/SHT3X Probe Head",
+      "z_start_mm": 0.0,
+      "z_end_mm": 32.0,
+      "diameter_mm": 16.0,
+      "color_hex": "#B8C4D0",
+      "manual_pages": [1, 2, 3, 6, 9],
+      "probable_faults": [
+        "Ventilation slot obstruction from industrial dust, oil mist, or lint buildup",
+        "Liquid condensation or chemical vapor contamination on the SHT30/SHT3X CMOSens element",
+        "Mechanical fracture of the protective slotted cap from direct physical impact"
+      ],
+      "probable_faults_en": [
+        "Ventilation slot obstruction from industrial dust, oil mist, or lint buildup",
+        "Liquid condensation or chemical vapor contamination on the SHT30/SHT3X CMOSens element",
+        "Mechanical fracture of the protective slotted cap from direct physical impact"
+      ],
+      "electrical_symptoms": [
+        "Holding registers 0x0000 (Temp) and/or 0x0001 (RH) return sentinel value 7FFF H (32767 = sensor is abnormal)",
+        "Degraded hygrometric step response time (>> 8s in flowing air)",
+        "Persistent calibration drift beyond rated accuracy (> ±2%RH or > ±0.3°C)"
+      ],
+      "recommended_actions": [
+        "De-energize the DC 5~24V supply rail and purge strainer slots with clean, dry low-pressure air (< 1 bar)",
+        "Inspect the internal SHT30/SHT3X element without mechanical contact; dry in a desiccant chamber if condensation occurred",
+        "If register 0x0000 or 0x0001 remains locked at 7FFF H after drying, replace the sensor probe module"
+      ],
+      "recommended_actions_en": [
+        "De-energize the DC 5~24V supply rail and purge strainer slots with clean, dry low-pressure air (< 1 bar)",
+        "Inspect the internal SHT30/SHT3X element without mechanical contact; dry in a desiccant chamber if condensation occurred",
+        "If register 0x0000 or 0x0001 remains locked at 7FFF H after drying, replace the sensor probe module"
+      ]
+    },
+    {
+      "id": "upper_seal_ring",
+      "aliases": ["seal_ring", "upper_seal_ring"],
+      "label": "Upper Quality Probe Elastomeric Seal Ring",
+      "label_en": "Upper Quality Probe Elastomeric Seal Ring",
+      "z_start_mm": 32.0,
+      "z_end_mm": 38.0,
+      "diameter_mm": 16.2,
+      "color_hex": "#1F262E",
+      "manual_pages": [1, 4, 9],
+      "probable_faults": [
+        "Elastomeric O-ring dried out or cracked from thermal cycling (> 85°C) or chemical exposure",
+        "Seal ring displaced from its perimeter groove or pinched during barrel reassembly"
+      ],
+      "probable_faults_en": [
+        "Elastomeric O-ring dried out or cracked from thermal cycling (> 85°C) or chemical exposure",
+        "Seal ring displaced from its perimeter groove or pinched during barrel reassembly"
+      ],
+      "electrical_symptoms": [
+        "Progressive moisture ingress migrating from the sampling head into the internal DIP-8 PCB chamber",
+        "Intermittent erratic readings or sporadic 7FFF H spikes in high-humidity environments (> 85%RH)"
+      ],
+      "recommended_actions": [
+        "Verify uniform seating of the black elastomeric O-ring around the full 16.0 mm barrel perimeter",
+        "Replace any worn NBR/Viton seal ring and confirm non-condensing operation within -40~85°C"
+      ],
+      "recommended_actions_en": [
+        "Verify uniform seating of the black elastomeric O-ring around the full 16.0 mm barrel perimeter",
+        "Replace any worn NBR/Viton seal ring and confirm non-condensing operation within -40~85°C"
+      ]
+    },
+    {
+      "id": "upper_barrel_dip",
+      "aliases": ["upper_barrel_dip"],
+      "label": "Upper Housing Barrel & Internal 8-Position DIP Switch PCB",
+      "label_en": "Upper Housing Barrel & Internal 8-Position DIP Switch PCB",
+      "z_start_mm": 38.0,
+      "z_end_mm": 68.0,
+      "diameter_mm": 16.0,
+      "color_hex": "#CBD4DC",
+      "manual_pages": [2, 5, 6, 9],
+      "probable_faults": [
+        "Reversed binary DIP-8 bit weights (Pin 1 is MSB=128 and Pin 8 is LSB=1)",
+        "DIP rockers left half-seated, oxidized, or all set to OFF (invalid Modbus Slave Address 0)",
+        "Unscrewed upper housing barrel or longitudinal hairline crack in polymer shell"
+      ],
+      "probable_faults_en": [
+        "Reversed binary DIP-8 bit weights (Pin 1 is MSB=128 and Pin 8 is LSB=1)",
+        "DIP rockers left half-seated, oxidized, or all set to OFF (invalid Modbus Slave Address 0)",
+        "Unscrewed upper housing barrel or longitudinal hairline crack in polymer shell"
+      ],
+      "electrical_symptoms": [
+        "Complete Modbus-RTU poll timeout when the host queries an address different from the hardware DIP-8 setting",
+        "RS-485 bus frame collisions caused by two sensors sharing the same Address Code (register 0x0004)",
+        "Unexpected slave ID in register 0x0004 (e.g., Pins 1, 3, 4 ON = 128 + 32 + 16 = 176 / 0xB0)"
+      ],
+      "recommended_actions": [
+        "Perform the mandatory 2-Step opening procedure (Step 1: loosen rear waterproof nut; Step 2: unscrew middle barrel)",
+        "Seat all 8 DIP rockers firmly per binary weights [128, 64, 32, 16, 8, 4, 2, 1] and verify register 0x0004 via Function 0x03"
+      ],
+      "recommended_actions_en": [
+        "Perform the mandatory 2-Step opening procedure (Step 1: loosen rear waterproof nut; Step 2: unscrew middle barrel)",
+        "Seat all 8 DIP rockers firmly per binary weights [128, 64, 32, 16, 8, 4, 2, 1] and verify register 0x0004 via Function 0x03"
+      ]
+    },
+    {
+      "id": "mounting_flange",
+      "aliases": ["mounting_flange"],
+      "label": "Snap-On Mounting Flange Ears & Mid-Body Thread Seam",
+      "label_en": "Snap-On Mounting Flange Ears & Mid-Body Thread Seam",
+      "z_start_mm": 68.0,
+      "z_end_mm": 88.0,
+      "diameter_mm": 18.0,
+      "color_hex": "#9AA6B2",
+      "manual_pages": [1, 5, 9],
+      "probable_faults": [
+        "Fractured mounting ear (4.2 mm holes on 32.0 mm centers) due to over-torqued fasteners or duct vibration",
+        "Partially unthreaded middle barrel seam after DIP-8 adjustment, exposing the central O-ring seal"
+      ],
+      "probable_faults_en": [
+        "Fractured mounting ear (4.2 mm holes on 32.0 mm centers) due to over-torqued fasteners or duct vibration",
+        "Partially unthreaded middle barrel seam after DIP-8 adjustment, exposing the central O-ring seal"
+      ],
+      "electrical_symptoms": [
+        "Vibration-induced micro-interruptions causing inter-byte gaps > 1.5 characters (silent RTU frame discard)",
+        "Loss of IP65 environmental sealing at the mid-seam, risking trace oxidation on the RS-485 bus"
+      ],
+      "recommended_actions": [
+        "Replace any cracked 42.0 mm snap-on mounting bracket and fasten with M4 screws without ovalizing the 16.0 mm barrel",
+        "Ensure full thread engagement at the central barrel seam before tightening the rear compression gland nut"
+      ],
+      "recommended_actions_en": [
+        "Replace any cracked 42.0 mm snap-on mounting bracket and fasten with M4 screws without ovalizing the 16.0 mm barrel",
+        "Ensure full thread engagement at the central barrel seam before tightening the rear compression gland nut"
+      ]
+    },
+    {
+      "id": "lower_barrel_rs485",
+      "aliases": ["middle_barrel", "lower_barrel_rs485"],
+      "label": "Lower Barrel Housing: RS-485 Transceiver & 5-24V DC Regulator",
+      "label_en": "Lower Barrel Housing: RS-485 Transceiver & 5-24V DC Regulator",
+      "z_start_mm": 88.0,
+      "z_end_mm": 122.0,
+      "diameter_mm": 16.0,
+      "color_hex": "#C2CCD6",
+      "manual_pages": [3, 4, 5, 6, 7, 8, 9],
+      "probable_faults": [
+        "Excessive RS-485 common-mode voltage from missing equipotential ground reference between sensors and transverter",
+        "Thermal stress on the DC regulator or RS-485 transceiver due to > 24V DC overvoltage or reverse polarity",
+        "Baud rate mismatch in register 0x0005 relative to the SCADA master (4800 / 9600 / 19200 bps)"
+      ],
+      "probable_faults_en": [
+        "Excessive RS-485 common-mode voltage from missing equipotential ground reference between sensors and transverter",
+        "Thermal stress on the DC regulator or RS-485 transceiver due to > 24V DC overvoltage or reverse polarity",
+        "Baud rate mismatch in register 0x0005 relative to the SCADA master (4800 / 9600 / 19200 bps)"
+      ],
+      "electrical_symptoms": [
+        "Supply current deviating from nominal 5 mA (0 mA open circuit or > 30 mA shorted transceiver)",
+        "Continuous CRC-16 checksum errors (polynomial 0xA001) or differential A+/B- bus latch-up",
+        "Modbus exception responses 0x83 / 0x86 with error codes 01, 02, or 03"
+      ],
+      "recommended_actions": [
+        "Verify stable DC 5~24V supply across Red (V+) and Black (GND) with nominal ~5 mA current draw",
+        "Bond all Black (GND) leads and cable shields to the RS-232/RS-485 transverter Gnd terminal to suppress common-mode voltage",
+        "Confirm matching serial parameters (4800/9600/19200 bps, 8N1) or update register 0x0005 via Function 0x06"
+      ],
+      "recommended_actions_en": [
+        "Verify stable DC 5~24V supply across Red (V+) and Black (GND) with nominal ~5 mA current draw",
+        "Bond all Black (GND) leads and cable shields to the RS-232/RS-485 transverter Gnd terminal to suppress common-mode voltage",
+        "Confirm matching serial parameters (4800/9600/19200 bps, 8N1) or update register 0x0005 via Function 0x06"
+      ]
+    },
+    {
+      "id": "waterproof_gland_leads",
+      "aliases": ["waterproof_gland_leads"],
+      "label": "Waterproof Compression Terminal Gland & 1m 4-Wire Shielded Lead",
+      "label_en": "Waterproof Compression Terminal Gland & 1m 4-Wire Shielded Lead",
+      "z_start_mm": 122.0,
+      "z_end_mm": 140.0,
+      "diameter_mm": 15.5,
+      "color_hex": "#7B8794",
+      "manual_pages": [1, 4, 5, 9],
+      "probable_faults": [
+        "Twisted or severed internal conductors caused by unscrewing the barrel without loosening the rear gland nut first (First Step violation)",
+        "Swapped RS-485 differential pair Yellow (A+) and Green (B-), or ungrounded shield drain",
+        "Loose tapered compression nut allowing axial strain directly onto internal PCB solder pads"
+      ],
+      "probable_faults_en": [
+        "Twisted or severed internal conductors caused by unscrewing the barrel without loosening the rear gland nut first (First Step violation)",
+        "Swapped RS-485 differential pair Yellow (A+) and Green (B-), or ungrounded shield drain",
+        "Loose tapered compression nut allowing axial strain directly onto internal PCB solder pads"
+      ],
+      "electrical_symptoms": [
+        "Complete absence of RS-485 replies due to inverted A+/B- polarity or broken conductor",
+        "Intermittent power brownouts when flexing the 1-meter lead jacket",
+        "Elevated packet loss from EMI pickup on long industrial bus runs (up to 1200 m)"
+      ],
+      "recommended_actions": [
+        "Verify the 4-wire color code: Red = V+ (DC 5~24V), Black = GND, Yellow = RS-485 A+, Green = RS-485 B-",
+        "Check end-to-end conductor continuity, ground the cable shield at the converter end, and torque the ribbed waterproof gland nut"
+      ],
+      "recommended_actions_en": [
+        "Verify the 4-wire color code: Red = V+ (DC 5~24V), Black = GND, Yellow = RS-485 A+, Green = RS-485 B-",
+        "Check end-to-end conductor continuity, ground the cable shield at the converter end, and torque the ribbed waterproof gland nut"
+      ]
+    }
+  ],
+  "leads": [
+    {
+      "id": "v_plus",
+      "name": "Red V+",
+      "color": "Red",
+      "label": "V+",
+      "color_hex": "#E53935",
+      "function": "Power supply positive (DC 5~24V positive terminal)"
+    },
+    {
+      "id": "gnd",
+      "name": "Black GND",
+      "color": "Black",
+      "label": "GND",
+      "color_hex": "#212529",
+      "function": "Public ground (DC negative terminal & RS-485 common-mode reference)"
+    },
+    {
+      "id": "rs485_a",
+      "name": "Yellow A+",
+      "color": "Yellow",
+      "label": "A+",
+      "color_hex": "#FDD835",
+      "function": "RS485 interface A+ (non-inverting differential data line)"
+    },
+    {
+      "id": "rs485_b",
+      "name": "Green B-",
+      "color": "Green",
+      "label": "B-",
+      "color_hex": "#43A047",
+      "function": "RS485 interface B- (inverting differential data line)"
+    }
+  ],
+  "dip_switch": {
+    "positions": 8,
+    "bit_weights": [128, 64, 32, 16, 8, 4, 2, 1],
+    "example_on": [1, 3, 4],
+    "example_address": 176,
+    "opening_procedure": [
+      "First Step: Unscrew the rear waterproof terminal nut so the lead cable rotates freely without twisting.",
+      "Second Step: Unscrew the housing barrel at the middle seam to expose the internal 8-position DIP switch PCB."
+    ],
+    "opening_procedure_en": [
+      "First Step: Unscrew the rear waterproof terminal nut so the lead cable rotates freely without twisting.",
+      "Second Step: Unscrew the housing barrel at the middle seam to expose the internal 8-position DIP switch PCB."
+    ]
+  },
+  "modbus_registers": [
+    {
+      "address_hex": "0x0000",
+      "address_dec": 0,
+      "name": "Temperature",
+      "unit": "0.1°C",
+      "format": "16-bit signed two's complement, MSB first",
+      "abnormal_value_hex": "0x7FFF",
+      "access": "R"
+    },
+    {
+      "address_hex": "0x0001",
+      "address_dec": 1,
+      "name": "Relative humidity",
+      "unit": "0.1%RH",
+      "format": "16-bit complement format, MSB first",
+      "abnormal_value_hex": "0x7FFF",
+      "access": "R"
+    },
+    {
+      "address_hex": "0x0002",
+      "address_dec": 2,
+      "name": "Reserved 1",
+      "unit": "raw",
+      "format": "16-bit unsigned",
+      "abnormal_value_hex": null,
+      "access": "R"
+    },
+    {
+      "address_hex": "0x0003",
+      "address_dec": 3,
+      "name": "Reserved 2",
+      "unit": "raw",
+      "format": "16-bit unsigned",
+      "abnormal_value_hex": null,
+      "access": "R"
+    },
+    {
+      "address_hex": "0x0004",
+      "address_dec": 4,
+      "name": "Address code",
+      "unit": "slave_id",
+      "format": "16-bit unsigned (1..255, set by DIP-8 switch)",
+      "abnormal_value_hex": null,
+      "access": "R"
+    },
+    {
+      "address_hex": "0x0005",
+      "address_dec": 5,
+      "name": "Baud rate",
+      "unit": "bps",
+      "format": "4800 (0x12C0) / 9600 (0x2580) / 19200 (0x4B00)",
+      "abnormal_value_hex": null,
+      "access": "R/W"
+    },
+    {
+      "address_hex": "0x0006",
+      "address_dec": 6,
+      "name": "Hardware version",
+      "unit": "version",
+      "format": "16-bit hex (e.g. 0x0600)",
+      "abnormal_value_hex": null,
+      "access": "R"
+    },
+    {
+      "address_hex": "0x0007",
+      "address_dec": 7,
+      "name": "Software version",
+      "unit": "0.1 version",
+      "format": "16-bit unsigned (e.g. 0x000A = 10 = V1.0)",
+      "abnormal_value_hex": null,
+      "access": "R"
+    }
+  ],
+  "modbus_protocol": {
+    "function_codes": {
+      "0x03": "Read holding registers (0x0000..0x0007)",
+      "0x06": "Write single holding register (0x0005 baud rate)"
+    },
+    "abnormal_response_msb_mask": "0x80",
+    "error_codes": {
+      "01": "Illegal function code",
+      "02": "Illegal data address",
+      "03": "Illegal data value"
+    },
+    "crc16": {
+      "init_hex": "0xFFFF",
+      "polynomial_hex": "0xA001",
+      "byte_order": "little-endian (CRC low byte first, CRC high byte second)"
+    }
+  },
+  "manual_pages": [
+    {
+      "page": 1,
+      "title": "Cover & Sensor Physical Anatomy Callouts",
+      "title_en": "Cover & Sensor Physical Anatomy Callouts",
+      "image_url": "/assets/manual_pages/page_1.png",
+      "highlights": [
+        "TZ THT-02 User's Manual V1.1",
+        "Stainless steel strainer, Quality probe, Wiring, Mounting holes, Standard 1m lead, Waterproof terminal"
+      ]
+    },
+    {
+      "page": 2,
+      "title": "Overview, Features & Application Areas",
+      "title_en": "Overview, Features & Application Areas",
+      "image_url": "/assets/manual_pages/page_2.png",
+      "highlights": [
+        "RS-485 Modbus-RTU interface",
+        "SHT30 CMOSens capacitive humidity & energy-gap temperature chip",
+        "On-board DIP switch address setting; HVAC, cleanroom, pharma & warehouse applications"
+      ]
+    },
+    {
+      "page": 3,
+      "title": "Technical Data: Power, RS-485, Temperature & Humidity",
+      "title_en": "Technical Data: Power, RS-485, Temperature & Humidity",
+      "image_url": "/assets/manual_pages/page_3.png",
+      "highlights": [
+        "Power: DC 5~24V, 5mA",
+        "RS-485: 4800/9600/19200 bps, 1200m max distance, 32 theoretical nodes",
+        "Temp (SHT30): -40~125°C, res 0.1°C, ±0.3°C (0~60°C)",
+        "Humidity (SHT3X): 5~95%RH, res 0.1%RH, ±2%RH, ~8s response, <±0.25%RH/yr drift"
+      ]
+    },
+    {
+      "page": 4,
+      "title": "Environmental Conditions, 4-Lead Wiring & PC Bus Schematic",
+      "title_en": "Environmental Conditions, 4-Lead Wiring & PC Bus Schematic",
+      "image_url": "/assets/manual_pages/page_4.png",
+      "highlights": [
+        "Working/Storage environment: -40~85°C / 5~95%RH (Non-condensing)",
+        "Leads: Green = B-, Yellow = A+, Black = GND, Red = V+",
+        "Common-mode voltage warning: tie sensor GND and cable shield to RS-232/RS-485 transverter ground"
+      ]
+    },
+    {
+      "page": 5,
+      "title": "8-Bit DIP Switch Address Code, 2-Step Opening & Data Frame Format",
+      "title_en": "8-Bit DIP Switch Address Code, 2-Step Opening & Data Frame Format",
+      "image_url": "/assets/manual_pages/page_5.png",
+      "highlights": [
+        "DIP weights 1..8 = [128, 64, 32, 16, 8, 4, 2, 1]; example 1,3,4 ON = 176",
+        "First Step: unscrew waterproof terminal nut; Second Step: unscrew barrel to access DIP switch",
+        "Default serial frame: 1 start bit, 8 data bits, 0 parity, 1 stop bit (8N1)"
+      ]
+    },
+    {
+      "page": 6,
+      "title": "RTU Frame Timing & Holding Register Map",
+      "title_en": "RTU Frame Timing & Holding Register Map",
+      "image_url": "/assets/manual_pages/page_6.png",
+      "highlights": [
+        ">=3.5 char frame boundary; >1.5 char inter-byte gap causes silent drop",
+        "0x0000 Temp (0.1°C) & 0x0001 RH (0.1%RH) — 7FFF H means sensor is abnormal",
+        "0x0004 DIP Address (R), 0x0005 Baud Rate 4800/9600/19200 (R/W), 0x0006 HW ver, 0x0007 SW ver"
+      ]
+    },
+    {
+      "page": 7,
+      "title": "Modbus Poll Example & Function Code 03 Read Request/Response",
+      "title_en": "Modbus Poll Example & Function Code 03 Read Request/Response",
+      "image_url": "/assets/manual_pages/page_7.png",
+      "highlights": [
+        "Function 0x03 host request: 01 03 00 00 00 08 44 0C",
+        "21-byte response frame layout for registers 0x0000..0x0007"
+      ]
+    },
+    {
+      "page": 8,
+      "title": "Data Decoding Example, Function Code 06 Baud Write & Abnormal Response",
+      "title_en": "Data Decoding Example, Function Code 06 Baud Write & Abnormal Response",
+      "image_url": "/assets/manual_pages/page_8.png",
+      "highlights": [
+        "00FAH = 25.0°C, 0258H = 60.0%RH, 2580H = 9600 bps, 000AH = V1.0",
+        "Function 0x06 set 9600 bps: 01 06 00 05 25 80 82 FB",
+        "Abnormal response sets function code MSB to 1 (0x83 / 0x86)"
+      ]
+    },
+    {
+      "page": 9,
+      "title": "Exception Error Codes, CRC-16 Algorithm & Mechanical Dimensions",
+      "title_en": "Exception Error Codes, CRC-16 Algorithm & Mechanical Dimensions",
+      "image_url": "/assets/manual_pages/page_9.png",
+      "highlights": [
+        "Error codes: 01 Illegal function, 02 Illegal data address, 03 Illegal data value",
+        "CRC-16 init 0xFFFF, right-shift XOR polynomial 0xA001",
+        "Physical envelope: 140 MM length x 16 MM diameter (16.0 mm OD)"
+      ]
+    }
+  ]
+}

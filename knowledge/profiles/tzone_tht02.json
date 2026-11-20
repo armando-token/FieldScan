@@ -1,0 +1,225 @@
+{
+  "schema_version": 1,
+  "profile_id": "tzone_tht02",
+  "sensor_id": "TZ-THT-02",
+  "manufacturer": "Tzone Digital Technology Co., Ltd.",
+  "model": "TZ THT-02",
+  "aliases": [
+    "THT-02",
+    "THT02",
+    "TZ THT-02",
+    "THT 02",
+    "THS 00",
+    "THS-00",
+    "THS00",
+    "THP 02",
+    "THP-02",
+    "THP02"
+  ],
+  "compatible_revisions": [
+    "V1.0",
+    "V1.1"
+  ],
+  "visible_manual_revision": "V1.1",
+  "tested_profile_revision": "2026.11.19-r1",
+  "validation_status": "supported_bench_readonly",
+  "revision_notes": "Cover page declares V1.1 while running header prints Mach 18th, 2021 and Page 8 register 0x0007 decode example shows 000AH = V1.0.",
+  "identification": {
+    "public_id_registers": [
+      "0x0004",
+      "0x0006",
+      "0x0007"
+    ],
+    "requires_physical_label_confirmation": true,
+    "known_bench_unit_code_hint": "11240221"
+  },
+  "references": {
+    "manual_document": "/assets/THT02_Users_Manual_v1.1.pdf",
+    "manual_version": "V1.1",
+    "manual_sha256": "fe5be7370ac42ad80d0e43c32c2b61d5f971a33ea9175c8405398d0fde4932cb",
+    "manual_page_count": 9,
+    "spec_document": "/knowledge/THT02_spec.json",
+    "register_table_pages": [6, 7, 8],
+    "step_citations": {
+      "identify": [
+        {"page": 1, "section": "1. Product Overview & Physical Callouts"},
+        {"page": 9, "section": "7. Mechanical Dimensions (140 x 16 mm)"}
+      ],
+      "as_found": [
+        {"page": 4, "section": "4. Wiring Diagram & Working Environment"},
+        {"page": 6, "section": "5.2 Holding Register Map & 7FFFH Sentinel"}
+      ],
+      "inspect": [
+        {"page": 5, "section": "5.1 8-Bit DIP Switch Address & 2-Step Opening"},
+        {"page": 4, "section": "4.2 4-Lead Color Assignment (Red/Black/Yellow/Green)"}
+      ],
+      "verify_modbus": [
+        {"page": 7, "section": "5.3 Function 0x03 Read Request & 21-Byte Response"},
+        {"page": 6, "section": "5.2 Registers 0x0000 Temperature & 0x0001 Relative Humidity"},
+        {"page": 9, "section": "6. Exception Codes & CRC-16 (0xA001)"}
+      ],
+      "review": [
+        {"page": 6, "section": "5.2 Abnormal Value 7FFFH Diagnostics"},
+        {"page": 8, "section": "5.4 Exception Response Mask 0x80"}
+      ],
+      "close": [
+        {"page": 5, "section": "5.1 Housing Re-Assembly Sequence"},
+        {"page": 9, "section": "7. Envelope & Mounting Verification"}
+      ]
+    }
+  },
+  "transport": {
+    "supported_protocols": [
+      "modbus_rtu_serial",
+      "modbus_tcp_mbap",
+      "rtu_over_tcp_bridge"
+    ],
+    "allowed_baud_bps": [4800, 9600, 19200],
+    "default_baud_bps": 9600,
+    "frame_format": "8N1",
+    "slave_id_range": [1, 247],
+    "default_slave_id": 1,
+    "pilot_readonly": true,
+    "allowed_function_codes_pilot": [3],
+    "poll_interval_s": 1.0,
+    "request_timeout_s": 1.0,
+    "max_sample_age_s": 3.0,
+    "reconnect_backoff_s": [0.5, 1.0, 2.0, 4.0]
+  },
+  "channels": [
+    {
+      "channel_id": "temperature",
+      "register_hex": "0x0000",
+      "register_dec": 0,
+      "encoding": "int16_be",
+      "scale": 0.1,
+      "unit": "Cel",
+      "display_unit": "degC",
+      "range": [-40.0, 125.0],
+      "working_range": [-40.0, 85.0],
+      "sentinel_hex": "0x7FFF",
+      "sentinel_int": 32767,
+      "access": "R"
+    },
+    {
+      "channel_id": "relative_humidity",
+      "register_hex": "0x0001",
+      "register_dec": 1,
+      "encoding": "uint16_be",
+      "scale": 0.1,
+      "unit": "%RH",
+      "display_unit": "%RH",
+      "range": [0.0, 100.0],
+      "working_range": [5.0, 95.0],
+      "sentinel_hex": "0x7FFF",
+      "sentinel_int": 32767,
+      "access": "R"
+    }
+  ],
+  "metadata_registers": [
+    {"register_hex": "0x0004", "register_dec": 4, "name": "slave_id", "access": "R"},
+    {"register_hex": "0x0005", "register_dec": 5, "name": "baud_rate", "access": "R/W_DOCUMENTED_LOCKED_IN_PILOT"},
+    {"register_hex": "0x0006", "register_dec": 6, "name": "hw_version", "access": "R"},
+    {"register_hex": "0x0007", "register_dec": 7, "name": "sw_version", "access": "R"}
+  ],
+  "calibration_extension": {
+    "status": "planned",
+    "supports_field_offset_write": false,
+    "reason": "Published TZ THT-02 Manual V1.1 documents baud rate (0x0005) as the only writable holding register and exposes no temperature or relative humidity offset register."
+  },
+  "procedure": {
+    "initial_step": "identify",
+    "steps": [
+      {
+        "step_id": "identify",
+        "title_en": "1. Identify Asset & Transport",
+        "component_3d_id": "mounting_flange",
+        "preferred_roi": "label_barrel",
+        "accepts_auto_photo": true,
+        "required_for_full_close": ["asset_confirmed"],
+        "allowed_transitions": ["as_found"],
+        "suggested_prompts_en": [
+          "Confirm TZ THT-02 unit and open inspection",
+          "What should I check first on this sensor?"
+        ]
+      },
+      {
+        "step_id": "as_found",
+        "title_en": "2. Record Initial As-Found State",
+        "component_3d_id": "strainer_head",
+        "preferred_roi": "full_sensor",
+        "accepts_auto_photo": true,
+        "required_for_full_close": ["as_found_recorded"],
+        "allowed_transitions": ["inspect", "verify_modbus"],
+        "suggested_prompts_en": [
+          "Is the sensor responding right now?",
+          "Capture initial as-found observation"
+        ]
+      },
+      {
+        "step_id": "inspect",
+        "title_en": "3. Optical & Component Inspection",
+        "component_3d_id": "upper_barrel_dip",
+        "preferred_roi": "dip_pcb_or_connector",
+        "accepts_auto_photo": true,
+        "required_for_full_close": ["inspection_logged"],
+        "allowed_transitions": ["verify_modbus", "inspect", "close"],
+        "suggested_prompts_en": [
+          "Show me the connector and wiring",
+          "Show manual page 5 for DIP-8 switches"
+        ]
+      },
+      {
+        "step_id": "verify_modbus",
+        "title_en": "4. Read-Only Modbus Bench Verification",
+        "component_3d_id": "lower_barrel_rs485",
+        "preferred_roi": "full_sensor",
+        "accepts_auto_photo": true,
+        "required_for_full_close": ["fresh_modbus_observation"],
+        "allowed_transitions": ["close", "review", "inspect"],
+        "suggested_prompts_en": [
+          "Start read-only sensor check",
+          "Read current temperature and relative humidity"
+        ]
+      },
+      {
+        "step_id": "review",
+        "title_en": "5. Review Fault or Partial Evidence",
+        "component_3d_id": "strainer_head",
+        "preferred_roi": "strainer_head",
+        "accepts_auto_photo": true,
+        "required_for_full_close": [],
+        "allowed_transitions": ["inspect", "verify_modbus", "close"],
+        "suggested_prompts_en": [
+          "Repeat current diagnostic step",
+          "Close partial maintenance report"
+        ]
+      },
+      {
+        "step_id": "close",
+        "title_en": "6. As-Left Summary & Local Dossier",
+        "component_3d_id": "mounting_flange",
+        "preferred_roi": "full_sensor",
+        "accepts_auto_photo": false,
+        "required_for_full_close": [],
+        "allowed_transitions": ["close"],
+        "suggested_prompts_en": [
+          "Export maintenance PDF and JSON dossier"
+        ]
+      }
+    ]
+  },
+  "change_control": {
+    "approved_date_utc": "2026-11-19T00:00:00Z",
+    "contract_version": "2.1.0",
+    "backed_by_tests": [
+      "DAT-01..09",
+      "BUS-03..10",
+      "BUS-12",
+      "FLU-01..06",
+      "VIS-01..10",
+      "EXP-01..07",
+      "CAL-00"
+    ]
+  }
+}

@@ -13,7 +13,7 @@
   />
   <title>FieldScan CAD — Industrial Inspection HMI</title>
   <link rel="stylesheet" href="/static/vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="/static/styles.css?v=20261120v15" />
+  <link rel="stylesheet" href="/static/styles.css?v=20261120v16" />
 </head>
 <body>
 <div class="shell">
@@ -327,6 +327,7 @@
             <option value="sim_strainer_patch">Sim: Strainer Fault</option>
             <option value="sim_gland_fault">Sim: Gland Fault</option>
           </select>
+          <button type="button" class="tb-btn" id="btnRestoreLiveCamera" title="Restore Live Camera" aria-label="Restore Live Camera" style="color:var(--green);border-color:rgba(16,185,129,0.45);"><i data-lucide="video"></i></button>
           <button type="button" class="tb-btn" id="btnUploadPhoto" title="Upload bench photo" aria-label="Upload bench photo"><i data-lucide="upload"></i></button>
           <input type="file" id="photoUploadInput" accept="image/*" hidden />
         </div>
@@ -663,6 +664,6 @@
 
 <script src="/static/vendor/lucide.min.js"></script>
 <script src="/static/vendor/uPlot.iife.min.js"></script>
-<script type="module" src="/static/app.js?v=20261120v15"></script>
+<script type="module" src="/static/app.js?v=20261120v16"></script>
 </body>
 </html>

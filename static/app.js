@@ -251,6 +251,7 @@ const dom = {
   catalogOriginLabel: document.getElementById('catalogOriginLabel'),
   catalogUpdateDot: document.getElementById('catalogUpdateDot'),
   selectCameraMode: document.getElementById('selectCameraMode'),
+  btnRestoreLiveCamera: document.getElementById('btnRestoreLiveCamera'),
   btnUploadPhoto: document.getElementById('btnUploadPhoto'),
   photoUploadInput: document.getElementById('photoUploadInput'),
   selectModbusMode: document.getElementById('selectModbusMode'),
@@ -3911,7 +3912,7 @@ function drawFallbackScannerFrame() {
     ctx.stroke();
   }
 
-  if (state.activeCameraMode !== 'usb') {
+  if (String(state.activeCameraMode || '').startsWith('sim_')) {
     ctx.save();
     ctx.translate(w / 2, h / 2);
     ctx.rotate(THREE.MathUtils.degToRad(state.cameraAngleDeg));
@@ -5471,8 +5472,14 @@ const COPILOT_ACTION_HANDLERS = {
     if (dom.manualModal) dom.manualModal.hidden = true;
     dom.chatPage?.classList.remove('open');
     dom.toolsPage?.classList.remove('open');
+    const curMode = String(state.activeCameraMode || '').toLowerCase();
+    if (curMode.startsWith('sim_') || curMode === 'custom') {
+      const liveMode = (window.FIELDSCAN_IOS_NATIVE || isEmbeddedIosLoopbackHost()) ? 'ipad_camera' : 'usb';
+      if (dom.selectCameraMode) dom.selectCameraMode.value = liveMode;
+      await switchCameraMode(liveMode);
+    }
     await waitNextAnimationFrames(1);
-    return { status: 'applied', target: 'videoFrame' };
+    return { status: 'applied', target: 'videoFrame', camera_mode: state.activeCameraMode };
   },
   'camera.show_dip_macro': async (params) => {
     const caps = getActiveTwinCapabilities();
@@ -5829,6 +5836,7 @@ async function runStep1OpenInspection() {
     text: 'Inspect this TZ THT-02 sensor: the housing is open, there is no Modbus signal, and the DIP-8 switches look unconfigured.',
   });
 
+  // Always drive the 3D Digital Twin & Manual; NEVER replace the live physical camera feed with a synthetic simulation
   setExplodedState(true, { zoomDip: true });
   setManualPage(5, { flash: true });
 
@@ -5838,10 +5846,12 @@ async function runStep1OpenInspection() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         step: 'inspect_open',
-        sync_simulator: state.activeCameraMode !== 'usb',
+        sync_simulator: false,
       }),
     });
-    dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
+    if (state.videoStreamFailed) {
+      dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
+    }
     handleCopilotResponse({ ...res, model: 'AI VOICE ENGINEER · STEP 1 INSPECTION' });
     pollTelemetry();
   } catch (_err) {
@@ -5862,8 +5872,14 @@ async function runStep2ModbusDipGuidance() {
     text: 'Zoom in on the DIP-8 block and configure it for standard Industrial Modbus RTU Slave 1 (9600 bps, 8N1).',
   });
 
+  // Explode & zoom the 3D Digital Twin onto the DIP-8 block while keeping the live iPad camera completely unobstructed
   setExplodedState(true, { zoomDip: true });
-  setDipPipVisibility(true);
+  const isHandheldLiveCam = Boolean(
+    window.FIELDSCAN_IOS_NATIVE || isEmbeddedIosLoopbackHost() || state.activeCameraMode === 'ipad_camera'
+  );
+  if (!isHandheldLiveCam) {
+    setDipPipVisibility(true);
+  }
   focusDip3DCamera();
   setManualPage(5, { flash: true });
 
@@ -5891,6 +5907,8 @@ async function runStep2ModbusDipGuidance() {
 async function runStep3ConnectAndValidateModbus() {
   setWorkflowActiveStep(3);
   const targetSlave = computeDipAddress() || 1;
+  setExplodedState(false);
+  reset3DCamera();
 
   appendChatMessage({
     role: 'user',
@@ -5907,7 +5925,9 @@ async function runStep3ConnectAndValidateModbus() {
         slave_id: targetSlave,
       }),
     });
-    dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
+    if (state.videoStreamFailed) {
+      dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
+    }
     if (res.event_id) {
       state.seenRepairEventId = Math.max(state.seenRepairEventId, Number(res.event_id));
     }
@@ -7261,9 +7281,16 @@ function bindWorkstationEvents() {
     }
   });
 
-  // Clean Dropdown Selectors + Upload Icon Button
+  // Clean Dropdown Selectors + Live Camera Restore + Upload Icon Button
   dom.selectCameraMode.addEventListener('change', (e) => {
     switchCameraMode(e.target.value);
+  });
+
+  dom.btnRestoreLiveCamera?.addEventListener('click', async () => {
+    const liveMode = (window.FIELDSCAN_IOS_NATIVE || isEmbeddedIosLoopbackHost()) ? 'ipad_camera' : 'usb';
+    if (dom.selectCameraMode) dom.selectCameraMode.value = liveMode;
+    await switchCameraMode(liveMode);
+    dom.toolsPage?.classList.remove('open');
   });
 
   dom.btnUploadPhoto.addEventListener('click', () => {

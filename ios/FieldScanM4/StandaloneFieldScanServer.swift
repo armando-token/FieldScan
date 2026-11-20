@@ -761,7 +761,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         // 8. Camera Mode Switch (`POST /api/video/mode`, `/api/camera/mode`, `/api/scanner/mode`)
         if req.method == "POST" && (path == "/api/video/mode" || path == "/api/camera/mode" || path == "/api/scanner/mode") {
             let bodyJSON = parseJSONBody(req.body)
-            let mode = (bodyJSON["mode"] as? String) ?? "sim_normal"
+            let mode = (bodyJSON["mode"] as? String) ?? "ipad_camera"
             setCameraMode(mode)
             sendJSONResponse(on: connection, statusCode: 200, payload: buildUnifiedStatus())
             return
@@ -1653,7 +1653,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
     public func setCameraMode(_ rawMode: String) {
         let mode = rawMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         stateLock.lock()
-        activeCameraMode = mode.isEmpty ? "sim_normal" : mode
+        activeCameraMode = mode.isEmpty ? "ipad_camera" : mode
         if mode == "ipad_camera" || mode == "usb" || mode == "uvc" || mode == "auto" {
             cameraSourceLabel = "ipad:avfoundation:back"
         } else if mode == "custom" {
@@ -3801,9 +3801,11 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let step = ((payload["step"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         if step == "inspect_open" {
-            let syncSim = boolFromAny(payload["sync_simulator"], defaultValue: true)
-            if syncSim {
+            let syncSim = boolFromAny(payload["sync_simulator"], defaultValue: false)
+            if syncSim && currentCameraMode().hasPrefix("sim_") {
                 setCameraMode("sim_open_dip")
+            }
+            if syncSim && activeModbusMode.hasPrefix("sim_") {
                 setModbusMode(mode: "sim_disconnected", slaveId: nil, baudBps: nil)
             }
             return runStartOpenInspection()

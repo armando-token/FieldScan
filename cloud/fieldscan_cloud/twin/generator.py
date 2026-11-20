@@ -947,8 +947,22 @@ def _build_shaded_primitives(
 
         out: list[trimesh.Trimesh] = []
         if mode == "linear":
-            step = [float(v) * scale for v in spec.get("step_mm", [0.0, 0.0, 1.0])]
-            start_off = [float(v) * scale for v in spec.get("start_offset_mm", [0.0, 0.0, 0.0])]
+            raw_step = spec.get("step_mm", [0.0, 0.0, 1.0])
+            if isinstance(raw_step, (int, float)):
+                p_axis = str(spec.get("axis", "z")).strip().lower()
+                s_val = float(raw_step) * scale
+                step = [s_val, 0.0, 0.0] if p_axis == "x" else ([0.0, s_val, 0.0] if p_axis == "y" else [0.0, 0.0, s_val])
+            else:
+                step = [float(v) * scale for v in raw_step]
+                while len(step) < 3:
+                    step.append(0.0)
+            raw_start = spec.get("start_offset_mm", [0.0, 0.0, 0.0])
+            if isinstance(raw_start, (int, float)):
+                start_off = [0.0, 0.0, float(raw_start) * scale]
+            else:
+                start_off = [float(v) * scale for v in raw_start]
+                while len(start_off) < 3:
+                    start_off.append(0.0)
             centered = bool(spec.get("centered", False))
             center_shift = [-0.5 * (count - 1) * step[i] for i in range(3)] if centered else [0.0, 0.0, 0.0]
             for i in range(count):

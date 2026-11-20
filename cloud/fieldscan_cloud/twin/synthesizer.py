@@ -947,8 +947,9 @@ def validate_recipe_schema(
 
 
 def _normalize_vlm_recipe(raw_recipe: dict[str, Any]) -> dict[str, Any]:
-    """Flatten common harmless VLM nesting variants (e.g. `part.geometry.{kind,...}` -> top-level part fields)."""
+    """Flatten common harmless VLM nesting/alias variants before strict schema & semantic validation."""
     parts = raw_recipe.get("parts")
+    seen_part_ids: set[str] = set()
     if isinstance(parts, list):
         fixed_parts: list[Any] = []
         for part in parts:
@@ -961,10 +962,34 @@ def _normalize_vlm_recipe(raw_recipe: dict[str, Any]) -> dict[str, Any]:
                         p.setdefault(k, v)
                 if not p.get("kind") and isinstance(p.get("children"), list) and p["children"]:
                     p["kind"] = "composite_part"
+                pid = str(p.get("part_id", "")).strip()
+                if pid:
+                    seen_part_ids.add(pid)
                 fixed_parts.append(p)
             else:
                 fixed_parts.append(part)
         raw_recipe["parts"] = fixed_parts
+
+    actions = raw_recipe.get("actions")
+    if isinstance(actions, list):
+        fixed_actions: list[dict[str, Any]] = []
+        for idx, act in enumerate(actions):
+            if not isinstance(act, dict):
+                continue
+            a = dict(act)
+            pid = str(
+                a.get("part_id")
+                or a.get("target_part_id")
+                or a.get("target_part")
+                or a.get("part")
+                or ""
+            ).strip()
+            if not pid or (seen_part_ids and pid not in seen_part_ids):
+                continue
+            a["part_id"] = pid
+            a.setdefault("action_id", f"act_{idx + 1}")
+            fixed_actions.append(a)
+        raw_recipe["actions"] = fixed_actions
     return raw_recipe
 
 
@@ -1002,9 +1027,10 @@ def build_recipe_synthesis_prompts(
         "- hex_prism: {kind: 'hex_prism', across_flats_mm, z_start_mm, z_end_mm, chamfer_mm, material}\n"
         "- rounded_box: {kind: 'rounded_box', size_mm: [sx,sy,sz], center_mm: [cx,cy,cz], bevel_mm, material}\n"
         "- tube_path: {kind: 'tube_path', points_mm: [[x,y,z],...], diameter_mm, sections, material}\n"
-        "- pattern: {kind: 'pattern', mode: 'linear'|'radial', count, step_mm|radius_mm, item: <primitive>}\n"
+        "- pattern: {kind: 'pattern', mode: 'linear'|'radial', count, step_mm: [dx,dy,dz] | radius_mm, item: <primitive>}\n"
         "- composite_part: {kind: 'composite_part', children: [<primitive>, ...]}\n"
         "Every item in `parts[]` MUST include top-level `part_id`, `node_id` (unique PascalCase), `aliases`, `kind`, `citation_id` (format '<document_id>:p<page>:section1'), and `page` (integer 1..page_count).\n"
+        "Every item in `actions[]` MUST include `action_id`, `part_id` (MUST exactly match one of `parts[].part_id`), `label`, `citation_id`, and `page`.\n"
         "Use `material: {name, baseColorFactor: [r,g,b,1.0], metallicFactor, roughnessFactor}` for realistic PBR surfaces.\n"
         "Keep `control_measurements_m` consistent with your actual part coordinates in meters (1 mm = 0.001 m)."
     )

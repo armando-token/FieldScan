@@ -38,8 +38,9 @@ MAX_HARVESTED_IMAGES = 6
 
 _EXCLUDED_IMAGE_URL_RE = re.compile(
     r"(logo|favicon|sprite|icon|banner|avatar|badge|flag|pixel|spacer|placeholder|"
+    r"no[_-]?photo|no[_-]?image|not[_-]?found|default[_-]?img|"
     r"trustpilot|facebook|twitter|linkedin|instagram|youtube|whatsapp|wechat|qr[_-]?code|"
-    r"payment|visa|mastercard|paypal|loading|spinner|\.svg(\?|$)|\.gif(\?|$))",
+    r"payment|visa|mastercard|paypal|apple-pay|google-pay|loading|spinner|\.svg(\?|$)|\.gif(\?|$))",
     re.IGNORECASE,
 )
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\((https://[^)\s\"']+)\)", re.IGNORECASE)

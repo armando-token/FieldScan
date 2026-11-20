@@ -608,6 +608,38 @@ def test_stage3_vlm_providers_openai_gemini_anthropic(tmp_path: Path):
     assert "response_format" not in mantle_calls[-1]
     assert "max_completion_tokens" in mantle_calls[-1] and "max_tokens" not in mantle_calls[-1]
 
+    # Bedrock Mantle per-prompt image cap (`At most 3 image(s)`) auto-packs 6 images into 3 labeled contact sheets
+    img_cap_counts: list[int] = []
+
+    def _mantle_img_cap_handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content.decode("utf-8"))
+        user_parts = body["messages"][-1]["content"]
+        n_imgs = sum(1 for item in user_parts if isinstance(item, dict) and item.get("type") == "image_url")
+        img_cap_counts.append(n_imgs)
+        if n_imgs > 3:
+            return httpx.Response(400, text="BadRequestError: At most 3 image(s) may be provided in one prompt.")
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"ok": true, "packed_imgs": ' + str(n_imgs) + '}'}}],
+                "usage": {"prompt_tokens": 500, "completion_tokens": 20, "total_tokens": 520},
+            },
+        )
+
+    bm_cap = VlmClient(
+        provider="bedrock_mantle",
+        api_url="https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+        model="mistral.mistral-large-3-675b-instruct",
+        api_key="bedrock-mantle-key",
+        transport=httpx.MockTransport(_mantle_img_cap_handler),
+    )
+    assert bm_cap.generate_json(system_prompt="s", user_prompt="u", image_paths=[sample_img] * 6) == {
+        "ok": True,
+        "packed_imgs": 3,
+    }
+    assert img_cap_counts == [6, 3]
+    assert bm_cap.usage_summary() == {"calls": 1, "prompt_tokens": 500, "completion_tokens": 20, "total_tokens": 520}
+
     # Bedrock Mantle with `anthropic.*` auto-routes to `/anthropic/v1/messages` with Bearer auth
     def _mantle_anth_handler(req: httpx.Request) -> httpx.Response:
         assert str(req.url) == "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"

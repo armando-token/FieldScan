@@ -16,13 +16,14 @@ from dataclasses import dataclass
 from io import BytesIO
 import json
 import logging
+import math
 from pathlib import Path
 import re
 from typing import Any
 from urllib.parse import quote as url_quote
 
 import httpx
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageDraw, UnidentifiedImageError
 
 from fieldscan_cloud.documents.pipeline import DocumentBuildOutput
 from fieldscan_cloud.sources.image_harvester import HarvestedImage
@@ -162,6 +163,67 @@ def _resolve_bedrock_converse_url(raw_url: str, model: str) -> str:
     if stripped.endswith("/converse"):
         return stripped
     return f"{stripped}/model/{quoted_model}/converse"
+
+
+_IMAGE_LIMIT_RE = re.compile(
+    r"(?:at most|maximum(?:\s+of)?|max(?:imum)?\s+images?\s*(?:is|of|:)?)\s*(\d+)\s*image",
+    re.IGNORECASE,
+)
+
+
+def _pack_images_to_limit(
+    encoded_images: list[tuple[str, str]],
+    max_images: int,
+    *,
+    cell_px: int = 768,
+) -> list[tuple[str, str]]:
+    """
+    Preserve all visual references when an upstream VLM enforces a strict per-prompt image cap
+    (e.g. Bedrock Mantle `At most 3 image(s)`) by tiling excess images into labeled contact sheets.
+    """
+    if max_images < 1 or len(encoded_images) <= max_images:
+        return list(encoded_images)
+
+    # Distribute images across `max_images` balanced buckets preserving original order
+    n = len(encoded_images)
+    base_size, rem = divmod(n, max_images)
+    buckets: list[list[tuple[int, tuple[str, str]]]] = []
+    idx = 0
+    for b in range(max_images):
+        sz = base_size + (1 if b < rem else 0)
+        buckets.append([(idx + k + 1, encoded_images[idx + k]) for k in range(sz)])
+        idx += sz
+
+    packed: list[tuple[str, str]] = []
+    header_h = 26
+    for bucket in buckets:
+        if len(bucket) == 1:
+            packed.append(bucket[0][1])
+            continue
+        cols = 2 if len(bucket) >= 2 else 1
+        rows = int(math.ceil(len(bucket) / float(cols)))
+        canvas = Image.new("RGB", (cols * cell_px, rows * (cell_px + header_h)), (248, 249, 251))
+        draw = ImageDraw.Draw(canvas)
+        for slot, (orig_idx, (_mime, b64)) in enumerate(bucket):
+            r_idx, c_idx = divmod(slot, cols)
+            x0 = c_idx * cell_px
+            y0 = r_idx * (cell_px + header_h)
+            draw.rectangle([x0, y0, x0 + cell_px - 1, y0 + header_h - 1], fill=(32, 41, 56))
+            draw.text((x0 + 10, y0 + 7), f"REF IMAGE #{orig_idx}", fill=(245, 247, 250))
+            try:
+                with Image.open(BytesIO(base64.b64decode(b64))) as im:
+                    rgb = im.convert("RGB")
+                    rgb.thumbnail((cell_px - 8, cell_px - 8), Image.Resampling.LANCZOS)
+                    ox = x0 + (cell_px - rgb.width) // 2
+                    oy = y0 + header_h + (cell_px - rgb.height) // 2
+                    canvas.paste(rgb, (ox, oy))
+            except Exception:
+                pass
+            draw.rectangle([x0, y0, x0 + cell_px - 1, y0 + header_h + cell_px - 1], outline=(180, 188, 198), width=1)
+        buf = BytesIO()
+        canvas.save(buf, format="PNG", optimize=True)
+        packed.append(("image/png", base64.b64encode(buf.getvalue()).decode("ascii")))
+    return packed
 
 
 def _mime_to_bedrock_image_format(mime: str) -> str:
@@ -389,28 +451,31 @@ class VlmClient:
         temperature: float,
         json_mode: bool,
     ) -> dict[str, Any]:
-        messages: list[dict[str, Any]] = []
-        if system_prompt.strip():
-            messages.append({"role": "system", "content": system_prompt})
-        for turn in history:
-            role = turn.get("role", "")
-            content = str(turn.get("content", "")).strip()
-            if role in {"user", "assistant"} and content:
-                messages.append({"role": role, "content": content})
+        def _build_messages(imgs: list[tuple[str, str]]) -> list[dict[str, Any]]:
+            msgs: list[dict[str, Any]] = []
+            if system_prompt.strip():
+                msgs.append({"role": "system", "content": system_prompt})
+            for turn in history:
+                role = turn.get("role", "")
+                content = str(turn.get("content", "")).strip()
+                if role in {"user", "assistant"} and content:
+                    msgs.append({"role": role, "content": content})
 
-        if encoded_images:
-            user_content: list[dict[str, Any]] = [{"type": "text", "text": user_prompt}]
-            for mime, b64 in encoded_images:
-                user_content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
-            messages.append({"role": "user", "content": user_content})
-        else:
-            messages.append({"role": "user", "content": user_prompt})
+            if imgs:
+                user_content: list[dict[str, Any]] = [{"type": "text", "text": user_prompt}]
+                for mime, b64 in imgs:
+                    user_content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+                msgs.append({"role": "user", "content": user_content})
+            else:
+                msgs.append({"role": "user", "content": user_prompt})
+            return msgs
 
+        active_images = list(encoded_images)
         payload: dict[str, Any] = {
             "model": self.model,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "messages": messages,
+            "messages": _build_messages(active_images),
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
@@ -418,21 +483,33 @@ class VlmClient:
         url = _normalize_openai_chat_url(self.api_url)
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
 
-        # Retry gracefully on HTTP 400 parameter-dialect mismatches across Bedrock Mantle / frontier OpenAI models
+        # Retry gracefully on HTTP 400 parameter-dialect or image-cap mismatches across Bedrock Mantle / frontier models
         resp = self._post_raw(url, headers=headers, payload=payload)
-        for _ in range(3):
+        for _ in range(4):
             if resp.status_code != 400:
                 break
             err_lower = resp.text.lower()
             adjusted = False
-            if "response_format" in payload and ("response_format" in err_lower or "json_object" in err_lower):
+            img_cap_match = _IMAGE_LIMIT_RE.search(err_lower)
+            if img_cap_match:
+                cap = int(img_cap_match.group(1))
+                if cap >= 1 and len(active_images) > cap:
+                    logger.info(
+                        "VLM enforces max %d images/prompt; tiling %d images into labeled contact sheets",
+                        cap,
+                        len(active_images),
+                    )
+                    active_images = _pack_images_to_limit(active_images, cap)
+                    payload = {**payload, "messages": _build_messages(active_images)}
+                    adjusted = True
+            if not adjusted and "response_format" in payload and ("response_format" in err_lower or "json_object" in err_lower):
                 payload = {k: v for k, v in payload.items() if k != "response_format"}
                 adjusted = True
-            elif "max_tokens" in payload and "max_completion_tokens" in err_lower:
+            elif not adjusted and "max_tokens" in payload and "max_completion_tokens" in err_lower:
                 payload = {k: v for k, v in payload.items() if k != "max_tokens"}
                 payload["max_completion_tokens"] = max_tokens
                 adjusted = True
-            elif "temperature" in payload and "temperature" in err_lower:
+            elif not adjusted and "temperature" in payload and "temperature" in err_lower:
                 payload = {k: v for k, v in payload.items() if k != "temperature"}
                 adjusted = True
             if not adjusted:

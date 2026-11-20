@@ -147,6 +147,12 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
     private var permissionPromptInFlight: Bool = false
     private var audioSessionConfigured: Bool = false
     private var cachedPreferredVoice: AVSpeechSynthesisVoice?
+    private var cachedSpanishVoice: AVSpeechSynthesisVoice?
+    private var preferredVoiceLanguage: String = "en"
+    private var activePttTurnContext: [String: Any] = [:]
+    private var activeHandsFreeContext: [String: Any] = [:]
+    private var pendingDeferredVoiceTurns: [String: (text: String, language: String)] = [:]
+    private var lastDiagnosedLinkOnline: Bool?
     private var recentChatHistory: [[String: String]] = []
 
     // Temporal EMA smoothing & persistence hold for live camera sensor tracking
@@ -958,7 +964,10 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 ])
                 return
             }
-            if let sid = intFromAny(bodyJSON["slave_id"] ?? bodyJSON["unit_id"]), (1...247).contains(sid) {
+            // Only change authorized targetSlaveId when explicitly confirmed (`Finding 2`)
+            if boolFromAny(bodyJSON["confirmed"], defaultValue: false),
+               let sid = intFromAny(bodyJSON["slave_id"] ?? bodyJSON["unit_id"]),
+               (1...247).contains(sid) {
                 stateLock.lock()
                 targetSlaveId = sid
                 stateLock.unlock()
@@ -1030,6 +1039,19 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             }
         }
 
+        if path == "/api/sessions/evidence_policy" {
+            if req.method == "GET" {
+                sendJSONResponse(on: connection, statusCode: 200, payload: FieldScanSessionEngine.shared.getEvidencePolicy())
+                return
+            }
+            if req.method == "POST" {
+                let bodyJSON = parseJSONBody(req.body)
+                let updated = FieldScanSessionEngine.shared.configureEvidencePolicy(payload: bodyJSON)
+                sendJSONResponse(on: connection, statusCode: 200, payload: updated)
+                return
+            }
+        }
+
         if path.hasPrefix("/api/sessions/") {
             let rest = String(path.dropFirst("/api/sessions/".count))
             let comps = rest.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
@@ -1065,6 +1087,28 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                     if comps.count == 2 && comps[1] == "exports" && req.method == "POST" {
                         let bodyJSON = parseJSONBody(req.body)
                         let out = try FieldScanSessionEngine.shared.exportSessionDossier(sessionId: sessionId, payload: bodyJSON)
+                        sendJSONResponse(on: connection, statusCode: 200, payload: out)
+                        return
+                    }
+                    if comps.count == 2 && comps[1] == "attach_history" && req.method == "POST" {
+                        let bodyJSON = parseJSONBody(req.body)
+                        let turnIds = (bodyJSON["turn_ids"] as? [String]) ?? []
+                        let confirmed = boolFromAny(bodyJSON["confirmed"], defaultValue: false)
+                        let out = try FieldScanSessionEngine.shared.attachGeneralHistoryToSession(
+                            sessionId: sessionId,
+                            turnIds: turnIds,
+                            confirmed: confirmed
+                        )
+                        sendJSONResponse(on: connection, statusCode: 200, payload: out)
+                        return
+                    }
+                    if comps.count == 3 && comps[1] == "drafts" && req.method == "POST" {
+                        let bodyJSON = parseJSONBody(req.body)
+                        let out = try FieldScanSessionEngine.shared.createLocalDraft(
+                            sessionId: sessionId,
+                            kind: comps[2],
+                            payload: bodyJSON
+                        )
                         sendJSONResponse(on: connection, statusCode: 200, payload: out)
                         return
                     }
@@ -1125,7 +1169,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
         // 16. On-Device Offline Voice ASR + Diagnosis (`POST /api/voice`, `/api/voice/native_start`, `/api/voice/native_stop`, Hands-Free endpoints)
         if req.method == "POST" && path == "/api/voice/native_start" {
-            let res = startNativeMicrophoneRecording()
+            let bodyJSON = parseJSONBody(req.body)
+            let res = startNativeMicrophoneRecording(payload: bodyJSON)
             sendJSONResponse(on: connection, statusCode: 200, payload: res)
             return
         }
@@ -1140,6 +1185,20 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         if req.method == "POST" && path == "/api/voice/handsfree_start" {
             let bodyJSON = parseJSONBody(req.body)
             let res = startHandsFreeVoiceMode(payload: bodyJSON)
+            sendJSONResponse(on: connection, statusCode: 200, payload: res)
+            return
+        }
+
+        if req.method == "POST" && path == "/api/voice/context_sync" {
+            let bodyJSON = parseJSONBody(req.body)
+            let res = syncActiveVoiceContext(payload: bodyJSON)
+            sendJSONResponse(on: connection, statusCode: 200, payload: res)
+            return
+        }
+
+        if req.method == "POST" && path == "/api/voice/language" {
+            let bodyJSON = parseJSONBody(req.body)
+            let res = setVoiceLanguage(payload: bodyJSON)
             sendJSONResponse(on: connection, statusCode: 200, payload: res)
             return
         }
@@ -1159,6 +1218,124 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         if req.method == "POST" && path == "/api/voice" {
             let response = handleVoiceRequest(req: req)
             sendJSONResponse(on: connection, statusCode: 200, payload: response)
+            return
+        }
+
+        // 16a. Unified Copilot Action Registry, Screen Inventory, UI Ack, Guidance & Asset History
+        if req.method == "GET" && path == "/api/copilot/registry" {
+            let effCtx = resolveEffectiveContext(sessionId: nil, manifestSha: nil)
+            let desc = try? FieldScanPackageStore.shared.buildSceneAndManualDescriptor(context: effCtx)
+            let caps = FieldScanCopilotRegistry.computeSceneCapabilities(descriptor: desc)
+            sendJSONResponse(on: connection, statusCode: 200, payload: [
+                "ok": true,
+                "actions": FieldScanCopilotRegistry.shared.buildActionRegistry(),
+                "scene_capabilities": caps,
+                "active_context": effCtx.toDictionary(),
+            ])
+            return
+        }
+
+        if req.method == "GET" && path == "/api/copilot/screens" {
+            sendJSONResponse(on: connection, statusCode: 200, payload: [
+                "ok": true,
+                "screens": FieldScanCopilotRegistry.buildScreenInventory(),
+            ])
+            return
+        }
+
+        if req.method == "POST" && path == "/api/copilot/action_ack" {
+            let bodyJSON = parseJSONBody(req.body)
+            let res = handleCopilotActionAck(payload: bodyJSON)
+            sendJSONResponse(on: connection, statusCode: (res["ok"] as? Bool) == true ? 200 : 400, payload: res)
+            return
+        }
+
+        if req.method == "GET" && path == "/api/copilot/metrics" {
+            sendJSONResponse(on: connection, statusCode: 200, payload: [
+                "ok": true,
+                "deterministic_latency_ms": FieldScanCopilotRegistry.shared.latencyMetricsSummary(),
+            ])
+            return
+        }
+
+        if req.method == "GET" && path == "/api/copilot/history" {
+            let limit = intFromAny(req.queryItems["limit"]) ?? 50
+            sendJSONResponse(on: connection, statusCode: 200, payload: [
+                "ok": true,
+                "general_history": FieldScanSessionEngine.shared.listGeneralHistory(limit: limit),
+            ])
+            return
+        }
+
+        if req.method == "GET" && path == "/api/assets/history" {
+            let pid = (req.queryItems["profile_id"] ?? "tzone_tht02").trimmingCharacters(in: .whitespacesAndNewlines)
+            let sn = (req.queryItems["serial_number"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let res = FieldScanSessionEngine.shared.recallAssetHistory(profileId: pid, serialNumber: sn)
+            sendJSONResponse(on: connection, statusCode: 200, payload: res)
+            return
+        }
+
+        if req.method == "GET" && path == "/api/guidance/state" {
+            stateLock.lock()
+            let authSid = targetSlaveId
+            stateLock.unlock()
+            sendJSONResponse(on: connection, statusCode: 200, payload: FieldScanCopilotRegistry.shared.guidanceSnapshot(authorizedBusSlaveId: authSid))
+            return
+        }
+
+        if req.method == "POST" && path == "/api/guidance/start" {
+            let bodyJSON = parseJSONBody(req.body)
+            let effCtx = resolveEffectiveContext(sessionId: bodyJSON["session_id"] as? String, manifestSha: bodyJSON["manifest_sha256"] as? String)
+            let desc = try? FieldScanPackageStore.shared.buildSceneAndManualDescriptor(context: effCtx)
+            let caps = FieldScanCopilotRegistry.computeSceneCapabilities(descriptor: desc)
+            let targetAddr = intFromAny(bodyJSON["target_slave_id"] ?? bodyJSON["dip_address"]) ?? 1
+            stateLock.lock()
+            let authSid = targetSlaveId
+            simulatedVisualDipAddress = max(1, min(247, targetAddr))
+            stateLock.unlock()
+            let snap = FieldScanCopilotRegistry.shared.startDipGuidance(
+                targetSlaveId: targetAddr,
+                sessionId: (bodyJSON["session_id"] as? String) ?? FieldScanSessionEngine.shared.currentActiveSessionId,
+                profileId: effCtx.productId,
+                supportsDipPins: (caps["supports_dip_pins"] as? Bool) ?? false,
+                authorizedBusSlaveId: authSid,
+                turnId: bodyJSON["turn_id"] as? String
+            )
+            sendJSONResponse(on: connection, statusCode: 200, payload: snap)
+            return
+        }
+
+        if req.method == "POST" && path == "/api/guidance/evaluate" {
+            let bodyJSON = parseJSONBody(req.body)
+            let vTel = (bodyJSON["vision"] as? [String: Any]) ?? getVideoTelemetry()
+            stateLock.lock()
+            let authSid = targetSlaveId
+            let lang = (bodyJSON["language"] as? String) ?? preferredVoiceLanguage
+            stateLock.unlock()
+            let snap = FieldScanCopilotRegistry.shared.evaluateGuidanceCamera(
+                visionTel: vTel,
+                authorizedBusSlaveId: authSid,
+                language: lang,
+                turnId: bodyJSON["turn_id"] as? String
+            )
+            sendJSONResponse(on: connection, statusCode: 200, payload: snap)
+            return
+        }
+
+        if req.method == "POST" && path == "/api/guidance/confirm_step" {
+            let bodyJSON = parseJSONBody(req.body)
+            let manual = boolFromAny(bodyJSON["manual"], defaultValue: true)
+            let complete = boolFromAny(bodyJSON["complete"], defaultValue: false)
+            stateLock.lock()
+            let authSid = targetSlaveId
+            stateLock.unlock()
+            let snap = FieldScanCopilotRegistry.shared.confirmGuidanceStep(
+                manual: manual,
+                authorizedBusSlaveId: authSid,
+                complete: complete,
+                turnId: bodyJSON["turn_id"] as? String
+            )
+            sendJSONResponse(on: connection, statusCode: 200, payload: snap)
             return
         }
 
@@ -3153,6 +3330,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let bridge = LlamaServerBridge.shared
         let modbusTel = getModbusTelemetry()
         let isSim = (modbusTel["simulation"] as? Bool) ?? false
+        stateLock.lock()
+        let prefLang = preferredVoiceLanguage
+        stateLock.unlock()
         return [
             "contract_version": FieldScanSessionEngine.contractVersion,
             "runtime_role": (!cfg.currentMode.isMacAssisted) ? "ipad_autonomous" : "ipad_assisted_client",
@@ -3171,6 +3351,12 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 "mac_probing_suppressed": bridge.macProbingSuppressedInAutonomousMode,
                 "deterministic_fallback_available": true,
             ],
+            "voice": [
+                "preferred_language": prefLang,
+                "supported_languages": ["en", "es"],
+                "on_device_speech": checkOnDeviceSpeechCapabilities(),
+            ],
+            "copilot_registry_count": FieldScanCopilotRegistry.shared.buildActionRegistry().count,
             "manifest": FieldScanSessionEngine.shared.verifyResourceManifest(),
             "planned_calibration": FieldScanSessionEngine.plannedCalibrationCard(),
         ]
@@ -3221,6 +3407,18 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "verified_at": ISO8601DateFormatter().string(from: Date()),
         ]
 
+        let cfg = FieldScanRuntimeConfig.shared
+        stateLock.lock()
+        let prefLangNow = preferredVoiceLanguage
+        stateLock.unlock()
+        let linkDiag = FieldScanCopilotRegistry.shared.evaluateUnifiedLinkDiagnostic(
+            modbusTel: modbusTel,
+            gatewayHost: cfg.pusrGatewayHost,
+            gatewayPort: cfg.pusrGatewayPort,
+            language: prefLangNow
+        )
+        let guidanceSnap = FieldScanCopilotRegistry.shared.guidanceSnapshot(authorizedBusSlaveId: authBusSid)
+
         return [
             "status": "ok",
             "contract_version": FieldScanSessionEngine.contractVersion,
@@ -3229,6 +3427,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "scene_generation": sceneGen,
             "simulated_visual_dip_address": simDip,
             "authorized_bus_slave_id": authBusSid,
+            "preferred_language": prefLangNow,
+            "link_diagnostic": linkDiag,
+            "guidance": guidanceSnap,
             "local_listener_scope": "loopback_127.0.0.1",
             "offline_verified": strictlyOffline,
             "blocked_external_attempts": 0,
@@ -3237,10 +3438,10 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "vision": visionTel,
             "modbus": modbusTel,
             "pusr_gateway": [
-                "host": FieldScanRuntimeConfig.shared.pusrGatewayHost,
-                "port": FieldScanRuntimeConfig.shared.pusrGatewayPort,
-                "topology": FieldScanRuntimeConfig.shared.pusrGatewayTopology,
-                "configured": !FieldScanRuntimeConfig.shared.pusrGatewayHost.isEmpty,
+                "host": cfg.pusrGatewayHost,
+                "port": cfg.pusrGatewayPort,
+                "topology": cfg.pusrGatewayTopology,
+                "configured": !cfg.pusrGatewayHost.isEmpty,
                 "protocol": "modbus_tcp_mbap",
                 "presets": [
                     ["host": FieldScanRuntimeConfig.defaultPusrAPHost, "port": FieldScanRuntimeConfig.defaultPusrPort, "label": "Direct PUSR AP Default", "topology": "ap_direct"],
@@ -3562,7 +3763,12 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 ?? "Configure for Industrial Modbus RTU slave 1"
             let dipAddr = intFromAny(payload["dip_address"])
             let effCtx = resolveEffectiveContext(sessionId: payload["session_id"] as? String, manifestSha: nil)
-            return runGuideDipForModbus(operatorText: text, currentDipAddr: dipAddr, authorizeBusTarget: effCtx.benchModbusHomologated)
+            let explicitConfirm = boolFromAny(payload["confirmed"], defaultValue: false)
+            return runGuideDipForModbus(
+                operatorText: text,
+                currentDipAddr: dipAddr,
+                authorizeBusTarget: explicitConfirm && effCtx.benchModbusHomologated
+            )
         }
 
         if step == "connect_modbus" {
@@ -4486,13 +4692,44 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         return archive
     }
 
-    // MARK: - On-Device Premium English Voice TTS (`AVSpeechSynthesizer` -> Speaker Playback)
+    // MARK: - On-Device Bilingual Voice TTS (`AVSpeechSynthesizer` -> Speaker Playback)
 
-    private func selectBestSpeechVoice(for text: String) -> AVSpeechSynthesisVoice? {
+    private func selectBestSpeechVoice(for text: String, language: String = "en") -> AVSpeechSynthesisVoice? {
         _ = text
-        if let cached = cachedPreferredVoice {
+        let cleanLang = language.lowercased() == "es" ? "es" : "en"
+        if cleanLang == "en", let cached = cachedPreferredVoice {
             return cached
         }
+        if cleanLang == "es", let cached = cachedSpanishVoice {
+            return cached
+        }
+
+        if cleanLang == "es" {
+            let esLocales = FieldScanCopilotRegistry.shared.spanishTTSLocales()
+            let allEs = AVSpeechSynthesisVoice.speechVoices().filter {
+                $0.language.lowercased().hasPrefix("es")
+            }.sorted { a, b in
+                if a.quality.rawValue != b.quality.rawValue {
+                    return a.quality.rawValue > b.quality.rawValue
+                }
+                let aIdx = esLocales.firstIndex(where: { $0.lowercased() == a.language.lowercased() }) ?? 99
+                let bIdx = esLocales.firstIndex(where: { $0.lowercased() == b.language.lowercased() }) ?? 99
+                if aIdx != bIdx { return aIdx < bIdx }
+                return a.name < b.name
+            }
+            var resolved = allEs.first
+            if resolved == nil {
+                for loc in esLocales {
+                    if let v = AVSpeechSynthesisVoice(language: loc) {
+                        resolved = v
+                        break
+                    }
+                }
+            }
+            cachedSpanishVoice = resolved
+            return resolved ?? selectBestSpeechVoice(for: text, language: "en")
+        }
+
         let preferredLocale = "en-US"
         let allVoices = AVSpeechSynthesisVoice.speechVoices().filter {
             $0.language.lowercased().hasPrefix("en")
@@ -4521,7 +4758,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         return resolved
     }
 
-    public func synthesizeSpeechB64(_ rawText: String, speakOnDevice: Bool = true) -> String {
+    public func synthesizeSpeechB64(_ rawText: String, speakOnDevice: Bool = true, language: String = "en") -> String {
         let cleaned = cleanTextForTTS(rawText)
         guard !cleaned.isEmpty else {
             return buildFallbackConfirmationWav(durationSeconds: 0.08).base64EncodedString()
@@ -4546,7 +4783,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                     self.speechSynthesizer.stopSpeaking(at: .immediate)
                 }
                 let utterance = AVSpeechUtterance(string: cleaned)
-                utterance.voice = self.selectBestSpeechVoice(for: cleaned)
+                utterance.voice = self.selectBestSpeechVoice(for: cleaned, language: language)
                 utterance.rate = 0.50
                 utterance.pitchMultiplier = 1.0
                 utterance.volume = 1.0
@@ -4712,25 +4949,329 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         """
     }
 
+    private func handleCopilotActionAck(payload: [String: Any]) -> [String: Any] {
+        let turnId = ((payload["turn_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !turnId.isEmpty else {
+            return ["ok": false, "error_code": "MISSING_TURN_ID", "message": "turn_id is required"]
+        }
+        let sessionId = (payload["session_id"] as? String) ?? FieldScanSessionEngine.shared.currentActiveSessionId
+        let inputMode = ((payload["input_mode"] as? String) ?? "text").lowercased()
+        let isStale = boolFromAny(payload["stale"], defaultValue: false)
+        let receipts = (payload["receipts"] as? [[String: Any]]) ?? []
+        let ackMs = (payload["phrase_end_to_ui_ack_ms"] as? Double) ?? (payload["phrase_end_to_ui_ack_ms"] as? NSNumber)?.doubleValue
+        let ttsMs = (payload["phrase_end_to_tts_start_ms"] as? Double) ?? (payload["phrase_end_to_tts_start_ms"] as? NSNumber)?.doubleValue
+
+        if !isStale {
+            FieldScanCopilotRegistry.shared.recordActionLatency(mode: inputMode, ackMs: ackMs, ttsStartMs: ttsMs)
+        }
+
+        var ackPayload = payload
+        if let sid = sessionId { ackPayload["session_id"] = sid }
+        let stored = (try? FieldScanSessionEngine.shared.recordActionAck(payload: ackPayload)) ?? ["ok": true]
+
+        // Speak final outcome ONLY after verified UI receipts arrive (never speak stale/discarded turns)
+        stateLock.lock()
+        let pendingSpeech = pendingDeferredVoiceTurns.removeValue(forKey: turnId)
+        let defaultLang = preferredVoiceLanguage
+        stateLock.unlock()
+
+        let spokenLang = ((payload["language"] as? String) ?? pendingSpeech?.language ?? defaultLang).lowercased() == "es" ? "es" : "en"
+        var finalSpokenText: String? = nil
+        if !isStale {
+            let unavail = receipts.filter { ($0["status"] as? String) == "unavailable" }
+            let needsConfirm = receipts.filter { ($0["status"] as? String) == "requires_confirmation" }
+            let anyStale = receipts.contains { ($0["status"] as? String) == "stale" }
+            if anyStale {
+                stopTtsImmediatelyOnMain()
+            } else if let firstUnavail = unavail.first {
+                let reason = (firstUnavail["reason"] as? String) ?? "control unavailable"
+                finalSpokenText = FieldScanCopilotRegistry.shared.formatTemplate(
+                    key: "action_unavailable",
+                    language: spokenLang,
+                    enDefault: "Control unavailable in the current mode: {reason}.",
+                    params: ["reason": reason]
+                )
+            } else if let firstConf = needsConfirm.first {
+                let aid = (firstConf["action_id"] as? String) ?? "configuration"
+                finalSpokenText = FieldScanCopilotRegistry.shared.formatTemplate(
+                    key: "confirmation_required",
+                    language: spokenLang,
+                    enDefault: "This action ({action_id}) requires explicit operator confirmation in the UI control. No settings were modified.",
+                    params: ["action_id": aid]
+                )
+            } else if let p = pendingSpeech, !p.text.isEmpty {
+                finalSpokenText = p.text
+            }
+
+            let allowSpeak = boolFromAny(payload["speak_verified_outcome"], defaultValue: pendingSpeech != nil)
+            if allowSpeak, let txt = finalSpokenText, !txt.isEmpty {
+                _ = synthesizeSpeechB64(txt, speakOnDevice: true, language: spokenLang)
+            }
+        } else {
+            stopTtsImmediatelyOnMain()
+        }
+
+        return [
+            "ok": true,
+            "turn_id": turnId,
+            "stale": isStale,
+            "stored": stored,
+            "spoken_text": finalSpokenText ?? NSNull(),
+            "metrics": FieldScanCopilotRegistry.shared.latencyMetricsSummary(),
+        ]
+    }
+
+    private func syncActiveVoiceContext(payload: [String: Any]) -> [String: Any] {
+        stateLock.lock()
+        if let sid = payload["session_id"] as? String { activeHandsFreeContext["session_id"] = sid }
+        if let mSha = payload["manifest_sha256"] as? String { activeHandsFreeContext["manifest_sha256"] = mSha }
+        if let sGen = intFromAny(payload["scene_generation"]) { activeHandsFreeContext["scene_generation"] = sGen }
+        if let docId = payload["active_document_id"] as? String { activeHandsFreeContext["active_document_id"] = docId }
+        if let lang = payload["language"] as? String, !lang.isEmpty {
+            let clean = lang.lowercased() == "es" ? "es" : "en"
+            activeHandsFreeContext["language"] = clean
+            preferredVoiceLanguage = clean
+        }
+        if let dip = intFromAny(payload["dip_address"]), (1...247).contains(dip) {
+            simulatedVisualDipAddress = dip
+            activeHandsFreeContext["dip_address"] = dip
+        }
+        let ctxCopy = activeHandsFreeContext
+        let authSid = targetSlaveId
+        stateLock.unlock()
+        return [
+            "ok": true,
+            "voice_context": ctxCopy,
+            "authorized_bus_slave_id": authSid,
+            "bus_target_mutated": false,
+        ]
+    }
+
+    private func setVoiceLanguage(payload: [String: Any]) -> [String: Any] {
+        let reqLang = ((payload["language"] as? String) ?? "en").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cleanLang = reqLang == "es" ? "es" : "en"
+        stateLock.lock()
+        preferredVoiceLanguage = cleanLang
+        activeHandsFreeContext["language"] = cleanLang
+        stateLock.unlock()
+        let caps = checkOnDeviceSpeechCapabilities()
+        let langCap = (caps[cleanLang] as? [String: Any]) ?? [:]
+        let onDeviceOK = (langCap["speech_on_device_available"] as? Bool) ?? false
+        var notice: String? = nil
+        if !onDeviceOK {
+            notice = FieldScanCopilotRegistry.shared.formatTemplate(
+                key: "offline_speech_unavailable",
+                language: cleanLang,
+                enDefault: "Offline speech recognition for this language is not downloaded on this iPad. Text chat and touch controls remain 100% functional offline."
+            )
+        }
+        return [
+            "ok": true,
+            "language": cleanLang,
+            "speech_on_device_available": onDeviceOK,
+            "capabilities": caps,
+            "fallback_notice": notice ?? NSNull(),
+        ]
+    }
+
     private func handleDiagnoseRequest(payload: [String: Any]) -> [String: Any] {
+        let t0 = ProcessInfo.processInfo.systemUptime
         let rawQuery = ((payload["query"] as? String) ?? (payload["prompt"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let query = rawQuery.isEmpty
             ? "What do you currently see on the camera and RS-485 bus?"
             : rawQuery
         let zoneHint = (payload["zone"] as? String) ?? (payload["highlighted_zone"] as? String)
-        let dipAddr = intFromAny(payload["dip_address"]) ?? simulatedVisualDipAddress
-        let effCtx = resolveEffectiveContext(
-            sessionId: payload["session_id"] as? String,
-            manifestSha: payload["manifest_sha256"] as? String
-        )
-        let catDescriptor = try? FieldScanPackageStore.shared.buildSceneAndManualDescriptor(context: effCtx)
+        let turnId = ((payload["turn_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+            ?? ("turn-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10)).lowercased())
+        let inputMode = ((payload["input_mode"] as? String) ?? "text").lowercased()
+        let deferTts = boolFromAny(payload["defer_tts_until_ack"], defaultValue: false)
+        let reqSessionId = (payload["session_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reqManifestSha = (payload["manifest_sha256"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
         stateLock.lock()
+        let dipAddr = intFromAny(payload["dip_address"]) ?? simulatedVisualDipAddress
         let sceneGen = intFromAny(payload["scene_generation"]) ?? activeSceneGeneration
+        let authBusSidInitial = targetSlaveId
+        let prefLang = ((payload["language"] as? String)?.lowercased() == "es")
+            ? "es"
+            : (((payload["language"] as? String)?.lowercased() == "en") ? "en" : preferredVoiceLanguage)
         stateLock.unlock()
+
+        // Enforce pinned session authority (`Finding 1` / `CTX-01`)
+        let (effCtx, mismatchErr) = validatePinnedSessionManifest(sessionId: reqSessionId, manifestSha: reqManifestSha)
+        if let err = mismatchErr {
+            let langOut = FieldScanCopilotRegistry.shared.detectCopilotLanguage(query, preferredLanguage: prefLang)
+            let msg = (err["message"] as? String) ?? "Active pinned session manifest differs from requested manifest."
+            var out = err
+            out["turn_id"] = turnId
+            out["input_mode"] = inputMode
+            out["language"] = langOut
+            out["diagnosis"] = msg
+            out["assistant_message"] = msg
+            out["authorized_bus_slave_id"] = authBusSidInitial
+            out["bus_target_mutated"] = false
+            out["audio_wav_b64"] = synthesizeSpeechB64(msg, speakOnDevice: !deferTts, language: langOut)
+            return out
+        }
+
+        let resolvedSessionId = (reqSessionId?.isEmpty == false ? reqSessionId : nil) ?? FieldScanSessionEngine.shared.currentActiveSessionId
+        let catDescriptor = try? FieldScanPackageStore.shared.buildSceneAndManualDescriptor(context: effCtx)
+        let visionTel = getVideoTelemetry()
+        let modbusTel = getModbusTelemetry()
+        let cfg = FieldScanRuntimeConfig.shared
+        let syncTel = FieldScanCatalogClient.shared.getSyncTelemetry()
+        let cloudSyncEnabled = (syncTel["sync_enabled"] as? Bool) ?? false
+
+        // 1. Unified Bounded Executable Copilot Action Plan (`Section 1 & 2`)
+        if let plan = FieldScanCopilotRegistry.shared.resolveCopilotActionPlan(
+            query: query,
+            descriptor: catDescriptor,
+            modbusTel: modbusTel,
+            visionTel: visionTel,
+            gatewayHost: cfg.pusrGatewayHost,
+            gatewayPort: cfg.pusrGatewayPort,
+            cloudSyncEnabled: cloudSyncEnabled,
+            authorizedBusSlaveId: authBusSidInitial,
+            currentDipAddress: dipAddr,
+            sessionId: resolvedSessionId,
+            sceneGeneration: sceneGen,
+            turnId: turnId,
+            preferredLanguage: prefLang,
+            isIpadNative: true
+        ) {
+            let planLang = (plan["language"] as? String) ?? prefLang
+            let replyText = (plan["reply_text"] as? String) ?? ""
+            var guidanceSnap: [String: Any]? = nil
+            if (plan["start_dip_guidance"] as? Bool) == true {
+                let targetDip = (plan["target_dip_address"] as? Int) ?? dipAddr
+                let caps = (plan["scene_capabilities"] as? [String: Any]) ?? [:]
+                stateLock.lock()
+                simulatedVisualDipAddress = max(1, min(247, targetDip))
+                focusDipActive = true
+                stateLock.unlock()
+                guidanceSnap = FieldScanCopilotRegistry.shared.startDipGuidance(
+                    targetSlaveId: targetDip,
+                    sessionId: resolvedSessionId,
+                    profileId: effCtx.productId,
+                    supportsDipPins: (caps["supports_dip_pins"] as? Bool) ?? false,
+                    authorizedBusSlaveId: authBusSidInitial,
+                    turnId: turnId
+                )
+            }
+
+            let elapsedMs = max(6.0, ((ProcessInfo.processInfo.systemUptime - t0) * 1000.0 * 10).rounded() / 10)
+            recordConversationTurn(userQuery: query, assistantReply: replyText)
+            _ = FieldScanSessionEngine.shared.recordConversationTurn(payload: [
+                "turn_id": turnId,
+                "session_id": resolvedSessionId ?? NSNull(),
+                "user_text": query,
+                "assistant_reply": replyText,
+                "input_mode": inputMode,
+                "language": planLang,
+                "provider": "FieldScan Copilot Action Registry",
+                "evidence_origin": inputMode,
+                "document_id": plan["document_id"] ?? NSNull(),
+                "document_revision": plan["document_revision"] ?? NSNull(),
+                "manual_page": plan["manual_page"] ?? NSNull(),
+                "manifest_sha256": effCtx.manifestSha256,
+                "scene_generation": sceneGen,
+                "planned_actions": plan["actions"] ?? [],
+                "guidance_state": guidanceSnap ?? NSNull(),
+            ])
+
+            let hasExecutableActions = !((plan["actions"] as? [[String: Any]]) ?? []).isEmpty
+            let shouldDefer = deferTts && hasExecutableActions
+            if shouldDefer {
+                stateLock.lock()
+                pendingDeferredVoiceTurns[turnId] = (text: replyText, language: planLang)
+                if pendingDeferredVoiceTurns.count > 24 {
+                    pendingDeferredVoiceTurns.removeAll()
+                    pendingDeferredVoiceTurns[turnId] = (text: replyText, language: planLang)
+                }
+                stateLock.unlock()
+            }
+            let audioB64 = synthesizeSpeechB64(replyText, speakOnDevice: !shouldDefer, language: planLang)
+
+            stateLock.lock()
+            let simDipNow = simulatedVisualDipAddress
+            let authSidNow = targetSlaveId
+            stateLock.unlock()
+
+            let plannedIds = ((plan["actions"] as? [[String: Any]]) ?? []).compactMap { $0["id"] as? String }
+            let compatIntent = (!plannedIds.isEmpty && plannedIds.allSatisfy { $0.hasPrefix("manual.") })
+                ? "manual_lookup"
+                : ((plan["intent_mode"] as? String) ?? "copilot_action")
+            var resp: [String: Any] = [
+                "diagnosis": replyText,
+                "assistant_message": replyText,
+                "intent": compatIntent,
+                "intent_mode": (plan["intent_mode"] as? String) ?? "copilot_action",
+                "query_mode": "copilot_action",
+                "language": planLang,
+                "input_mode": inputMode,
+                "turn_id": turnId,
+                "session_id": resolvedSessionId ?? NSNull(),
+                "scene_generation": sceneGen,
+                "manifest_sha256": effCtx.manifestSha256,
+                "copilot_action_plan": plan,
+                "actions": plan["actions"] ?? [],
+                "scene_capabilities": plan["scene_capabilities"] ?? [:],
+                "clarification_required": (plan["ambiguous"] as? Bool) ?? false,
+                "candidate_part_ids": plan["candidate_part_ids"] ?? [],
+                "simulated_visual_dip_address": simDipNow,
+                "authorized_bus_slave_id": authSidNow,
+                "bus_target_mutated": false,
+                "twin_action": plan["twin_action"] ?? NSNull(),
+                "twin_action_v1": plan["twin_action_v1"] ?? NSNull(),
+                "explode_pcb": plan["explode_pcb"] ?? NSNull(),
+                "focus_dip": plan["focus_dip"] ?? false,
+                "dip_bits": plan["dip_bits"] ?? NSNull(),
+                "open_manual": plan["open_manual"] ?? false,
+                "open_manual_lightbox": plan["open_manual_lightbox"] ?? false,
+                "manual_page": plan["manual_page"] ?? NSNull(),
+                "printed_page": plan["printed_page"] ?? NSNull(),
+                "document_id": plan["document_id"] ?? NSNull(),
+                "manual_section": plan["manual_section"] ?? NSNull(),
+                "citations": plan["citations"] ?? [],
+                "manual_citations": plan["citations"] ?? [],
+                "guidance_state": guidanceSnap ?? NSNull(),
+                "link_diagnostic": plan["link_diagnostic"] ?? NSNull(),
+                "page_out_of_range": plan["page_out_of_range"] ?? false,
+                "error_code": plan["error_code"] ?? NSNull(),
+                "inference_ms": elapsedMs,
+                "latency_ms": elapsedMs,
+                "tokens_per_s": 55.0,
+                "tokens_per_sec": 55.0,
+                "model": "FieldScan Copilot Action Registry",
+                "audio_wav_b64": audioB64,
+                "deferred_tts_pending_ack": shouldDefer,
+            ]
+            if let g = guidanceSnap {
+                resp["guidance"] = g
+            }
+            return resp
+        }
 
         if let intent = detectConversationalRepairIntent(query) {
             if intent == "inspect_open" {
-                return runStartOpenInspection()
+                var res = runStartOpenInspection()
+                res["turn_id"] = turnId
+                res["session_id"] = resolvedSessionId ?? NSNull()
+                res["scene_generation"] = sceneGen
+                res["manifest_sha256"] = effCtx.manifestSha256
+                res["input_mode"] = inputMode
+                _ = FieldScanSessionEngine.shared.recordConversationTurn(payload: [
+                    "turn_id": turnId,
+                    "session_id": resolvedSessionId ?? NSNull(),
+                    "user_text": query,
+                    "assistant_reply": (res["diagnosis"] as? String) ?? "",
+                    "input_mode": inputMode,
+                    "language": prefLang,
+                    "provider": "FieldScan Repair Coordinator",
+                    "manifest_sha256": effCtx.manifestSha256,
+                    "scene_generation": sceneGen,
+                ])
+                return res
             }
             if intent == "guide_dip" {
                 // Conversational/voice requests update ONLY visual DIP simulation, NEVER `targetSlaveId` (`M4-BUS-01`)
@@ -4740,9 +5281,15 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                     descriptor: catDescriptor,
                     zoneHint: "upper_barrel_dip",
                     currentDipAddress: (res["simulated_visual_dip_address"] as? Int) ?? dipAddr,
-                    sceneGeneration: sceneGen
+                    sceneGeneration: sceneGen,
+                    turnId: turnId
                 )
                 let dipLookup = FieldScanManualNavigator.lookupManual(for: query, language: "en")
+                res["turn_id"] = turnId
+                res["session_id"] = resolvedSessionId ?? NSNull()
+                res["scene_generation"] = sceneGen
+                res["manifest_sha256"] = effCtx.manifestSha256
+                res["input_mode"] = inputMode
                 res["twin_action"] = prep["twin_action"] ?? NSNull()
                 res["twin_action_v1"] = prep["twin_action_v1"] ?? NSNull()
                 res["open_manual"] = true
@@ -4750,6 +5297,18 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 if let sec = dipLookup.sectionDict {
                     res["manual_section"] = sec
                 }
+                _ = FieldScanSessionEngine.shared.recordConversationTurn(payload: [
+                    "turn_id": turnId,
+                    "session_id": resolvedSessionId ?? NSNull(),
+                    "user_text": query,
+                    "assistant_reply": (res["diagnosis"] as? String) ?? "",
+                    "input_mode": inputMode,
+                    "language": prefLang,
+                    "provider": "FieldScan Repair Coordinator",
+                    "manual_page": 5,
+                    "manifest_sha256": effCtx.manifestSha256,
+                    "scene_generation": sceneGen,
+                ])
                 return res
             }
             if intent == "signoff_report" {
@@ -4760,7 +5319,23 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                     ["page": 7, "label": Self.manualPageTitles[7]!],
                     ["page": 9, "label": Self.manualPageTitles[9]!],
                 ]
+                _ = FieldScanSessionEngine.shared.recordConversationTurn(payload: [
+                    "turn_id": turnId,
+                    "session_id": resolvedSessionId ?? NSNull(),
+                    "user_text": query,
+                    "assistant_reply": summary,
+                    "input_mode": inputMode,
+                    "language": prefLang,
+                    "provider": "FieldScan Closed-Loop Sign-Off Engine",
+                    "manifest_sha256": effCtx.manifestSha256,
+                    "scene_generation": sceneGen,
+                ])
                 return [
+                    "turn_id": turnId,
+                    "session_id": resolvedSessionId ?? NSNull(),
+                    "scene_generation": sceneGen,
+                    "manifest_sha256": effCtx.manifestSha256,
+                    "input_mode": inputMode,
                     "stage": "STEP4_SIGNOFF_PACKAGE_READY",
                     "andon_state": pkg["andon_state"] ?? "GREEN",
                     "focus_dip": false,
@@ -4777,9 +5352,6 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             }
         }
 
-        let t0 = ProcessInfo.processInfo.systemUptime
-        let visionTel = getVideoTelemetry()
-        let modbusTel = getModbusTelemetry()
         let mbHealthy = (modbusTel["healthy"] as? Bool) ?? false
         let pcbOpen = (visionTel["pcb_open_detected"] as? Bool) ?? false
         let includeCam = (payload["include_camera"] as? Bool) ?? true
@@ -4798,7 +5370,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             vlmModelLabel: bridge.activeModelName,
             catalogDescriptor: catDescriptor,
             sceneGeneration: sceneGen,
-            turnId: payload["turn_id"] as? String,
+            turnId: turnId,
             describeDipFn: { addr in Self.describeDipPins(address: addr) }
         )
 
@@ -4841,6 +5413,21 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let groundingCorrected = (grounded["grounding_corrected"] as? Bool) ?? false
 
         recordConversationTurn(userQuery: query, assistantReply: diagnosisText)
+        let detLang = FieldScanCopilotRegistry.shared.detectCopilotLanguage(query, preferredLanguage: prefLang)
+        _ = FieldScanSessionEngine.shared.recordConversationTurn(payload: [
+            "turn_id": turnId,
+            "session_id": resolvedSessionId ?? NSNull(),
+            "user_text": query,
+            "assistant_reply": diagnosisText,
+            "input_mode": inputMode,
+            "language": detLang,
+            "provider": modelUsed,
+            "evidence_origin": inputMode,
+            "document_id": engineResult["document_id"] ?? NSNull(),
+            "manual_page": primaryPageOpt ?? NSNull(),
+            "manifest_sha256": effCtx.manifestSha256,
+            "scene_generation": sceneGen,
+        ])
 
         let elapsedMs = max(8.0, ((ProcessInfo.processInfo.systemUptime - t0) * 1000.0 * 10).rounded() / 10)
         stateLock.lock()
@@ -4851,7 +5438,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let andonNow = mbHealthy ? "GREEN" : (explodePcb ? "YELLOW" : "RED")
         stateLock.unlock()
 
-        let audioB64 = synthesizeSpeechB64(diagnosisText)
+        let audioB64 = synthesizeSpeechB64(diagnosisText, speakOnDevice: !deferTts, language: detLang)
         let shouldHighlightZone = (intentStr == "sensor_diagnostics") && (!mbHealthy || pcbOpen) && (targetZoneOpt != nil && !(targetZoneOpt!.isEmpty))
         let focusDipOut = explodePcb || ((twinActionOpt?["open_dip_pip"] as? Bool) == true)
 
@@ -4860,7 +5447,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "assistant_message": diagnosisText,
             "intent": intentStr,
             "query_mode": intentStr,
-            "language": "en",
+            "language": detLang,
+            "input_mode": inputMode,
+            "session_id": resolvedSessionId ?? NSNull(),
             "clarification_required": clarificationReq,
             "candidate_part_ids": engineResult["candidate_part_ids"] ?? [],
             "grounding_corrected": groundingCorrected,
@@ -4876,7 +5465,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "bus_target_mutated": false,
             "twin_action": twinActionOpt ?? NSNull(),
             "twin_action_v1": twinActionV1Opt ?? NSNull(),
-            "turn_id": engineResult["turn_id"] ?? "",
+            "turn_id": turnId,
             "scene_generation": engineResult["scene_generation"] ?? sceneGen,
             "manifest_sha256": engineResult["manifest_sha256"] ?? effCtx.manifestSha256,
             "document_id": engineResult["document_id"] ?? NSNull(),
@@ -5440,7 +6029,50 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         #endif
     }
 
-    private func selectBestSpeechRecognizer() -> SFSpeechRecognizer? {
+    private func checkOnDeviceSpeechCapabilities() -> [String: Any] {
+        func probe(_ locales: [String]) -> [String: Any] {
+            for locId in locales {
+                if let rec = SFSpeechRecognizer(locale: Locale(identifier: locId)), rec.isAvailable {
+                    return [
+                        "locale": locId,
+                        "available": true,
+                        "speech_on_device_available": rec.supportsOnDeviceRecognition,
+                    ]
+                }
+            }
+            return [
+                "locale": locales.first ?? "en-US",
+                "available": false,
+                "speech_on_device_available": false,
+            ]
+        }
+        let enInfo = probe(["en-US", "en-GB", "en-CA", "en-AU"])
+        let esLocales = FieldScanCopilotRegistry.shared.spanishSpeechLocales()
+        let esInfo = probe(esLocales)
+        return ["en": enInfo, "es": esInfo]
+    }
+
+    private func selectBestSpeechRecognizer(language: String? = nil) -> SFSpeechRecognizer? {
+        stateLock.lock()
+        let activeLang = (language ?? preferredVoiceLanguage).lowercased()
+        stateLock.unlock()
+
+        if activeLang == "es" {
+            let esLocales = FieldScanCopilotRegistry.shared.spanishSpeechLocales()
+            for locId in esLocales {
+                if let rec = SFSpeechRecognizer(locale: Locale(identifier: locId)),
+                   rec.isAvailable,
+                   rec.supportsOnDeviceRecognition {
+                    return rec
+                }
+            }
+            for locId in esLocales {
+                if let rec = SFSpeechRecognizer(locale: Locale(identifier: locId)), rec.isAvailable {
+                    return rec
+                }
+            }
+        }
+
         for locId in ["en-US", "en-GB", "en-CA", "en-AU"] {
             if let rec = SFSpeechRecognizer(locale: Locale(identifier: locId)), rec.isAvailable {
                 return rec
@@ -5813,12 +6445,32 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         }
     }
 
-    private func startNativeMicrophoneRecording() -> [String: Any] {
+    private func startNativeMicrophoneRecording(payload: [String: Any] = [:]) -> [String: Any] {
         stopTtsImmediatelyOnMain()
+        let turnId = ((payload["turn_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+            ?? ("turn-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10)).lowercased())
         stateLock.lock()
         pttRecordingActive = true
         lastTtsActiveUptime = 0
         bargeInConsecutiveFrames = 0
+        if let dip = intFromAny(payload["dip_address"]), (1...247).contains(dip) {
+            // Update visual DIP only — NEVER mutate authorized `targetSlaveId` (`Finding 2`)
+            simulatedVisualDipAddress = dip
+        }
+        let reqLang = ((payload["language"] as? String)?.lowercased() == "es")
+            ? "es"
+            : (((payload["language"] as? String)?.lowercased() == "en") ? "en" : preferredVoiceLanguage)
+        preferredVoiceLanguage = reqLang
+        activePttTurnContext = [
+            "turn_id": turnId,
+            "session_id": (payload["session_id"] as? String) ?? FieldScanSessionEngine.shared.currentActiveSessionId ?? "",
+            "manifest_sha256": (payload["manifest_sha256"] as? String) ?? "",
+            "scene_generation": intFromAny(payload["scene_generation"]) ?? activeSceneGeneration,
+            "active_document_id": (payload["active_document_id"] as? String) ?? "",
+            "language": reqLang,
+            "dip_address": simulatedVisualDipAddress,
+        ]
+        let authSidNow = targetSlaveId
         stateLock.unlock()
 
         let perm = evaluateAndRequestVoicePermissionsNonBlocking { [weak self] in
@@ -5836,6 +6488,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 "error_code": "MIC_OR_SPEECH_PERMISSION_DENIED",
                 "native_mic": false,
                 "sample_rate": 16000,
+                "turn_id": turnId,
+                "authorized_bus_slave_id": authSidNow,
+                "bus_target_mutated": false,
             ]
         }
         if perm == "awaiting_permission" {
@@ -5843,6 +6498,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 "status": "awaiting_permission",
                 "native_mic": true,
                 "sample_rate": 16000,
+                "turn_id": turnId,
+                "authorized_bus_slave_id": authSidNow,
+                "bus_target_mutated": false,
             ]
         }
 
@@ -5859,12 +6517,26 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "status": startedOK ? "recording" : "error",
             "native_mic": true,
             "sample_rate": 16000,
+            "turn_id": turnId,
+            "language": reqLang,
+            "authorized_bus_slave_id": authSidNow,
+            "bus_target_mutated": false,
         ]
     }
 
     private func stopNativeMicrophoneRecordingAndDiagnose(payload: [String: Any]) -> [String: Any] {
         let t0 = ProcessInfo.processInfo.systemUptime
-        let dipAddr = intFromAny(payload["dip_address"]) ?? targetSlaveId
+        stateLock.lock()
+        let pttCtx = activePttTurnContext
+        activePttTurnContext = [:]
+        // Use visual DIP address (or captured start-of-turn DIP), NEVER mutating or confusing with `targetSlaveId`
+        let dipAddr = intFromAny(payload["dip_address"]) ?? intFromAny(pttCtx["dip_address"]) ?? simulatedVisualDipAddress
+        let startTurnId = (payload["turn_id"] as? String) ?? (pttCtx["turn_id"] as? String)
+        let startSessionId = (payload["session_id"] as? String) ?? ((pttCtx["session_id"] as? String)?.isEmpty == false ? (pttCtx["session_id"] as? String) : nil)
+        let startManifestSha = (payload["manifest_sha256"] as? String) ?? ((pttCtx["manifest_sha256"] as? String)?.isEmpty == false ? (pttCtx["manifest_sha256"] as? String) : nil)
+        let startSceneGen = intFromAny(payload["scene_generation"]) ?? intFromAny(pttCtx["scene_generation"]) ?? activeSceneGeneration
+        let startLang = (payload["language"] as? String) ?? (pttCtx["language"] as? String) ?? preferredVoiceLanguage
+        stateLock.unlock()
 
         // Step 1: Stop tap & signal `endAudio()` FIRST so SFSpeechRecognizer flushes final words before task cancel!
         var pcmSamples: [Int16] = []
@@ -5933,7 +6605,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let cleanedAlpha = transcript.replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
         if cleanedAlpha.count < 2 {
             let msg = "I didn't catch any speech on the microphone—please try speaking again."
-            let audioB64 = synthesizeSpeechB64(msg)
+            let audioB64 = synthesizeSpeechB64(msg, speakOnDevice: true, language: startLang)
             return [
                 "transcript": "",
                 "diagnosis": msg,
@@ -5944,6 +6616,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 "manual_citations": [],
                 "audio_wav_b64": audioB64,
                 "asr_ms": asrMs,
+                "turn_id": startTurnId ?? "",
+                "input_mode": "ptt",
                 "model": "FieldScan Live Voice (No Speech Detected)",
             ]
         }
@@ -5952,10 +6626,14 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "query": transcript,
             "include_camera": true,
             "dip_address": dipAddr,
+            "scene_generation": startSceneGen,
+            "language": startLang,
+            "input_mode": "ptt",
+            "defer_tts_until_ack": boolFromAny(payload["defer_tts_until_ack"], defaultValue: false),
         ]
-        if let sid = payload["session_id"] as? String { diagPayload["session_id"] = sid }
-        if let mSha = payload["manifest_sha256"] as? String { diagPayload["manifest_sha256"] = mSha }
-        if let sGen = payload["scene_generation"] { diagPayload["scene_generation"] = sGen }
+        if let tid = startTurnId, !tid.isEmpty { diagPayload["turn_id"] = tid }
+        if let sid = startSessionId, !sid.isEmpty { diagPayload["session_id"] = sid }
+        if let mSha = startManifestSha, !mSha.isEmpty { diagPayload["manifest_sha256"] = mSha }
         var diag = handleDiagnoseRequest(payload: diagPayload)
         diag["transcript"] = transcript
         diag["asr_ms"] = asrMs
@@ -5967,11 +6645,25 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
     // MARK: - Continuous Real-Time Hands-Free Mode (`POST /api/voice/handsfree_start`, `GET /api/voice/handsfree_poll`, `POST /api/voice/handsfree_stop`)
 
     private func startHandsFreeVoiceMode(payload: [String: Any]) -> [String: Any] {
+        // Capture full turn context at voice activation; NEVER mutate `targetSlaveId` (`Finding 1 & Finding 2`)
+        stateLock.lock()
         if let dip = intFromAny(payload["dip_address"]), (1...247).contains(dip) {
-            stateLock.lock()
-            targetSlaveId = dip
-            stateLock.unlock()
+            simulatedVisualDipAddress = dip
         }
+        let reqLang = ((payload["language"] as? String)?.lowercased() == "es")
+            ? "es"
+            : (((payload["language"] as? String)?.lowercased() == "en") ? "en" : preferredVoiceLanguage)
+        preferredVoiceLanguage = reqLang
+        activeHandsFreeContext = [
+            "session_id": (payload["session_id"] as? String) ?? FieldScanSessionEngine.shared.currentActiveSessionId ?? "",
+            "manifest_sha256": (payload["manifest_sha256"] as? String) ?? "",
+            "scene_generation": intFromAny(payload["scene_generation"]) ?? activeSceneGeneration,
+            "active_document_id": (payload["active_document_id"] as? String) ?? "",
+            "language": reqLang,
+            "dip_address": simulatedVisualDipAddress,
+        ]
+        let authSidNow = targetSlaveId
+        stateLock.unlock()
 
         stopTtsImmediatelyOnMain()
 
@@ -6000,6 +6692,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 "error_code": "MIC_OR_SPEECH_PERMISSION_DENIED",
                 "message": "Microphone or Speech Recognition permission is disabled in iPadOS Settings > Privacy & Security.",
                 "native_mic": false,
+                "authorized_bus_slave_id": authSidNow,
+                "bus_target_mutated": false,
             ]
         }
 
@@ -6040,6 +6734,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "active": true,
             "permission_state": perm,
             "native_mic": true,
+            "language": reqLang,
+            "authorized_bus_slave_id": authSidNow,
+            "bus_target_mutated": false,
         ]
     }
 
@@ -6115,7 +6812,14 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         }
         let currentTranscript = livePartialTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         let lastChange = lastTranscriptChangeTime
-        let dipAddr = targetSlaveId
+        let dipAddr = simulatedVisualDipAddress
+        let capturedHfCtx = activeHandsFreeContext
+        let capturedSceneGen = intFromAny(capturedHfCtx["scene_generation"]) ?? activeSceneGeneration
+        let capturedSessionId = ((capturedHfCtx["session_id"] as? String)?.isEmpty == false ? (capturedHfCtx["session_id"] as? String) : nil)
+            ?? FieldScanSessionEngine.shared.currentActiveSessionId
+        let capturedManifestSha = ((capturedHfCtx["manifest_sha256"] as? String)?.isEmpty == false ? (capturedHfCtx["manifest_sha256"] as? String) : nil)
+        let capturedLang = (capturedHfCtx["language"] as? String) ?? preferredVoiceLanguage
+        let turnId = "turn-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10)).lowercased()
         let words = currentTranscript.split(whereSeparator: { $0.isWhitespace })
 
         let hasEnoughWords = words.count >= 2 || (words.count == 1 && currentTranscript.count >= 3)
@@ -6163,9 +6867,10 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             let isRapidRepeat = !normLive.isEmpty
                 && normLive == self.lastCompletedLiveTranscriptNorm
                 && (nowCheck - self.lastCompletedLiveTurnUptime) < 4.0
+            let stillSameScene = (self.activeSceneGeneration == capturedSceneGen)
             self.stateLock.unlock()
 
-            if isEcho || isRapidRepeat {
+            if isEcho || isRapidRepeat || !stillSameScene {
                 self.stateLock.lock()
                 self.handsFreeTurnInFlight = false
                 self.needsSpeechTaskResetAfterTts = true
@@ -6173,21 +6878,33 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 return
             }
 
-            var diag = self.handleDiagnoseRequest(payload: [
+            var diagPayload: [String: Any] = [
                 "query": finalTranscript,
                 "include_camera": true,
                 "dip_address": dipAddr,
-            ])
+                "turn_id": turnId,
+                "scene_generation": capturedSceneGen,
+                "language": capturedLang,
+                "input_mode": "handsfree",
+                "defer_tts_until_ack": true,
+            ]
+            if let sid = capturedSessionId, !sid.isEmpty { diagPayload["session_id"] = sid }
+            if let mSha = capturedManifestSha, !mSha.isEmpty { diagPayload["manifest_sha256"] = mSha }
+
+            var diag = self.handleDiagnoseRequest(payload: diagPayload)
             diag["transcript"] = finalTranscript
             diag["sensor_id"] = "TZ-THT-02"
             diag["matched_alias"] = "TZ THT-02"
 
             self.stateLock.lock()
-            if self.handsFreeActive {
+            let sceneStillMatchesAfterDiag = (self.activeSceneGeneration == capturedSceneGen)
+            if self.handsFreeActive && sceneStillMatchesAfterDiag {
                 self.pendingHandsFreeResults.append(diag)
                 if self.pendingHandsFreeResults.count > 16 {
                     self.pendingHandsFreeResults.removeFirst(self.pendingHandsFreeResults.count - 16)
                 }
+            } else {
+                self.pendingDeferredVoiceTurns.removeValue(forKey: turnId)
             }
             self.lastCompletedLiveTranscriptNorm = normLive
             self.lastCompletedLiveTurnUptime = ProcessInfo.processInfo.systemUptime
@@ -6256,7 +6973,11 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let audioBytes = parsedForm.fileData ?? req.body
         let handsFreeStr = (parsedForm.fields["hands_free"] ?? "false").lowercased()
         let isHandsFree = ["true", "1", "yes", "on"].contains(handsFreeStr)
-        let dipAddr = Int(parsedForm.fields["dip_address"] ?? "") ?? targetSlaveId
+        stateLock.lock()
+        let dipAddr = Int(parsedForm.fields["dip_address"] ?? "") ?? simulatedVisualDipAddress
+        let reqLang = parsedForm.fields["language"] ?? preferredVoiceLanguage
+        let defaultSceneGen = activeSceneGeneration
+        stateLock.unlock()
 
         let (transcript, isEmptySpeech) = transcribeAudioOnDevice(audioBytes: audioBytes, allowEmpty: true)
         let asrMs = ((ProcessInfo.processInfo.systemUptime - t0) * 1000.0 * 10).rounded() / 10
@@ -6270,7 +6991,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 ]
             }
             let msg = "I didn't catch any speech on the microphone—please try speaking again."
-            let audioB64 = synthesizeSpeechB64(msg)
+            let audioB64 = synthesizeSpeechB64(msg, speakOnDevice: true, language: reqLang)
             return [
                 "transcript": "",
                 "diagnosis": msg,
@@ -6289,9 +7010,13 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "query": transcript,
             "include_camera": true,
             "dip_address": dipAddr,
+            "language": reqLang,
+            "input_mode": isHandsFree ? "handsfree" : "ptt",
+            "scene_generation": Int(parsedForm.fields["scene_generation"] ?? "") ?? defaultSceneGen,
         ]
         if let sid = parsedForm.fields["session_id"], !sid.isEmpty { diagPayload["session_id"] = sid }
         if let mSha = parsedForm.fields["manifest_sha256"], !mSha.isEmpty { diagPayload["manifest_sha256"] = mSha }
+        if let tid = parsedForm.fields["turn_id"], !tid.isEmpty { diagPayload["turn_id"] = tid }
         var diag = handleDiagnoseRequest(payload: diagPayload)
         diag["transcript"] = transcript
         diag["asr_ms"] = asrMs
@@ -6353,7 +7078,72 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
     // MARK: - Sensor Load, Catalog Context & Signed Package Routes (`M4-ID-01..03`, `M4-PKG-*`, `M4-WAN-*`)
 
+    private func contextFromSessionSnapshot(_ snap: [String: Any]) -> SessionContentContext? {
+        guard let catCtx = snap["catalog_context"] as? [String: Any] else { return nil }
+        let origin = (catCtx["content_origin"] as? String) ?? "bundle"
+        let mSha = (catCtx["manifest_sha256"] as? String) ?? ""
+        if origin == "bundle" && (catCtx["product_id"] as? String) == "tzone_tht02" {
+            return FieldScanPackageStore.shared.buildBundleDefaultContext()
+        }
+        return SessionContentContext(
+            productId: (catCtx["product_id"] as? String) ?? "unknown",
+            variantId: (catCtx["variant_id"] as? String) ?? "default",
+            title: (catCtx["title"] as? String) ?? "\(catCtx["product_id"] ?? "")",
+            publicationSeq: (catCtx["publication_seq"] as? Int) ?? 1,
+            manifestSha256: mSha,
+            localProfileId: catCtx["local_profile_id"] as? String,
+            contentOrigin: origin,
+            benchModbusHomologated: (catCtx["bench_modbus_homologated"] as? Bool) ?? false,
+            capabilities: (catCtx["capabilities"] as? [String: Bool]) ?? [:]
+        )
+    }
+
+    /// Authoritative pinned-session resolution (`Finding 1` / `CTX-01`):
+    /// When an open session is pinned to manifest A, passing a conflicting manifest B is rejected
+    /// rather than silently overriding the active work session.
+    private func validatePinnedSessionManifest(sessionId: String?, manifestSha: String?) -> (SessionContentContext, [String: Any]?) {
+        let reqSha = manifestSha?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sidToCheck = ((sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 })
+            ?? FieldScanSessionEngine.shared.currentActiveSessionId
+
+        if let sid = sidToCheck,
+           let snap = try? FieldScanSessionEngine.shared.getSession(sessionId: sid),
+           ((snap["status"] as? String) == "open" || (sessionId != nil && !sessionId!.isEmpty)),
+           let pinnedCtx = contextFromSessionSnapshot(snap) {
+            if !reqSha.isEmpty && !pinnedCtx.manifestSha256.isEmpty {
+                let reqIsBundle = (reqSha == "bundle" || reqSha.hasPrefix("bundle-"))
+                let pinIsBundle = (pinnedCtx.contentOrigin == "bundle" || pinnedCtx.manifestSha256.hasPrefix("bundle-"))
+                if !(reqIsBundle && pinIsBundle) && reqSha != pinnedCtx.manifestSha256 {
+                    let err: [String: Any] = [
+                        "ok": false,
+                        "error_code": "MANIFEST_SESSION_MISMATCH",
+                        "requires_session_switch": true,
+                        "session_id": sid,
+                        "pinned_manifest_sha256": pinnedCtx.manifestSha256,
+                        "requested_manifest_sha256": reqSha,
+                        "message": "Active session '\(sid)' is pinned to '\(pinnedCtx.title)' (\(pinnedCtx.manifestSha256.prefix(12))). Close or start a new session explicitly before switching to manifest \(reqSha.prefix(12)).",
+                    ]
+                    return (pinnedCtx, err)
+                }
+            }
+            return (pinnedCtx, nil)
+        }
+
+        return (resolveEffectiveContext(sessionId: sessionId, manifestSha: manifestSha), nil)
+    }
+
     private func resolveEffectiveContext(sessionId: String?, manifestSha: String?) -> SessionContentContext {
+        // 1. Open pinned session is authoritative unless caller explicitly passed a different manifest when NO open session matches
+        let sidToCheck = ((sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 })
+            ?? FieldScanSessionEngine.shared.currentActiveSessionId
+        if let sid = sidToCheck,
+           let snap = try? FieldScanSessionEngine.shared.getSession(sessionId: sid),
+           ((snap["status"] as? String) == "open" || (sessionId != nil && !sessionId!.isEmpty)),
+           let pinnedCtx = contextFromSessionSnapshot(snap) {
+            return pinnedCtx
+        }
+
+        // 2. Explicit manifestSha when no open session pins the workspace
         if let mSha = manifestSha?.trimmingCharacters(in: .whitespacesAndNewlines), !mSha.isEmpty {
             if mSha == "bundle" || mSha.hasPrefix("bundle-") {
                 return FieldScanPackageStore.shared.buildBundleDefaultContext()
@@ -6375,25 +7165,6 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             }
         }
 
-        let sidToCheck = sessionId ?? FieldScanSessionEngine.shared.currentActiveSessionId
-        if let sid = sidToCheck,
-           let snap = try? FieldScanSessionEngine.shared.getSession(sessionId: sid),
-           ((snap["status"] as? String) == "open" || sessionId != nil),
-           let catCtx = snap["catalog_context"] as? [String: Any],
-           (catCtx["content_origin"] as? String) == "catalog",
-           let mSha = catCtx["manifest_sha256"] as? String {
-            return SessionContentContext(
-                productId: (catCtx["product_id"] as? String) ?? "unknown",
-                variantId: (catCtx["variant_id"] as? String) ?? "default",
-                title: (catCtx["title"] as? String) ?? "\(catCtx["product_id"] ?? "")",
-                publicationSeq: (catCtx["publication_seq"] as? Int) ?? 1,
-                manifestSha256: mSha,
-                localProfileId: catCtx["local_profile_id"] as? String,
-                contentOrigin: "catalog",
-                benchModbusHomologated: (catCtx["bench_modbus_homologated"] as? Bool) ?? false,
-                capabilities: (catCtx["capabilities"] as? [String: Bool]) ?? [:]
-            )
-        }
         return FieldScanPackageStore.shared.getSelectedContext()
     }
 

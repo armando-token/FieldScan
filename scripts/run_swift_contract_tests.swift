@@ -609,6 +609,108 @@ func runSwiftContractSuite() throws {
     let badWebWan = ModbusTCPClient.ensurePusrWebModbusEnabled(host: "8.8.8.8")
     check(badWebWan.checked == false && badWebWan.log.first?["reply"] == "WAN_HOST_BLOCKED", "1-Tap PUSR Swift: Web modbus helper must block public WAN IP")
 
+    // 12. Unified Copilot Action Registry, Bilingual ES Pack, 8-State Guidance & Durable History Parity (Swift)
+    let copilotReg = FieldScanCopilotRegistry()
+    let regActions = copilotReg.buildActionRegistry(rootOverride: repoRoot)
+    let regScreens = FieldScanCopilotRegistry.buildScreenInventory()
+    check(regActions.count >= 25, "Swift CopilotRegistry must expose >= 25 bounded actions")
+    check(regScreens.count >= 14, "Swift CopilotRegistry must expose complete screen inventory")
+    check(!copilotReg.spanishSpeechLocales(rootOverride: repoRoot).isEmpty, "Swift CopilotRegistry must load audited ES speech locales")
+
+    // UI-01 EN & ES PUSR field locator
+    let ui01En = copilotReg.resolveCopilotActionPlan(
+        query: "Open PUSR configuration and show me where to see the port",
+        descriptor: nil,
+        modbusTel: nil,
+        visionTel: nil,
+        gatewayHost: "",
+        gatewayPort: 502,
+        cloudSyncEnabled: false,
+        authorizedBusSlaveId: 1,
+        currentDipAddress: 1,
+        rootOverride: repoRoot
+    )
+    let ui01Acts = (ui01En?["actions"] as? [[String: Any]]) ?? []
+    check(ui01Acts.map { $0["id"] as? String } == ["config.open_pusr", "config.show_pusr_field"], "Swift UI-01 EN must open PUSR + highlight field")
+    check((ui01En?["bus_target_mutated"] as? Bool) == false, "Swift UI-01 must not mutate bus target")
+
+    let esPack = copilotReg.loadSpanishVoicePack(rootOverride: repoRoot)
+    let esAliases = (esPack["action_aliases"] as? [String: [String]]) ?? [:]
+    let esPusrQuery = (esAliases["config.open_pusr"]?.first ?? "open pusr") + " y " + (esAliases["config.show_pusr_field"]?.dropFirst().first ?? "port")
+    let ui01Es = copilotReg.resolveCopilotActionPlan(
+        query: esPusrQuery,
+        descriptor: nil,
+        modbusTel: nil,
+        visionTel: nil,
+        gatewayHost: "",
+        gatewayPort: 502,
+        cloudSyncEnabled: false,
+        authorizedBusSlaveId: 1,
+        currentDipAddress: 1,
+        rootOverride: repoRoot
+    )
+    check((ui01Es?["language"] as? String) == "es", "Swift UI-01 ES query must resolve in Spanish via audited resource pack")
+
+    // DIP-01..03 Guidance state machine & camera guards
+    let guidStart = copilotReg.startDipGuidance(targetSlaveId: 1, sessionId: "s-swift", profileId: "tzone_tht02", supportsDipPins: true, authorizedBusSlaveId: 1)
+    check((guidStart["state"] as? String) == "waiting_for_operator", "Swift DIP guidance starts at waiting_for_operator")
+    let guidSim = copilotReg.evaluateGuidanceCamera(visionTel: ["camera_source": "simulator:open_dip", "pcb_open_detected": true, "dip_confidence": 0.95], authorizedBusSlaveId: 1, rootOverride: repoRoot)
+    check((guidSim["state"] as? String) == "needs_review", "Swift DIP guidance rejects simulator frame for physical verification")
+    let guidOcc = copilotReg.evaluateGuidanceCamera(visionTel: ["camera_source": "ipad:avfoundation:back", "hand_detected": true, "frame_age_s": 0.1], authorizedBusSlaveId: 1, rootOverride: repoRoot)
+    check((guidOcc["state"] as? String) == "waiting_for_clear_frame", "Swift DIP guidance transitions to waiting_for_clear_frame on hand occlusion")
+    _ = copilotReg.evaluateGuidanceCamera(visionTel: ["camera_source": "ipad:avfoundation:back", "pcb_open_detected": true, "dip_confidence": 0.91, "observed_dip_bits": [0, 0, 0, 0, 0, 0, 0, 1], "frame_age_s": 0.1], authorizedBusSlaveId: 1, rootOverride: repoRoot)
+    let guidObs = copilotReg.evaluateGuidanceCamera(visionTel: ["camera_source": "ipad:avfoundation:back", "pcb_open_detected": true, "dip_confidence": 0.92, "observed_dip_bits": [0, 0, 0, 0, 0, 0, 0, 1], "frame_age_s": 0.1], authorizedBusSlaveId: 1, rootOverride: repoRoot)
+    check((guidObs["state"] as? String) == "observed", "Swift DIP guidance reaches observed after 2 clear live frames")
+    let guidDone = copilotReg.confirmGuidanceStep(manual: true, authorizedBusSlaveId: 1, complete: true)
+    check((guidDone["state"] as? String) == "complete" && (guidDone["confirmed_origin"] as? String) == "manual_operator_confirmation", "Swift DIP manual confirmation records provenance")
+
+    // BUS-01..02 Unified 6-state link diagnostics
+    let busFall = copilotReg.evaluateUnifiedLinkDiagnostic(
+        modbusTel: [
+            "online": true,
+            "healthy": true,
+            "fresh": true,
+            "simulation": false,
+            "temp_c": 21.5,
+            "humidity_rh": 49.0,
+            "history": [
+                ["ts": 100.0, "temp_c": 24.5, "humidity_rh": 49.0],
+                ["ts": 102.0, "temp_c": 21.5, "humidity_rh": 49.0],
+            ],
+        ],
+        gatewayHost: "10.10.100.254",
+        gatewayPort: 502,
+        rootOverride: repoRoot
+    )
+    check((busFall["state"] as? String) == "online_temp_falling" && (busFall["temperature_trend"] as? String) == "falling", "Swift BUS diagnostic detects falling temp trend only on >=2 valid readings")
+
+    // HIST-01..02 Durable turns, receipts, asset recall, stock draft guard & evidence photo budget
+    let histSess = try engine.createSession(payload: ["profile_id": "tzone_tht02", "serial_number": "SN-SW-77", "transport_mode": "auto"])
+    let histSid = histSess["session_id"] as! String
+    let turnRec = engine.recordConversationTurn(payload: [
+        "turn_id": "turn-swift-01",
+        "session_id": histSid,
+        "user_text": "Open PUSR settings",
+        "assistant_reply": "Opened PUSR settings",
+        "input_mode": "ptt",
+    ])
+    check((turnRec["ok"] as? Bool) == true && (turnRec["deduplicated"] as? Bool) == false, "Swift durable turn recording must persist to SQLite")
+    let turnDup = engine.recordConversationTurn(payload: ["turn_id": "turn-swift-01", "session_id": histSid, "user_text": "dup", "assistant_reply": "dup"])
+    check((turnDup["deduplicated"] as? Bool) == true, "Swift durable turn recording must deduplicate by turn_id")
+    let ackRec = try engine.recordActionAck(payload: ["turn_id": "turn-swift-01", "session_id": histSid, "receipts": [["action_id": "config.open_pusr", "status": "applied"]]])
+    check((ackRec["ok"] as? Bool) == true, "Swift durable action ack must attach to turn")
+    let recalled = engine.recallAssetHistory(profileId: "tzone_tht02", serialNumber: "SN-SW-77")
+    check(((recalled["episode_counts"] as? [String: Any])?["total_sessions"] as? Int) ?? 0 >= 1, "Swift asset recall must find confirmed sessions")
+    var stockRejected = false
+    do {
+        _ = try engine.createLocalDraft(sessionId: histSid, kind: "stock", payload: ["sku": "SHT30"])
+    } catch let de as FieldScanDomainError {
+        stockRejected = (de.code == "UNVERIFIED_STOCK_DATA")
+    }
+    check(stockRejected, "Swift stock draft must reject unverified inventory")
+    let stockOk = try engine.createLocalDraft(sessionId: histSid, kind: "stock", payload: ["sku": "SHT30", "verified_quantity": 1, "reorder_threshold": 4, "verified_by_operator": true])
+    check(((stockOk["draft"] as? [String: Any])?["external_sent"] as? Bool) == false, "Swift stock draft must remain local-only")
+
     let summary: [String: Any] = [
         "swift_contract_suite": "PASS",
         "contract_version": FieldScanSessionEngine.contractVersion,
@@ -616,6 +718,9 @@ func runSwiftContractSuite() throws {
         "pilot_writes_blocked": true,
         "cloud_catalog_swift_parity": "PASS",
         "ap_first_swift_parity": "PASS",
+        "copilot_unification_swift_parity": "PASS",
+        "copilot_registered_actions": regActions.count,
+        "copilot_registered_screens": regScreens.count,
         "golden_mbap_vectors_passed": mbapPassed,
         "golden_voice_en_passed": enPassed,
         "golden_voice_es_passed": esPassed,

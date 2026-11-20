@@ -39,6 +39,9 @@ public final class FieldScanSessionEngine {
     public let bundleKnowledgeRootURL: URL?
     public var packageStore: FieldScanPackageStore
     public var minFreeDiskBytes: Int64 = 2 * 1024 * 1024
+    public var maxAutoCapturesPerSession: Int = 10
+    public var thumbnailBudgetBytes: Int = 2 * 1024 * 1024
+    public var keepAudioOptIn: Bool = false
 
     private var activeSessionId: String?
     private var connectionGeneration: Int = 1
@@ -594,6 +597,17 @@ public final class FieldScanSessionEngine {
             payload_sha256 TEXT NOT NULL,
             created_at_utc TEXT NOT NULL,
             response_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS copilot_general_history (
+            turn_id TEXT PRIMARY KEY,
+            occurred_at_utc TEXT NOT NULL,
+            input_mode TEXT NOT NULL,
+            language TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            user_text TEXT NOT NULL,
+            assistant_reply TEXT NOT NULL,
+            attached_session_id TEXT,
+            payload_json TEXT NOT NULL
         );
         """
         sqlite3_exec(db, sql, nil, nil, nil)
@@ -1443,6 +1457,22 @@ public final class FieldScanSessionEngine {
             origin = isSim ? "simulation" : (isUpload ? "uploaded_file" : "manual_physical_camera")
         }
 
+        let evExisting = (stateDoc["evidence_files"] as? [[String: Any]]) ?? []
+        let autoUsedCount = evExisting.filter { ($0["capture_trigger"] as? String) == "auto_physical_window" }.count
+        let thumbBytesUsed = evExisting.reduce(0) { $0 + (($1["thumbnail_size_bytes"] as? Int) ?? 0) }
+        if !manualTrigger && (autoUsedCount >= maxAutoCapturesPerSession || thumbBytesUsed >= thumbnailBudgetBytes) {
+            return [
+                "captured": false,
+                "reason": "EVIDENCE_BUDGET_REACHED",
+                "review_required": true,
+                "auto_captures_used": autoUsedCount,
+                "max_auto_captures": maxAutoCapturesPerSession,
+                "thumbnail_bytes_used": thumbBytesUsed,
+                "thumbnail_budget_bytes": thumbnailBudgetBytes,
+                "confirmed_evidence_preserved": true,
+            ]
+        }
+
         try ensureDiskSpace()
         let photoId = "pho-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10)).lowercased()
         let fileName = "\(sessionId)_\(photoId)_original.jpg"
@@ -1459,6 +1489,38 @@ public final class FieldScanSessionEngine {
         }
         try FileManager.default.moveItem(at: tmpURL, to: finalURL)
 
+        var thumbName: String? = nil
+        var thumbSizeBytes = 0
+        #if canImport(UIKit)
+        if let img = UIImage(data: rawJPEG) {
+            let maxW: CGFloat = 480.0
+            let scale = img.size.width > maxW ? (maxW / img.size.width) : 1.0
+            let targetSz = CGSize(width: max(1, (img.size.width * scale).rounded()), height: max(1, (img.size.height * scale).rounded()))
+            let renderer = UIGraphicsImageRenderer(size: targetSz)
+            let resized = renderer.image { _ in img.draw(in: CGRect(origin: .zero, size: targetSz)) }
+            if let tData = resized.jpegData(compressionQuality: 0.72) {
+                let tn = "\(sessionId)_\(photoId)_thumb.jpg"
+                let tTmp = evidenceDirectoryURL.appendingPathComponent("\(tn).tmp")
+                let tFin = evidenceDirectoryURL.appendingPathComponent(tn)
+                if (try? tData.write(to: tTmp, options: .atomic)) != nil {
+                    try? FileManager.default.removeItem(at: tFin)
+                    if (try? FileManager.default.moveItem(at: tTmp, to: tFin)) != nil {
+                        thumbName = tn
+                        thumbSizeBytes = tData.count
+                    }
+                }
+            }
+        }
+        #else
+        let tn = "\(sessionId)_\(photoId)_thumb.jpg"
+        let tFin = evidenceDirectoryURL.appendingPathComponent(tn)
+        let capped = rawJPEG.prefix(min(rawJPEG.count, 32768))
+        if (try? Data(capped).write(to: tFin, options: .atomic)) != nil {
+            thumbName = tn
+            thumbSizeBytes = capped.count
+        }
+        #endif
+
         let nowUTC = Self.utcNowISO()
         let record: [String: Any] = [
             "photo_id": photoId,
@@ -1471,6 +1533,8 @@ public final class FieldScanSessionEngine {
             "roi_zone": roiZone,
             "original_filename": fileName,
             "original_sha256": digest,
+            "thumbnail_filename": thumbName ?? NSNull(),
+            "thumbnail_size_bytes": thumbSizeBytes,
             "simulation": isSim,
         ]
         var evFiles = (stateDoc["evidence_files"] as? [[String: Any]]) ?? []
@@ -1591,6 +1655,12 @@ public final class FieldScanSessionEngine {
             "as_left": stateDoc["as_left"] ?? NSNull(),
             "latest_sample_evaluation": freshness,
             "confirmed_changes": confirmedChanges,
+            "observations": stateDoc["observations"] ?? [],
+            "conversation_turns": stateDoc["conversation_turns"] ?? [],
+            "action_receipts": stateDoc["action_receipts"] ?? [],
+            "guidance_history": stateDoc["guidance_history"] ?? [],
+            "local_drafts": stateDoc["local_drafts"] ?? [],
+            "evidence_policy": getEvidencePolicy(),
             "evidence_catalog": stateDoc["evidence_files"] ?? [],
             "events": snap["events"] ?? [],
         ]
@@ -1663,6 +1733,14 @@ public final class FieldScanSessionEngine {
         }
         if let hist = record["historical_source_status"] as? [String: Any], (hist["available"] as? Bool) == false {
             summaryLines.append("NOTICE: \(hist["message"] ?? "Historical source unavailable")")
+        }
+        let convTurns = (record["conversation_turns"] as? [[String: Any]]) ?? []
+        summaryLines.append("Copilot Turns & Verified UI Actions (\(convTurns.count)):")
+        for (idx, ct) in convTurns.enumerated() {
+            let recs = (ct["action_receipts"] as? [[String: Any]]) ?? []
+            let recSummary = recs.isEmpty ? "none" : recs.map { "\($0["action_id"] ?? "")=\($0["status"] ?? "")" }.joined(separator: ", ")
+            let uTxt = String(((ct["user_text"] as? String) ?? "").prefix(72))
+            summaryLines.append("  \(idx + 1). [\(ct["input_mode"] ?? "text")/\(ct["language"] ?? "en")] \(uTxt) | UI: \(recSummary)")
         }
         summaryLines.append("Observations (\(observations.count)) & Ordered Events (\(events.count)):")
         for ev in events {
@@ -2153,5 +2231,463 @@ public final class FieldScanSessionEngine {
         ]
         snap["freshness"] = evaluateSampleFreshness(sessionSnap: snap)
         return snap
+    }
+
+    // MARK: - Section 5: Durable Copilot Turn History, Action Receipts, Asset Recall & Local Drafts
+
+    public func getEvidencePolicy() -> [String: Any] {
+        return [
+            "max_auto_captures_per_session": maxAutoCapturesPerSession,
+            "thumbnail_budget_bytes": thumbnailBudgetBytes,
+            "keep_audio_opt_in": keepAudioOptIn,
+            "default_retention_mode": "text_and_keyframe_photos",
+        ]
+    }
+
+    public func configureEvidencePolicy(payload: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let v = (payload["max_auto_captures_per_session"] as? Int) ?? (payload["max_auto_captures_per_session"] as? NSNumber)?.intValue {
+            maxAutoCapturesPerSession = max(1, min(100, v))
+        }
+        if let v = (payload["thumbnail_budget_bytes"] as? Int) ?? (payload["thumbnail_budget_bytes"] as? NSNumber)?.intValue {
+            thumbnailBudgetBytes = max(64 * 1024, min(50 * 1024 * 1024, v))
+        }
+        if let b = payload["keep_audio_opt_in"] as? Bool {
+            keepAudioOptIn = b
+        }
+        return getEvidencePolicy()
+    }
+
+    public func recordConversationTurn(payload: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let rawTid = ((payload["turn_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let turnId = rawTid.isEmpty ? ("turn-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10)).lowercased()) : rawTid
+        let sessionId = ((payload["session_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let userText = ((payload["user_text"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let assistantReply = ((payload["assistant_reply"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let inputMode = ((payload["input_mode"] as? String) ?? "text").lowercased()
+        let language = ((payload["language"] as? String) ?? preferredLanguage).lowercased()
+        let provider = (payload["provider"] as? String) ?? "deterministic"
+        let nowUTC = Self.utcNowISO()
+
+        var turnEntry: [String: Any] = [
+            "turn_id": turnId,
+            "occurred_at_utc": nowUTC,
+            "input_mode": inputMode,
+            "language": language,
+            "provider": provider,
+            "user_text": userText,
+            "assistant_reply": assistantReply,
+            "evidence_origin": (payload["evidence_origin"] as? String) ?? "copilot",
+            "step_id": payload["step_id"] ?? NSNull(),
+            "document_id": payload["document_id"] ?? NSNull(),
+            "document_revision": payload["document_revision"] ?? NSNull(),
+            "manual_page": payload["manual_page"] ?? NSNull(),
+            "camera_ref": payload["camera_ref"] ?? NSNull(),
+            "modbus_ref": payload["modbus_ref"] ?? NSNull(),
+            "manifest_sha256": payload["manifest_sha256"] ?? NSNull(),
+            "scene_generation": payload["scene_generation"] ?? NSNull(),
+            "planned_actions": (payload["planned_actions"] as? [[String: Any]]) ?? [],
+            "action_receipts": (payload["action_receipts"] as? [[String: Any]]) ?? [],
+            "guidance_state": payload["guidance_state"] ?? NSNull(),
+        ]
+
+        if !sessionId.isEmpty,
+           let snap = try? loadSessionSnapshotUnlocked(sessionId: sessionId),
+           (snap["status"] as? String) != "closed",
+           var stateDoc = snap["state"] as? [String: Any] {
+            var turns = (stateDoc["conversation_turns"] as? [[String: Any]]) ?? []
+            if let existing = turns.first(where: { ($0["turn_id"] as? String) == turnId }) {
+                return ["ok": true, "deduplicated": true, "scope": "session", "session_id": sessionId, "turn": existing]
+            }
+            if turnEntry["step_id"] is NSNull { turnEntry["step_id"] = snap["step_id"] ?? "identify" }
+            turns.append(turnEntry)
+            stateDoc["conversation_turns"] = turns
+            let nextSeq = ((snap["seq"] as? Int) ?? 1) + 1
+            let stepId = (snap["step_id"] as? String) ?? "identify"
+            let isSim = (snap["simulation"] as? Bool) ?? false
+            updateSessionRowUnlocked(
+                sessionId: sessionId,
+                seq: nextSeq,
+                stepId: stepId,
+                status: (snap["status"] as? String) ?? "open",
+                simulation: isSim,
+                language: (snap["language"] as? String) ?? language,
+                assetConfirmed: (snap["asset_confirmed"] as? Bool) ?? false,
+                stateDoc: stateDoc
+            )
+            insertEventUnlocked(
+                sessionId: sessionId,
+                seq: nextSeq,
+                kind: "conversation.turn",
+                stepId: stepId,
+                occurredAtUTC: nowUTC,
+                monotonicS: ProcessInfo.processInfo.systemUptime,
+                source: inputMode,
+                actor: "copilot",
+                simulation: isSim,
+                payload: turnEntry
+            )
+            return ["ok": true, "deduplicated": false, "scope": "session", "session_id": sessionId, "seq": nextSeq, "turn": turnEntry]
+        }
+
+        // Persist in durable general history when outside an open session
+        if let db = db {
+            var checkStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, "SELECT payload_json FROM copilot_general_history WHERE turn_id = ?;", -1, &checkStmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(checkStmt, 1, (turnId as NSString).utf8String, -1, nil)
+                if sqlite3_step(checkStmt) == SQLITE_ROW {
+                    let s = String(cString: sqlite3_column_text(checkStmt, 0))
+                    sqlite3_finalize(checkStmt)
+                    let prev = ((try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any]) ?? turnEntry
+                    return ["ok": true, "deduplicated": true, "scope": "general", "turn": prev]
+                }
+                sqlite3_finalize(checkStmt)
+            }
+            let pData = (try? JSONSerialization.data(withJSONObject: turnEntry)) ?? Data("{}".utf8)
+            let pStr = String(data: pData, encoding: .utf8) ?? "{}"
+            var insStmt: OpaquePointer?
+            let insSql = """
+            INSERT INTO copilot_general_history (
+                turn_id, occurred_at_utc, input_mode, language, provider,
+                user_text, assistant_reply, attached_session_id, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?);
+            """
+            if sqlite3_prepare_v2(db, insSql, -1, &insStmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(insStmt, 1, (turnId as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(insStmt, 2, (nowUTC as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(insStmt, 3, (inputMode as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(insStmt, 4, (language as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(insStmt, 5, (provider as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(insStmt, 6, (userText as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(insStmt, 7, (assistantReply as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(insStmt, 8, (pStr as NSString).utf8String, -1, nil)
+                sqlite3_step(insStmt)
+                sqlite3_finalize(insStmt)
+            }
+        }
+        return ["ok": true, "deduplicated": false, "scope": "general", "turn": turnEntry]
+    }
+
+    public func recordActionAck(payload: [String: Any]) throws -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let turnId = ((payload["turn_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !turnId.isEmpty else {
+            throw FieldScanDomainError(code: "MISSING_TURN_ID", message: "Action acknowledgement requires turn_id.", statusCode: 400)
+        }
+        let sessionId = ((payload["session_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let receipts = (payload["receipts"] as? [[String: Any]]) ?? []
+        let nowUTC = Self.utcNowISO()
+        let ackDoc: [String: Any] = [
+            "turn_id": turnId,
+            "acked_at_utc": nowUTC,
+            "scene_generation": payload["scene_generation"] ?? NSNull(),
+            "input_mode": (payload["input_mode"] as? String) ?? "unknown",
+            "stale": (payload["stale"] as? Bool) ?? false,
+            "receipts": receipts,
+        ]
+
+        if !sessionId.isEmpty,
+           let snap = try? loadSessionSnapshotUnlocked(sessionId: sessionId),
+           (snap["status"] as? String) != "closed",
+           var stateDoc = snap["state"] as? [String: Any] {
+            var allAcks = (stateDoc["action_receipts"] as? [[String: Any]]) ?? []
+            if allAcks.contains(where: { ($0["turn_id"] as? String) == turnId }) {
+                return ["ok": true, "deduplicated": true, "ack": ackDoc]
+            }
+            allAcks.append(ackDoc)
+            stateDoc["action_receipts"] = allAcks
+            var turns = (stateDoc["conversation_turns"] as? [[String: Any]]) ?? []
+            for idx in turns.indices where (turns[idx]["turn_id"] as? String) == turnId {
+                turns[idx]["action_receipts"] = receipts
+            }
+            stateDoc["conversation_turns"] = turns
+            let nextSeq = ((snap["seq"] as? Int) ?? 1) + 1
+            let stepId = (snap["step_id"] as? String) ?? "identify"
+            let isSim = (snap["simulation"] as? Bool) ?? false
+            updateSessionRowUnlocked(
+                sessionId: sessionId,
+                seq: nextSeq,
+                stepId: stepId,
+                status: (snap["status"] as? String) ?? "open",
+                simulation: isSim,
+                language: (snap["language"] as? String) ?? "en",
+                assetConfirmed: (snap["asset_confirmed"] as? Bool) ?? false,
+                stateDoc: stateDoc
+            )
+            insertEventUnlocked(
+                sessionId: sessionId,
+                seq: nextSeq,
+                kind: "copilot.action_ack",
+                stepId: stepId,
+                occurredAtUTC: nowUTC,
+                monotonicS: ProcessInfo.processInfo.systemUptime,
+                source: "hmi_executor",
+                actor: "ui_ack",
+                simulation: isSim,
+                payload: ackDoc
+            )
+            return ["ok": true, "deduplicated": false, "seq": nextSeq, "ack": ackDoc]
+        }
+
+        if let db = db {
+            var stmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, "SELECT payload_json FROM copilot_general_history WHERE turn_id = ?;", -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmt, 1, (turnId as NSString).utf8String, -1, nil)
+                if sqlite3_step(stmt) == SQLITE_ROW {
+                    let s = String(cString: sqlite3_column_text(stmt, 0))
+                    sqlite3_finalize(stmt)
+                    if var obj = (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any] {
+                        obj["action_receipts"] = receipts
+                        if let uData = try? JSONSerialization.data(withJSONObject: obj),
+                           let uStr = String(data: uData, encoding: .utf8) {
+                            var uStmt: OpaquePointer?
+                            if sqlite3_prepare_v2(db, "UPDATE copilot_general_history SET payload_json = ? WHERE turn_id = ?;", -1, &uStmt, nil) == SQLITE_OK {
+                                sqlite3_bind_text(uStmt, 1, (uStr as NSString).utf8String, -1, nil)
+                                sqlite3_bind_text(uStmt, 2, (turnId as NSString).utf8String, -1, nil)
+                                sqlite3_step(uStmt)
+                                sqlite3_finalize(uStmt)
+                            }
+                        }
+                    }
+                } else {
+                    sqlite3_finalize(stmt)
+                }
+            }
+        }
+        return ["ok": true, "deduplicated": false, "ack": ackDoc]
+    }
+
+    public func listGeneralHistory(limit: Int = 50) -> [[String: Any]] {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let db = db else { return [] }
+        var out: [[String: Any]] = []
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, "SELECT payload_json, attached_session_id FROM copilot_general_history ORDER BY occurred_at_utc DESC LIMIT ?;", -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_int(stmt, 1, Int32(max(1, limit)))
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let s = String(cString: sqlite3_column_text(stmt, 0))
+                let att = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(stmt, 1))
+                if var obj = (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any] {
+                    obj["attached_session_id"] = att ?? NSNull()
+                    out.append(obj)
+                }
+            }
+            sqlite3_finalize(stmt)
+        }
+        return out
+    }
+
+    public func attachGeneralHistoryToSession(sessionId: String, turnIds: [String], confirmed: Bool) throws -> [String: Any] {
+        guard confirmed else {
+            throw FieldScanDomainError(code: "CONFIRMATION_REQUIRED", message: "Associating general history with an asset session requires confirmed=true.", statusCode: 400)
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        let snap = try loadSessionSnapshotUnlocked(sessionId: sessionId)
+        var stateDoc = (snap["state"] as? [String: Any]) ?? [:]
+        var turns = (stateDoc["conversation_turns"] as? [[String: Any]]) ?? []
+        var existingIds = Set(turns.compactMap { $0["turn_id"] as? String })
+        var attached: [String] = []
+        if let db = db {
+            for tid in turnIds {
+                var sStmt: OpaquePointer?
+                if sqlite3_prepare_v2(db, "SELECT payload_json FROM copilot_general_history WHERE turn_id = ?;", -1, &sStmt, nil) == SQLITE_OK {
+                    sqlite3_bind_text(sStmt, 1, (tid as NSString).utf8String, -1, nil)
+                    if sqlite3_step(sStmt) == SQLITE_ROW {
+                        let raw = String(cString: sqlite3_column_text(sStmt, 0))
+                        if !existingIds.contains(tid),
+                           var tObj = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any] {
+                            tObj["attached_from_general_history"] = true
+                            turns.append(tObj)
+                            existingIds.insert(tid)
+                        }
+                        attached.append(tid)
+                    }
+                    sqlite3_finalize(sStmt)
+                }
+                var uStmt: OpaquePointer?
+                if sqlite3_prepare_v2(db, "UPDATE copilot_general_history SET attached_session_id = ? WHERE turn_id = ?;", -1, &uStmt, nil) == SQLITE_OK {
+                    sqlite3_bind_text(uStmt, 1, (sessionId as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(uStmt, 2, (tid as NSString).utf8String, -1, nil)
+                    sqlite3_step(uStmt)
+                    sqlite3_finalize(uStmt)
+                }
+            }
+        }
+        if !attached.isEmpty {
+            stateDoc["conversation_turns"] = turns
+            let nextSeq = ((snap["seq"] as? Int) ?? 1) + 1
+            updateSessionRowUnlocked(
+                sessionId: sessionId,
+                seq: nextSeq,
+                stepId: (snap["step_id"] as? String) ?? "identify",
+                status: (snap["status"] as? String) ?? "open",
+                simulation: (snap["simulation"] as? Bool) ?? false,
+                language: (snap["language"] as? String) ?? "en",
+                assetConfirmed: (snap["asset_confirmed"] as? Bool) ?? false,
+                stateDoc: stateDoc
+            )
+        }
+        return ["ok": true, "session_id": sessionId, "attached_turn_ids": attached]
+    }
+
+    public func recallAssetHistory(profileId: String, serialNumber: String) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let cleanSN = serialNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanSN.isEmpty, let db = db else {
+            return ["matched_sessions": [], "episode_counts": [:], "summary": "No confirmed serial number provided."]
+        }
+        var episodes: [[String: Any]] = []
+        var noRespIds: [String] = []
+        var fault7fffIds: [String] = []
+        var stmt: OpaquePointer?
+        let q = "SELECT session_id, created_at_utc, status, state_json FROM sessions WHERE profile_id = ? AND serial_number = ? AND asset_confirmed = 1 ORDER BY created_at_utc DESC;"
+        if sqlite3_prepare_v2(db, q, -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(stmt, 1, (profileId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (cleanSN as NSString).utf8String, -1, nil)
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let sid = String(cString: sqlite3_column_text(stmt, 0))
+                let created = String(cString: sqlite3_column_text(stmt, 1))
+                let status = String(cString: sqlite3_column_text(stmt, 2))
+                let sStr = String(cString: sqlite3_column_text(stmt, 3))
+                let sd = ((try? JSONSerialization.jsonObject(with: Data(sStr.utf8))) as? [String: Any]) ?? [:]
+                let asF = (sd["as_found"] as? [String: Any]) ?? [:]
+                var hasTimeoutEv = false
+                var evStmt: OpaquePointer?
+                if sqlite3_prepare_v2(db, "SELECT 1 FROM session_events WHERE session_id = ? AND kind = 'sensor.timeout' LIMIT 1;", -1, &evStmt, nil) == SQLITE_OK {
+                    sqlite3_bind_text(evStmt, 1, (sid as NSString).utf8String, -1, nil)
+                    hasTimeoutEv = (sqlite3_step(evStmt) == SQLITE_ROW)
+                    sqlite3_finalize(evStmt)
+                }
+                if (asF["communication"] as? String) == "no_response" || hasTimeoutEv { noRespIds.append(sid) }
+                let lastS = (sd["last_valid_sample"] as? [String: Any]) ?? [:]
+                let meas = (lastS["measurements"] as? [[String: Any]]) ?? []
+                if meas.contains(where: { ($0["quality"] as? String) == "invalid_sentinel_7fff" }) { fault7fffIds.append(sid) }
+                episodes.append([
+                    "session_id": sid,
+                    "created_at_utc": created,
+                    "status": status,
+                    "as_found_communication": asF["communication"] ?? NSNull(),
+                    "confirmed_changes_count": ((sd["confirmed_changes"] as? [Any])?.count) ?? 0,
+                    "conversation_turns_count": ((sd["conversation_turns"] as? [Any])?.count) ?? 0,
+                ])
+            }
+            sqlite3_finalize(stmt)
+        }
+        let summary = !noRespIds.isEmpty
+            ? "\(noRespIds.count) session(s) with no_response recorded for \(profileId) (\(cleanSN)); factual episodes linked without inferring root cause."
+            : "\(episodes.count) prior confirmed session(s) found for \(profileId) (\(cleanSN))."
+        return [
+            "profile_id": profileId,
+            "serial_number": cleanSN,
+            "matched_sessions": episodes,
+            "episode_counts": [
+                "total_sessions": episodes.count,
+                "no_response_sessions": noRespIds.count,
+                "no_response_session_ids": noRespIds,
+                "fault_7fff_sessions": fault7fffIds.count,
+                "fault_7fff_session_ids": fault7fffIds,
+            ],
+            "root_cause_inferred": false,
+            "summary": summary,
+        ]
+    }
+
+    public func createLocalDraft(sessionId: String, kind: String, payload: [String: Any]) throws -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let cleanKind = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let nowUTC = Self.utcNowISO()
+        let snap = try loadSessionSnapshotUnlocked(sessionId: sessionId)
+        var stateDoc = (snap["state"] as? [String: Any]) ?? [:]
+        let draft: [String: Any]
+
+        if cleanKind == "stock" {
+            let sku = ((payload["sku"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let verifiedOp = (payload["verified_by_operator"] as? Bool) ?? false
+            let qtyOpt = (payload["verified_quantity"] as? Int) ?? (payload["verified_quantity"] as? NSNumber)?.intValue
+            let thrOpt = (payload["reorder_threshold"] as? Int) ?? (payload["reorder_threshold"] as? NSNumber)?.intValue
+            guard !sku.isEmpty, verifiedOp, let qty = qtyOpt, let thr = thrOpt else {
+                throw FieldScanDomainError(
+                    code: "UNVERIFIED_STOCK_DATA",
+                    message: "Stock draft requires explicit sku, verified_quantity, reorder_threshold, and verified_by_operator=true. Missing sensor readings never prove low stock.",
+                    statusCode: 400
+                )
+            }
+            draft = [
+                "draft_id": "drf-stk-" + String(UUID().uuidString.prefix(8)).lowercased(),
+                "kind": "stock_replenishment",
+                "created_at_utc": nowUTC,
+                "session_id": sessionId,
+                "sku": sku,
+                "verified_quantity": qty,
+                "reorder_threshold": thr,
+                "below_threshold": qty <= thr,
+                "verified_by_operator": true,
+                "local_only": true,
+                "external_sent": false,
+                "notes": ((payload["notes"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            ]
+        } else if cleanKind == "manufacturer" {
+            let evFiles = (stateDoc["evidence_files"] as? [[String: Any]]) ?? []
+            let selFiles = (payload["selected_files"] as? [String]) ?? evFiles.compactMap { $0["original_filename"] as? String }
+            let qs = (payload["questions"] as? [String]) ?? ["Please advise on bench observations and recommended corrective action."]
+            draft = [
+                "draft_id": "drf-mfg-" + String(UUID().uuidString.prefix(8)).lowercased(),
+                "kind": "manufacturer_escalation",
+                "created_at_utc": nowUTC,
+                "session_id": sessionId,
+                "device_profile": snap["profile_id"] ?? "tzone_tht02",
+                "serial_number": snap["serial_number"] ?? NSNull(),
+                "facts": [
+                    "as_found": stateDoc["as_found"] ?? NSNull(),
+                    "confirmed_changes": stateDoc["confirmed_changes"] ?? [],
+                    "latest_sample": snap["freshness"] ?? [:],
+                    "conversation_turns_count": ((stateDoc["conversation_turns"] as? [Any])?.count) ?? 0,
+                ],
+                "questions": qs,
+                "selected_files": selFiles,
+                "local_only": true,
+                "external_sent": false,
+            ]
+        } else {
+            throw FieldScanDomainError(code: "UNSUPPORTED_DRAFT_KIND", message: "Unsupported draft kind '\(kind)'", statusCode: 400)
+        }
+
+        var drafts = (stateDoc["local_drafts"] as? [[String: Any]]) ?? []
+        drafts.append(draft)
+        stateDoc["local_drafts"] = drafts
+        let nextSeq = ((snap["seq"] as? Int) ?? 1) + 1
+        let stepId = (snap["step_id"] as? String) ?? "identify"
+        let isSim = (snap["simulation"] as? Bool) ?? false
+        updateSessionRowUnlocked(
+            sessionId: sessionId,
+            seq: nextSeq,
+            stepId: stepId,
+            status: (snap["status"] as? String) ?? "open",
+            simulation: isSim,
+            language: (snap["language"] as? String) ?? "en",
+            assetConfirmed: (snap["asset_confirmed"] as? Bool) ?? false,
+            stateDoc: stateDoc
+        )
+        insertEventUnlocked(
+            sessionId: sessionId,
+            seq: nextSeq,
+            kind: "draft.prepared",
+            stepId: stepId,
+            occurredAtUTC: nowUTC,
+            monotonicS: ProcessInfo.processInfo.systemUptime,
+            source: "local_draft",
+            actor: "operator",
+            simulation: isSim,
+            payload: draft
+        )
+        return ["ok": true, "draft": draft]
     }
 }

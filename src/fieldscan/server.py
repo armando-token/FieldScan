@@ -23,6 +23,16 @@ from fieldscan.calibration_planned import (
 )
 from fieldscan.catalog_client import FieldScanCatalogClient
 from fieldscan.catalog_store import CatalogDomainError, FieldScanPackageStore
+from fieldscan.copilot_registry import (
+    GuidanceSessionTracker,
+    build_action_registry,
+    build_screen_inventory,
+    compute_scene_capabilities,
+    detect_copilot_language,
+    evaluate_unified_link_diagnostic,
+    format_voice_template,
+    resolve_copilot_action_plan,
+)
 from fieldscan.lfm_engine import MANUAL_PAGE_TITLES, get_lfm_engine
 from fieldscan.live_repair import LiveRepairCoordinator
 from fieldscan.modbus_rtu import ModbusRTUScanner, discover_serial_ports
@@ -74,12 +84,97 @@ _SESSIONS = FieldScanSessionEngine(
 _SIMULATED_VISUAL_DIP_ADDRESS: int = 1
 _ACTIVE_SCENE_GENERATION: int = 1
 _LATEST_SCENE_READY_TURN: dict[str, Any] = {}
+_PREFERRED_VOICE_LANGUAGE: str = "en"
+_ACTIVE_VOICE_CONTEXT: dict[str, Any] = {}
+_GUIDANCE = GuidanceSessionTracker()
+_DETERMINISTIC_ACK_LATENCIES_MS: dict[str, list[float]] = {}
+_DETERMINISTIC_TTS_LATENCIES_MS: dict[str, list[float]] = {}
+
+
+def _record_latency_metric(mode: str, ack_ms: float | None, tts_ms: float | None) -> None:
+    clean_mode = (mode or "unknown").strip().lower() or "unknown"
+    if ack_ms is not None and ack_ms >= 0:
+        arr = _DETERMINISTIC_ACK_LATENCIES_MS.setdefault(clean_mode, [])
+        arr.append(float(ack_ms))
+        if len(arr) > 200:
+            del arr[:-200]
+    if tts_ms is not None and tts_ms >= 0:
+        arr = _DETERMINISTIC_TTS_LATENCIES_MS.setdefault(clean_mode, [])
+        arr.append(float(tts_ms))
+        if len(arr) > 200:
+            del arr[:-200]
+
+
+def _latency_metrics_summary() -> dict[str, Any]:
+    def _stats(vals: list[float]) -> dict[str, Any]:
+        if not vals:
+            return {"n": 0, "median_ms": None, "p95_ms": None}
+        s = sorted(vals)
+        med = s[len(s) // 2]
+        p95 = s[min(len(s) - 1, int((len(s) - 1) * 0.95))]
+        return {"n": len(s), "median_ms": round(med, 1), "p95_ms": round(p95, 1)}
+
+    modes = sorted(set(_DETERMINISTIC_ACK_LATENCIES_MS.keys()) | set(_DETERMINISTIC_TTS_LATENCIES_MS.keys()))
+    return {
+        m: {
+            "ui_ack": _stats(_DETERMINISTIC_ACK_LATENCIES_MS.get(m, [])),
+            "tts_start": _stats(_DETERMINISTIC_TTS_LATENCIES_MS.get(m, [])),
+        }
+        for m in modes
+    }
+
+
+def _validate_pinned_session_manifest(
+    session_id: str | None = None,
+    manifest_sha256: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Enforce open pinned-session authority (`Finding 1` / `CTX-01`)."""
+    req_sha = (manifest_sha256 or "").strip()
+    sid_to_check = (session_id or "").strip() or _SESSIONS._active_session_id
+    if sid_to_check:
+        try:
+            snap = _SESSIONS.get_session(sid_to_check)
+            if (snap.get("status") == "open" or bool(session_id)) and isinstance(snap.get("catalog_context"), dict):
+                pinned_ctx = dict(snap["catalog_context"])
+                pin_sha = str(pinned_ctx.get("manifest_sha256") or "").strip()
+                if req_sha and pin_sha:
+                    req_is_bundle = req_sha == "bundle" or req_sha.startswith("bundle-")
+                    pin_is_bundle = pinned_ctx.get("content_origin") == "bundle" or pin_sha.startswith("bundle-")
+                    if not (req_is_bundle and pin_is_bundle) and req_sha != pin_sha:
+                        err = {
+                            "ok": False,
+                            "error_code": "MANIFEST_SESSION_MISMATCH",
+                            "requires_session_switch": True,
+                            "session_id": sid_to_check,
+                            "pinned_manifest_sha256": pin_sha,
+                            "requested_manifest_sha256": req_sha,
+                            "message": (
+                                f"Active session '{sid_to_check}' is pinned to '{pinned_ctx.get('title')}' "
+                                f"({pin_sha[:12]}). Close or start a new session explicitly before switching to {req_sha[:12]}."
+                            ),
+                        }
+                        return pinned_ctx, err
+                return pinned_ctx, None
+        except SessionDomainError:
+            pass
+    return _resolve_effective_context(session_id=session_id, manifest_sha256=manifest_sha256), None
 
 
 def _resolve_effective_context(
     session_id: str | None = None,
     manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
+    # 1. Open pinned session is authoritative for maintenance operations (`Finding 1`)
+    sid_to_check = (session_id or "").strip() or _SESSIONS._active_session_id
+    if sid_to_check:
+        try:
+            snap = _SESSIONS.get_session(sid_to_check)
+            if (snap.get("status") == "open" or bool(session_id)) and isinstance(snap.get("catalog_context"), dict):
+                return dict(snap["catalog_context"])
+        except SessionDomainError:
+            pass
+
+    # 2. Explicit manifest SHA when no open session pins the workspace
     m_sha = (manifest_sha256 or "").strip()
     if m_sha:
         if m_sha == "bundle" or m_sha.startswith("bundle-"):
@@ -102,16 +197,6 @@ def _resolve_effective_context(
         except CatalogDomainError:
             pass
 
-    sid_to_check = (session_id or "").strip() or _SESSIONS._active_session_id
-    if sid_to_check:
-        try:
-            snap = _SESSIONS.get_session(sid_to_check)
-            if (snap.get("status") == "open" or bool(session_id)) and isinstance(snap.get("catalog_context"), dict):
-                cat_ctx = snap["catalog_context"]
-                if cat_ctx.get("content_origin") == "catalog" and cat_ctx.get("manifest_sha256"):
-                    return dict(cat_ctx)
-        except SessionDomainError:
-            pass
     return _CATALOG_STORE.get_selected_context()
 
 
@@ -273,6 +358,13 @@ def _build_unified_status(run_socket_test: bool = False) -> dict[str, Any]:
     pusr_host = str(gw_cfg.get("pusr_host") or "").strip()
     pusr_port = int(gw_cfg.get("pusr_port") or 502)
     pusr_topo = str(gw_cfg.get("topology") or "ap_direct")
+    auth_bus_sid = int(modbus_tel.get("target_slave_id") or 1)
+    link_diag = evaluate_unified_link_diagnostic(
+        modbus_tel,
+        gateway_config={"host": pusr_host, "port": pusr_port, "topology": pusr_topo},
+        language=_PREFERRED_VOICE_LANGUAGE,
+    )
+    guidance_snap = _GUIDANCE.snapshot(authorized_bus_slave_id=auth_bus_sid)
     return {
         "status": "ok",
         "contract_version": CONTRACT_VERSION,
@@ -280,7 +372,10 @@ def _build_unified_status(run_socket_test: bool = False) -> dict[str, Any]:
         "active_context": eff_ctx,
         "scene_generation": _ACTIVE_SCENE_GENERATION,
         "simulated_visual_dip_address": _SIMULATED_VISUAL_DIP_ADDRESS,
-        "authorized_bus_slave_id": int(modbus_tel.get("target_slave_id") or 1),
+        "authorized_bus_slave_id": auth_bus_sid,
+        "preferred_language": _PREFERRED_VOICE_LANGUAGE,
+        "link_diagnostic": link_diag,
+        "guidance": guidance_snap,
         "local_listener_scope": "loopback_127.0.0.1",
         "offline_verified": strictly_offline,
         "blocked_external_attempts": offline_info["blocked_external_attempts"],
@@ -845,6 +940,7 @@ async def api_repair_step(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     if step == "guide_dip":
+        global _SIMULATED_VISUAL_DIP_ADDRESS
         text = str(payload.get("query") or payload.get("text") or "Configure for Industrial Modbus RTU slave 1")
         res = await asyncio.to_thread(
             _REPAIR.guide_dip_for_modbus,
@@ -853,7 +949,14 @@ async def api_repair_step(payload: dict[str, Any]) -> dict[str, Any]:
             payload.get("dip_address"),
             engine.synthesize_speech_b64,
         )
-        await asyncio.to_thread(_MODBUS.set_target_slave, int(res["target_slave_id"]))
+        target_sid = int(res["target_slave_id"])
+        _SIMULATED_VISUAL_DIP_ADDRESS = target_sid
+        explicit_confirm = bool(payload.get("confirmed", False))
+        if explicit_confirm:
+            await asyncio.to_thread(_MODBUS.set_target_slave, target_sid)
+        res["simulated_visual_dip_address"] = target_sid
+        res["authorized_bus_slave_id"] = int(_MODBUS.get_telemetry().get("target_slave_id") or 1)
+        res["bus_target_mutated"] = explicit_confirm
         return res
 
     if step == "connect_modbus":
@@ -908,15 +1011,166 @@ async def _handle_multimodal_or_live_repair_query(
     manifest_sha256: str | None = None,
     scene_generation: int | None = None,
     turn_id: str | None = None,
+    input_mode: str = "text",
+    language: str | None = None,
 ) -> dict[str, Any]:
+    import uuid
+    import time
+
     global _SIMULATED_VISUAL_DIP_ADDRESS
+    t0 = time.perf_counter()
     engine = get_lfm_engine()
-    eff_ctx = _resolve_effective_context(session_id=session_id, manifest_sha256=manifest_sha256)
+    eff_turn_id = (turn_id or "").strip() or f"turn-{uuid.uuid4().hex[:10]}"
+    eff_lang = (language or _PREFERRED_VOICE_LANGUAGE or "en").strip().lower()
+    if eff_lang not in ("en", "es"):
+        eff_lang = "en"
+    eff_mode = (input_mode or "text").strip().lower()
+    eff_scene_gen = int(scene_generation if scene_generation is not None else _ACTIVE_SCENE_GENERATION)
+
+    # Enforce pinned session authority (`Finding 1` / `CTX-01`)
+    eff_ctx, mismatch_err = _validate_pinned_session_manifest(
+        session_id=session_id,
+        manifest_sha256=manifest_sha256,
+    )
+    mb_tel_now = _MODBUS.get_telemetry()
+    auth_bus_sid = int(mb_tel_now.get("target_slave_id") or 1)
+    if mismatch_err is not None:
+        lang_out = detect_copilot_language(query, preferred_language=eff_lang)
+        out = dict(mismatch_err)
+        out.update(
+            {
+                "turn_id": eff_turn_id,
+                "input_mode": eff_mode,
+                "language": lang_out,
+                "diagnosis": out["message"],
+                "assistant_message": out["message"],
+                "authorized_bus_slave_id": auth_bus_sid,
+                "bus_target_mutated": False,
+                "audio_wav_b64": await asyncio.to_thread(engine.synthesize_speech_b64, out["message"]),
+            }
+        )
+        return out
+
+    resolved_session_id = (session_id or "").strip() or _SESSIONS._active_session_id
     try:
         cat_desc = _CATALOG_STORE.build_scene_and_manual_descriptor(eff_ctx)
     except CatalogDomainError:
         cat_desc = _CATALOG_STORE.build_scene_and_manual_descriptor(_CATALOG_STORE.build_bundle_default_context())
-    eff_scene_gen = int(scene_generation if scene_generation is not None else _ACTIVE_SCENE_GENERATION)
+
+    gw_cfg = _MODBUS.get_gateway_config()
+    sync_tel = _CATALOG_CLIENT.get_sync_telemetry()
+    vis_tel = _enrich_vision_telemetry(_SCANNER.get_telemetry(), eff_ctx)
+    eff_dip = dip_address if dip_address is not None else _SIMULATED_VISUAL_DIP_ADDRESS
+
+    # 1. Unified Bounded Executable Copilot Action Plan (`Section 1 & 2`)
+    plan = resolve_copilot_action_plan(
+        query,
+        descriptor=cat_desc,
+        modbus_tel=mb_tel_now,
+        vision_tel=vis_tel,
+        gateway_config={
+            "host": str(gw_cfg.get("pusr_host") or ""),
+            "port": int(gw_cfg.get("pusr_port") or 502),
+            "topology": str(gw_cfg.get("topology") or "ap_direct"),
+        },
+        sync_telemetry=sync_tel,
+        authorized_bus_slave_id=auth_bus_sid,
+        current_dip_address=eff_dip,
+        session_id=resolved_session_id,
+        scene_generation=eff_scene_gen,
+        turn_id=eff_turn_id,
+        preferred_language=eff_lang,
+        is_ipad_native=False,
+    )
+    if plan is not None:
+        plan_lang = str(plan.get("language") or eff_lang)
+        reply_text = str(plan.get("reply_text") or "")
+        guidance_snap = None
+        if plan.get("start_dip_guidance"):
+            target_dip = int(plan.get("target_dip_address") or eff_dip)
+            _SIMULATED_VISUAL_DIP_ADDRESS = max(1, min(247, target_dip))
+            caps = plan.get("scene_capabilities") or {}
+            guidance_snap = _GUIDANCE.start_dip_guidance(
+                target_slave_id=target_dip,
+                session_id=resolved_session_id,
+                profile_id=str(eff_ctx.get("product_id") or "tzone_tht02"),
+                supports_dip_pins=bool(caps.get("supports_dip_pins")),
+                authorized_bus_slave_id=auth_bus_sid,
+                turn_id=eff_turn_id,
+            )
+
+        elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+        await asyncio.to_thread(
+            _SESSIONS.record_conversation_turn,
+            {
+                "turn_id": eff_turn_id,
+                "session_id": resolved_session_id,
+                "user_text": query,
+                "assistant_reply": reply_text,
+                "input_mode": eff_mode,
+                "language": plan_lang,
+                "provider": "FieldScan Copilot Action Registry",
+                "evidence_origin": eff_mode,
+                "document_id": plan.get("document_id"),
+                "document_revision": plan.get("document_revision"),
+                "manual_page": plan.get("manual_page"),
+                "manifest_sha256": eff_ctx.get("manifest_sha256"),
+                "scene_generation": eff_scene_gen,
+                "planned_actions": plan.get("actions") or [],
+                "guidance_state": guidance_snap,
+            },
+        )
+        audio_b64 = await asyncio.to_thread(engine.synthesize_speech_b64, reply_text)
+        planned_ids = [str(a.get("id") or "") for a in (plan.get("actions") or [])]
+        compat_intent = (
+            "manual_lookup"
+            if (planned_ids and all(pid.startswith("manual.") for pid in planned_ids))
+            else plan.get("intent_mode", "copilot_action")
+        )
+        return {
+            "diagnosis": reply_text,
+            "assistant_message": reply_text,
+            "intent": compat_intent,
+            "intent_mode": plan.get("intent_mode", "copilot_action"),
+            "query_mode": "copilot_action",
+            "language": plan_lang,
+            "input_mode": eff_mode,
+            "turn_id": eff_turn_id,
+            "session_id": resolved_session_id,
+            "scene_generation": eff_scene_gen,
+            "manifest_sha256": eff_ctx.get("manifest_sha256"),
+            "copilot_action_plan": plan,
+            "actions": plan.get("actions") or [],
+            "scene_capabilities": plan.get("scene_capabilities") or {},
+            "clarification_required": bool(plan.get("ambiguous")),
+            "candidate_part_ids": plan.get("candidate_part_ids") or [],
+            "simulated_visual_dip_address": _SIMULATED_VISUAL_DIP_ADDRESS,
+            "authorized_bus_slave_id": auth_bus_sid,
+            "bus_target_mutated": False,
+            "twin_action": plan.get("twin_action"),
+            "twin_action_v1": plan.get("twin_action_v1"),
+            "explode_pcb": plan.get("explode_pcb"),
+            "focus_dip": bool(plan.get("focus_dip", False)),
+            "dip_bits": plan.get("dip_bits"),
+            "open_manual": bool(plan.get("open_manual", False)),
+            "open_manual_lightbox": bool(plan.get("open_manual_lightbox", False)),
+            "manual_page": plan.get("manual_page"),
+            "printed_page": plan.get("printed_page"),
+            "document_id": plan.get("document_id"),
+            "manual_section": plan.get("manual_section"),
+            "citations": plan.get("citations") or [],
+            "manual_citations": plan.get("citations") or [],
+            "guidance_state": guidance_snap,
+            "guidance": guidance_snap,
+            "link_diagnostic": plan.get("link_diagnostic"),
+            "page_out_of_range": bool(plan.get("page_out_of_range", False)),
+            "error_code": plan.get("error_code"),
+            "inference_ms": elapsed_ms,
+            "latency_ms": elapsed_ms,
+            "model": "FieldScan Copilot Action Registry",
+            "audio_wav_b64": audio_b64,
+        }
+
     intent = _detect_conversational_repair_intent(query)
 
     if intent == "inspect_open":
@@ -933,13 +1187,32 @@ async def _handle_multimodal_or_live_repair_query(
             query,
             descriptor=cat_desc,
             zone_hint="upper_barrel_dip",
-            current_dip_address=dip_address or _SIMULATED_VISUAL_DIP_ADDRESS,
+            current_dip_address=eff_dip,
             scene_generation=eff_scene_gen,
-            turn_id=turn_id,
+            turn_id=eff_turn_id,
         )
         res.setdefault("language", "en")
+        res["turn_id"] = eff_turn_id
+        res["session_id"] = resolved_session_id
+        res["scene_generation"] = eff_scene_gen
+        res["manifest_sha256"] = eff_ctx.get("manifest_sha256")
+        res["input_mode"] = eff_mode
         res["twin_action"] = prep["twin_action"]
         res["twin_action_v1"] = prep["twin_action_v1"]
+        await asyncio.to_thread(
+            _SESSIONS.record_conversation_turn,
+            {
+                "turn_id": eff_turn_id,
+                "session_id": resolved_session_id,
+                "user_text": query,
+                "assistant_reply": str(res.get("diagnosis") or ""),
+                "input_mode": eff_mode,
+                "language": eff_lang,
+                "provider": "FieldScan Repair Coordinator",
+                "manifest_sha256": eff_ctx.get("manifest_sha256"),
+                "scene_generation": eff_scene_gen,
+            },
+        )
         return res
 
     if intent == "guide_dip":
@@ -961,14 +1234,34 @@ async def _handle_multimodal_or_live_repair_query(
             zone_hint="upper_barrel_dip",
             current_dip_address=target_sid,
             scene_generation=eff_scene_gen,
-            turn_id=turn_id,
+            turn_id=eff_turn_id,
         )
         res.setdefault("language", "en")
+        res["turn_id"] = eff_turn_id
+        res["session_id"] = resolved_session_id
+        res["scene_generation"] = eff_scene_gen
+        res["manifest_sha256"] = eff_ctx.get("manifest_sha256")
+        res["input_mode"] = eff_mode
         res["simulated_visual_dip_address"] = target_sid
-        res["authorized_bus_slave_id"] = int(_MODBUS.get_telemetry().get("target_slave_id") or 1)
+        res["authorized_bus_slave_id"] = auth_bus_sid
         res["bus_target_mutated"] = False
         res["twin_action"] = prep["twin_action"]
         res["twin_action_v1"] = prep["twin_action_v1"]
+        await asyncio.to_thread(
+            _SESSIONS.record_conversation_turn,
+            {
+                "turn_id": eff_turn_id,
+                "session_id": resolved_session_id,
+                "user_text": query,
+                "assistant_reply": str(res.get("diagnosis") or ""),
+                "input_mode": eff_mode,
+                "language": eff_lang,
+                "provider": "FieldScan Repair Coordinator",
+                "manual_page": 5,
+                "manifest_sha256": eff_ctx.get("manifest_sha256"),
+                "scene_generation": eff_scene_gen,
+            },
+        )
         return res
 
     if intent == "signoff_report":
@@ -984,7 +1277,26 @@ async def _handle_multimodal_or_live_repair_query(
             operator_notes=query,
             tts_fn=engine.synthesize_speech_b64,
         )
+        await asyncio.to_thread(
+            _SESSIONS.record_conversation_turn,
+            {
+                "turn_id": eff_turn_id,
+                "session_id": resolved_session_id,
+                "user_text": query,
+                "assistant_reply": str(pkg.get("spoken_summary") or ""),
+                "input_mode": eff_mode,
+                "language": eff_lang,
+                "provider": "FieldScan Closed-Loop Sign-Off Engine",
+                "manifest_sha256": eff_ctx.get("manifest_sha256"),
+                "scene_generation": eff_scene_gen,
+            },
+        )
         return {
+            "turn_id": eff_turn_id,
+            "session_id": resolved_session_id,
+            "scene_generation": eff_scene_gen,
+            "manifest_sha256": eff_ctx.get("manifest_sha256"),
+            "input_mode": eff_mode,
             "stage": pkg["stage"],
             "andon_state": pkg["andon_state"],
             "focus_dip": False,
@@ -1030,18 +1342,40 @@ async def _handle_multimodal_or_live_repair_query(
         scanner_telemetry=tel,
         modbus_telemetry=mb_tel,
         zone_hint=zone_hint,
-        dip_address=dip_address if dip_address is not None else _SIMULATED_VISUAL_DIP_ADDRESS,
+        dip_address=eff_dip,
         raw_frame_jpeg=raw_jpg,
         catalog_descriptor=cat_desc,
         scene_generation=eff_scene_gen,
-        turn_id=turn_id,
+        turn_id=eff_turn_id,
     )
     ta = diag_out.get("twin_action")
     if isinstance(ta, dict) and isinstance(ta.get("target_slave_id"), int) and (1 <= int(ta["target_slave_id"]) <= 247):
         _SIMULATED_VISUAL_DIP_ADDRESS = int(ta["target_slave_id"])
+    diag_out["turn_id"] = eff_turn_id
+    diag_out["session_id"] = resolved_session_id
+    diag_out["input_mode"] = eff_mode
+    diag_out["scene_generation"] = eff_scene_gen
+    diag_out["manifest_sha256"] = eff_ctx.get("manifest_sha256")
     diag_out["simulated_visual_dip_address"] = _SIMULATED_VISUAL_DIP_ADDRESS
     diag_out["authorized_bus_slave_id"] = int(mb_tel.get("target_slave_id") or 1)
     diag_out["bus_target_mutated"] = False
+    await asyncio.to_thread(
+        _SESSIONS.record_conversation_turn,
+        {
+            "turn_id": eff_turn_id,
+            "session_id": resolved_session_id,
+            "user_text": query,
+            "assistant_reply": str(diag_out.get("diagnosis") or diag_out.get("assistant_message") or ""),
+            "input_mode": eff_mode,
+            "language": str(diag_out.get("language") or eff_lang),
+            "provider": str(diag_out.get("model") or "LFM3-VL-2B"),
+            "evidence_origin": eff_mode,
+            "document_id": diag_out.get("document_id"),
+            "manual_page": diag_out.get("manual_page"),
+            "manifest_sha256": eff_ctx.get("manifest_sha256"),
+            "scene_generation": eff_scene_gen,
+        },
+    )
     return diag_out
 
 
@@ -1067,6 +1401,8 @@ async def api_diagnose(payload: dict[str, Any]) -> dict[str, Any]:
         manifest_sha256=payload.get("manifest_sha256"),
         scene_generation=payload.get("scene_generation"),
         turn_id=payload.get("turn_id"),
+        input_mode=str(payload.get("input_mode") or "text"),
+        language=payload.get("language"),
     )
 
 
@@ -1077,6 +1413,11 @@ async def api_voice(
     include_camera: str = Form(default="true"),
     dip_address: str | None = Form(default=None),
     hands_free: str = Form(default="false"),
+    session_id: str | None = Form(default=None),
+    manifest_sha256: str | None = Form(default=None),
+    scene_generation: str | None = Form(default=None),
+    turn_id: str | None = Form(default=None),
+    language: str | None = Form(default=None),
 ) -> dict[str, Any]:
     upload = audio or file
     if upload is None:
@@ -1103,12 +1444,19 @@ async def api_voice(
 
     use_cam = include_camera.lower() not in ("false", "0", "no")
     dip_int = int(dip_address) if (dip_address and dip_address.isdigit()) else None
+    gen_int = int(scene_generation) if (scene_generation and scene_generation.isdigit()) else None
 
     diag = await _handle_multimodal_or_live_repair_query(
         query=transcript,
         include_camera=use_cam,
         zone_hint=None,
         dip_address=dip_int,
+        session_id=session_id,
+        manifest_sha256=manifest_sha256,
+        scene_generation=gen_int,
+        turn_id=turn_id,
+        input_mode="handsfree" if is_hands_free else "ptt",
+        language=language,
     )
     diag["transcript"] = transcript
     diag["asr_ms"] = asr_res["asr_ms"]
@@ -1423,6 +1771,183 @@ async def api_session_capture(session_id: str, payload: dict[str, Any] | None = 
 @app.post("/api/sessions/{session_id}/exports")
 async def api_session_exports(session_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     return await asyncio.to_thread(_SESSIONS.export_session_dossier, session_id, payload or {})
+
+
+@app.get("/api/sessions/evidence_policy")
+async def api_get_evidence_policy() -> dict[str, Any]:
+    return _SESSIONS.get_evidence_policy()
+
+
+@app.post("/api/sessions/evidence_policy")
+async def api_set_evidence_policy(payload: dict[str, Any]) -> dict[str, Any]:
+    return _SESSIONS.configure_evidence_policy(payload)
+
+
+@app.post("/api/sessions/{session_id}/attach_history")
+async def api_session_attach_history(session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        _SESSIONS.attach_general_history_to_session,
+        session_id,
+        list(payload.get("turn_ids") or []),
+        confirmed=bool(payload.get("confirmed", False)),
+    )
+
+
+@app.post("/api/sessions/{session_id}/drafts/{kind}")
+async def api_session_create_draft(session_id: str, kind: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        _SESSIONS.create_local_draft,
+        session_id,
+        kind=kind,
+        payload=payload or {},
+    )
+
+
+@app.get("/api/copilot/registry")
+async def api_copilot_registry() -> dict[str, Any]:
+    eff_ctx = _resolve_effective_context()
+    try:
+        desc = _CATALOG_STORE.build_scene_and_manual_descriptor(eff_ctx)
+    except CatalogDomainError:
+        desc = None
+    return {
+        "ok": True,
+        "actions": build_action_registry(),
+        "scene_capabilities": compute_scene_capabilities(desc),
+        "active_context": eff_ctx,
+    }
+
+
+@app.get("/api/copilot/screens")
+async def api_copilot_screens() -> dict[str, Any]:
+    return {"ok": True, "screens": build_screen_inventory()}
+
+
+@app.post("/api/copilot/action_ack")
+async def api_copilot_action_ack(payload: dict[str, Any]) -> dict[str, Any]:
+    turn_id = str(payload.get("turn_id") or "").strip()
+    if not turn_id:
+        raise HTTPException(status_code=400, detail="turn_id is required")
+    is_stale = bool(payload.get("stale", False))
+    input_mode = str(payload.get("input_mode") or "text").lower()
+    if not is_stale:
+        _record_latency_metric(
+            input_mode,
+            payload.get("phrase_end_to_ui_ack_ms"),
+            payload.get("phrase_end_to_tts_start_ms"),
+        )
+    body = dict(payload)
+    if not body.get("session_id") and _SESSIONS._active_session_id:
+        body["session_id"] = _SESSIONS._active_session_id
+    stored = await asyncio.to_thread(_SESSIONS.record_action_ack, body)
+    return {
+        "ok": True,
+        "turn_id": turn_id,
+        "stale": is_stale,
+        "stored": stored,
+        "metrics": _latency_metrics_summary(),
+    }
+
+
+@app.get("/api/copilot/metrics")
+async def api_copilot_metrics() -> dict[str, Any]:
+    return {"ok": True, "deterministic_latency_ms": _latency_metrics_summary()}
+
+
+@app.get("/api/copilot/history")
+async def api_copilot_history(limit: int = 50) -> dict[str, Any]:
+    return {"ok": True, "general_history": await asyncio.to_thread(_SESSIONS.list_general_history, limit)}
+
+
+@app.get("/api/assets/history")
+async def api_assets_history(profile_id: str = "tzone_tht02", serial_number: str = "") -> dict[str, Any]:
+    return await asyncio.to_thread(_SESSIONS.recall_asset_history, profile_id=profile_id, serial_number=serial_number)
+
+
+@app.post("/api/voice/context_sync")
+async def api_voice_context_sync(payload: dict[str, Any]) -> dict[str, Any]:
+    global _PREFERRED_VOICE_LANGUAGE, _SIMULATED_VISUAL_DIP_ADDRESS
+    for k in ("session_id", "manifest_sha256", "scene_generation", "active_document_id"):
+        if k in payload and payload[k] is not None:
+            _ACTIVE_VOICE_CONTEXT[k] = payload[k]
+    if payload.get("language"):
+        _PREFERRED_VOICE_LANGUAGE = "es" if str(payload["language"]).lower() == "es" else "en"
+        _ACTIVE_VOICE_CONTEXT["language"] = _PREFERRED_VOICE_LANGUAGE
+    if isinstance(payload.get("dip_address"), int) and (1 <= int(payload["dip_address"]) <= 247):
+        _SIMULATED_VISUAL_DIP_ADDRESS = int(payload["dip_address"])
+        _ACTIVE_VOICE_CONTEXT["dip_address"] = _SIMULATED_VISUAL_DIP_ADDRESS
+    return {
+        "ok": True,
+        "voice_context": dict(_ACTIVE_VOICE_CONTEXT),
+        "authorized_bus_slave_id": int(_MODBUS.get_telemetry().get("target_slave_id") or 1),
+        "bus_target_mutated": False,
+    }
+
+
+@app.post("/api/voice/language")
+async def api_voice_language(payload: dict[str, Any]) -> dict[str, Any]:
+    global _PREFERRED_VOICE_LANGUAGE
+    req = str(payload.get("language") or "en").strip().lower()
+    _PREFERRED_VOICE_LANGUAGE = "es" if req == "es" else "en"
+    _ACTIVE_VOICE_CONTEXT["language"] = _PREFERRED_VOICE_LANGUAGE
+    return {
+        "ok": True,
+        "language": _PREFERRED_VOICE_LANGUAGE,
+        "speech_on_device_available": True,
+        "fallback_notice": None,
+    }
+
+
+@app.get("/api/guidance/state")
+async def api_guidance_state() -> dict[str, Any]:
+    auth_sid = int(_MODBUS.get_telemetry().get("target_slave_id") or 1)
+    return _GUIDANCE.snapshot(authorized_bus_slave_id=auth_sid)
+
+
+@app.post("/api/guidance/start")
+async def api_guidance_start(payload: dict[str, Any]) -> dict[str, Any]:
+    global _SIMULATED_VISUAL_DIP_ADDRESS
+    eff_ctx = _resolve_effective_context(session_id=payload.get("session_id"), manifest_sha256=payload.get("manifest_sha256"))
+    try:
+        desc = _CATALOG_STORE.build_scene_and_manual_descriptor(eff_ctx)
+    except CatalogDomainError:
+        desc = None
+    caps = compute_scene_capabilities(desc)
+    target_addr = int(payload.get("target_slave_id") or payload.get("dip_address") or 1)
+    _SIMULATED_VISUAL_DIP_ADDRESS = max(1, min(247, target_addr))
+    auth_sid = int(_MODBUS.get_telemetry().get("target_slave_id") or 1)
+    return _GUIDANCE.start_dip_guidance(
+        target_slave_id=target_addr,
+        session_id=payload.get("session_id") or _SESSIONS._active_session_id,
+        profile_id=str(eff_ctx.get("product_id") or "tzone_tht02"),
+        supports_dip_pins=bool(caps.get("supports_dip_pins")),
+        authorized_bus_slave_id=auth_sid,
+        turn_id=payload.get("turn_id"),
+    )
+
+
+@app.post("/api/guidance/evaluate")
+async def api_guidance_evaluate(payload: dict[str, Any]) -> dict[str, Any]:
+    vtel = payload.get("vision") if isinstance(payload.get("vision"), dict) else _SCANNER.get_telemetry()
+    auth_sid = int(_MODBUS.get_telemetry().get("target_slave_id") or 1)
+    lang = str(payload.get("language") or _PREFERRED_VOICE_LANGUAGE)
+    return _GUIDANCE.evaluate_camera_observation(
+        vtel,
+        authorized_bus_slave_id=auth_sid,
+        language=lang,
+        turn_id=payload.get("turn_id"),
+    )
+
+
+@app.post("/api/guidance/confirm_step")
+async def api_guidance_confirm_step(payload: dict[str, Any]) -> dict[str, Any]:
+    auth_sid = int(_MODBUS.get_telemetry().get("target_slave_id") or 1)
+    return _GUIDANCE.confirm_operator_step(
+        manual=bool(payload.get("manual", True)),
+        authorized_bus_slave_id=auth_sid,
+        complete=bool(payload.get("complete", False)),
+        turn_id=payload.get("turn_id"),
+    )
 
 
 @app.get("/api/calibration/planned")

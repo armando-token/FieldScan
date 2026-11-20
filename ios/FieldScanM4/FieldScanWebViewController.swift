@@ -99,19 +99,32 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
                     command: "getDeviceMemoryInfo"
                 });
             },
-            presentPackageImporter: function() {
+            presentPackageImporter: function(requestId, turnId) {
                 window.webkit.messageHandlers.fieldscanNative.postMessage({
-                    command: "presentPackageImporter"
+                    command: "presentPackageImporter",
+                    request_id: requestId || "",
+                    turn_id: turnId || ""
                 });
             },
-            presentPusrGatewayConfig: function() {
+            presentPusrGatewayConfig: function(requestId, turnId) {
                 window.webkit.messageHandlers.fieldscanNative.postMessage({
-                    command: "presentPusrGatewayConfig"
+                    command: "presentPusrGatewayConfig",
+                    request_id: requestId || "",
+                    turn_id: turnId || ""
                 });
             },
-            presentOperatorControlSheet: function() {
+            presentOperatorControlSheet: function(requestId, turnId) {
                 window.webkit.messageHandlers.fieldscanNative.postMessage({
-                    command: "presentOperatorControlSheet"
+                    command: "presentOperatorControlSheet",
+                    request_id: requestId || "",
+                    turn_id: turnId || ""
+                });
+            },
+            openAppSettings: function(requestId, turnId) {
+                window.webkit.messageHandlers.fieldscanNative.postMessage({
+                    command: "openAppSettings",
+                    request_id: requestId || "",
+                    turn_id: turnId || ""
                 });
             },
             notifyBootProgress: function(percent, statusText) {
@@ -434,9 +447,32 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         }
     }
 
-    // MARK: - Operator Control Sheet
+    // MARK: - Operator Control Sheet & Native Panel Ack
+
+    private func emitNativePanelAck(requestId: String?, turnId: String?, target: String, status: String, detail: String? = nil) {
+        var payload: [String: Any] = [
+            "request_id": requestId ?? "",
+            "turn_id": turnId ?? "",
+            "target": target,
+            "status": status,
+        ]
+        if let d = detail, !d.isEmpty {
+            payload["detail"] = d
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: payload),
+           let jsonStr = String(data: data, encoding: .utf8) {
+            DispatchQueue.main.async { [weak self] in
+                let js = "window.dispatchEvent(new CustomEvent('fieldscan:nativePanelAck', { detail: \(jsonStr) }));"
+                self?.webView?.evaluateJavaScript(js, completionHandler: nil)
+            }
+        }
+    }
 
     @objc private func presentOperatorControlSheet() {
+        presentOperatorControlSheetWithAck(requestId: nil, turnId: nil)
+    }
+
+    private func presentOperatorControlSheetWithAck(requestId: String?, turnId: String?) {
         let cfg = FieldScanRuntimeConfig.shared
         let mem = cfg.sampleMemoryTelemetry()
         let topoBadge = cfg.pusrGatewayTopology == "sta_lan" ? "STA/LAN" : "Direct AP"
@@ -484,13 +520,17 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
             NativeCameraBridge.shared.startCapture(preferredSource: "auto", completion: nil)
         })
 
-        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+            self?.emitNativePanelAck(requestId: requestId, turnId: turnId, target: "native_operator_sheet", status: "cancelled")
+        })
 
         if let popover = sheet.popoverPresentationController {
             popover.sourceView = floatingPill
             popover.sourceRect = floatingPill.bounds
         }
-        present(sheet, animated: true)
+        present(sheet, animated: true) { [weak self] in
+            self?.emitNativePanelAck(requestId: requestId, turnId: turnId, target: "native_operator_sheet", status: "visible")
+        }
     }
 
     private func switchEndpoint(to url: URL, mode: FieldScanEndpointMode) {
@@ -533,7 +573,7 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
     }
 
     /// AP-First Gateway Selector for field operation without any router or internet.
-    private func presentPusrGatewaySelector() {
+    private func presentPusrGatewaySelector(requestId: String? = nil, turnId: String? = nil) {
         let cfg = FieldScanRuntimeConfig.shared
         let wifiIP = ModbusTCPClient.detectActiveWiFiIPv4() ?? "Not connected to Wi-Fi"
         let activeDesc = cfg.pusrGatewayHost.isEmpty
@@ -581,13 +621,17 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
             })
         }
 
-        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+            self?.emitNativePanelAck(requestId: requestId, turnId: turnId, target: "native_pusr_sheet", status: "cancelled")
+        })
 
         if let popover = sheet.popoverPresentationController {
             popover.sourceView = floatingPill
             popover.sourceRect = floatingPill.bounds
         }
-        present(sheet, animated: true)
+        present(sheet, animated: true) { [weak self] in
+            self?.emitNativePanelAck(requestId: requestId, turnId: turnId, target: "native_pusr_sheet", status: "visible")
+        }
     }
 
     private func runOneTapPusrAutoSetup() {
@@ -1020,13 +1064,36 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
             }
 
         case "presentPackageImporter":
-            presentSignedPackageDocumentPicker()
+            let reqId = body["request_id"] as? String
+            let tId = body["turn_id"] as? String
+            presentSignedPackageDocumentPicker(requestId: reqId, turnId: tId)
 
         case "presentPusrGatewayConfig":
-            presentPusrGatewaySelector()
+            let reqId = body["request_id"] as? String
+            let tId = body["turn_id"] as? String
+            presentPusrGatewaySelector(requestId: reqId, turnId: tId)
 
         case "presentOperatorControlSheet":
-            presentOperatorControlSheet()
+            let reqId = body["request_id"] as? String
+            let tId = body["turn_id"] as? String
+            presentOperatorControlSheetWithAck(requestId: reqId, turnId: tId)
+
+        case "openAppSettings":
+            let reqId = body["request_id"] as? String
+            let tId = body["turn_id"] as? String
+            if let settingsURL = URL(string: UIApplication.openSettingsURLString),
+               UIApplication.shared.canOpenURL(settingsURL) {
+                UIApplication.shared.open(settingsURL, options: [:]) { [weak self] opened in
+                    self?.emitNativePanelAck(
+                        requestId: reqId,
+                        turnId: tId,
+                        target: "ipados_app_settings",
+                        status: opened ? "opened" : "unavailable"
+                    )
+                }
+            } else {
+                emitNativePanelAck(requestId: reqId, turnId: tId, target: "ipados_app_settings", status: "unavailable")
+            }
 
         case "notifyBootProgress":
             let pct = (body["percent"] as? Int) ?? (body["percent"] as? NSNumber)?.intValue ?? 100
@@ -1038,7 +1105,7 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         }
     }
 
-    private func presentSignedPackageDocumentPicker() {
+    private func presentSignedPackageDocumentPicker(requestId: String? = nil, turnId: String? = nil) {
         var types: [UTType] = [.zip, .folder]
         if let fspkg = UTType(filenameExtension: "fspkg") {
             types.append(fspkg)
@@ -1046,7 +1113,9 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
         picker.delegate = self
         picker.allowsMultipleSelection = false
-        present(picker, animated: true)
+        present(picker, animated: true) { [weak self] in
+            self?.emitNativePanelAck(requestId: requestId, turnId: turnId, target: "native_package_importer", status: "visible")
+        }
     }
 
     public func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {

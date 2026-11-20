@@ -122,6 +122,14 @@
             <canvas id="dipCropFallbackCanvas" width="280" height="84" hidden></canvas>
           </div>
           <div class="dip-switches-row" id="dipSwitchesRow"></div>
+          <div class="dip-guidance-status-bar" id="dipGuidanceBar" hidden>
+            <div class="dip-guid-row">
+              <span id="dipGuidanceExpected">Expected: #01</span>
+              <span id="dipGuidanceObserved">Camera: Waiting</span>
+              <span id="dipGuidanceAuthorized">Authorized Bus: #01</span>
+            </div>
+            <button type="button" class="dip-confirm-btn" id="btnConfirmDipStep">Confirm Step</button>
+          </div>
           <div class="dip-pip-foot" id="dipPinSummary">128·64·32·16·8·4·2·1</div>
         </div>
       </div>
@@ -379,6 +387,7 @@
       <div class="section-lbl">Voice &amp; Local AI Engine</div>
       <div class="tools-grid">
         <button type="button" class="tool-card" id="btnAutoSpeak"><i data-lucide="volume-2"></i><span class="tool-name" id="autoSpeakText">Voice: ON</span><span class="tool-desc">Offline TTS</span></button>
+        <button type="button" class="tool-card" id="btnVoiceLangToggle"><i data-lucide="languages"></i><span class="tool-name" id="voiceLangText">Voice Lang: EN</span><span class="tool-desc" id="voiceLangSub">EN / ES Local</span></button>
         <div class="tool-card"><i data-lucide="cpu"></i><span class="tool-name" id="pillModelText">Local AI</span><span class="tool-desc" id="pillRamText">M4 12 GB</span></div>
       </div>
     </div>
@@ -589,6 +598,6 @@
 
 <script src="/static/vendor/lucide.min.js"></script>
 <script src="/static/vendor/uPlot.iife.min.js"></script>
-<script type="module" src="/static/app.js?v=20261119v8"></script>
+<script type="module" src="/static/app.js?v=20261120v9"></script>
 </body>
 </html>

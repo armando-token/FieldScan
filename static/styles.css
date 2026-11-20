@@ -2436,6 +2436,69 @@ code {
   flex: 0 1 175px;
 }
 
+/* ============ COPILOT FIELD HIGHLIGHT & DIP GUIDANCE BAR ============ */
+.copilot-field-highlight {
+  outline: 2.5px solid var(--accent, #2d7ff9) !important;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 5px rgba(45, 127, 249, 0.25) !important;
+  animation: copilot-field-pulse 1.2s ease-in-out 3;
+}
+
+@keyframes copilot-field-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(45, 127, 249, 0.22); }
+  50% { box-shadow: 0 0 0 7px rgba(45, 127, 249, 0.45); }
+}
+
+.copilot-field-tooltip {
+  margin-top: 6px;
+  padding: 6px 9px;
+  border-radius: var(--r-sm, 5px);
+  background: var(--accent-dim, rgba(45, 127, 249, 0.14));
+  border: 1px solid var(--accent, #2d7ff9);
+  color: var(--text-1);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.dip-guidance-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 7px;
+  margin-top: 4px;
+  border-radius: 5px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  font-size: 9.5px;
+  color: #e2e8f0;
+}
+
+.dip-guid-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-family: var(--mono);
+  font-weight: 700;
+}
+
+.dip-confirm-btn {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid #38bdf8;
+  background: #0284c7;
+  color: #ffffff;
+  font-size: 9.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.dip-confirm-btn:active {
+  transform: scale(0.96);
+}
+
 /* ============ ORIENTATION & MOBILE-FRIENDLY RESPONSIVENESS ============ */
 @media (orientation: landscape) and (min-width: 700px) {
   .viewport-area {

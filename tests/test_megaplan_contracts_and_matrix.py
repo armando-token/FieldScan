@@ -806,6 +806,7 @@ def test_dat09_fastapi_endpoints_and_swift_engine_parity(tmp_path: Path) -> None
         str(REPO_ROOT / "ios" / "FieldScanM4" / "FieldScanSessionEngine.swift"),
         str(REPO_ROOT / "ios" / "FieldScanM4" / "FieldScanManualNavigator.swift"),
         str(REPO_ROOT / "ios" / "FieldScanM4" / "FieldScanTwinController.swift"),
+        str(REPO_ROOT / "ios" / "FieldScanM4" / "FieldScanCopilotRegistry.swift"),
         str(REPO_ROOT / "ios" / "FieldScanM4" / "FieldScanVisionDetector.swift"),
         str(REPO_ROOT / "ios" / "FieldScanM4" / "FieldScanConversationEngine.swift"),
         str(REPO_ROOT / "scripts" / "run_swift_contract_tests.swift"),

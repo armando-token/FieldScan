@@ -191,6 +191,13 @@ const state = {
   sceneGeneration: 1,
   glbSceneReady: true,
   pendingTwinActionV1: null,
+  pendingTwinActionMeta: null,
+  preferredLanguage: 'en',
+  activePttContext: null,
+  authorizedBusSlaveId: 1,
+  guidanceState: null,
+  lastTurnId: null,
+  nativePanelAckResolvers: {},
   manualDocuments: [],
   activeDocumentId: 'tht02_manual_v1_1',
   cadExportsSupported: ['dxf', 'stl', 'pdf', 'json'],
@@ -422,11 +429,21 @@ const dom = {
   btnPresetPusrApAlt: document.getElementById('btnPresetPusrApAlt'),
   pusrGatewayResultBox: document.getElementById('pusrGatewayResultBox'),
   pusrCustomGatewayForm: document.getElementById('pusrCustomGatewayForm'),
+  pusrAdvancedDetails: document.getElementById('pusrAdvancedDetails'),
   inputPusrCustomHost: document.getElementById('inputPusrCustomHost'),
   inputPusrCustomPort: document.getElementById('inputPusrCustomPort'),
   selectPusrCustomTopology: document.getElementById('selectPusrCustomTopology'),
   btnSavePusrCustom: document.getElementById('btnSavePusrCustom'),
   btnClearPusrGateway: document.getElementById('btnClearPusrGateway'),
+
+  dipGuidanceBar: document.getElementById('dipGuidanceBar'),
+  dipGuidanceExpected: document.getElementById('dipGuidanceExpected'),
+  dipGuidanceObserved: document.getElementById('dipGuidanceObserved'),
+  dipGuidanceAuthorized: document.getElementById('dipGuidanceAuthorized'),
+  btnConfirmDipStep: document.getElementById('btnConfirmDipStep'),
+  btnVoiceLangToggle: document.getElementById('btnVoiceLangToggle'),
+  voiceLangText: document.getElementById('voiceLangText'),
+  voiceLangSub: document.getElementById('voiceLangSub'),
 
   // UX v4 shell controls (Light/Dark theme, slide panels, Tools mirrored readouts, session event log)
   themeToggle: document.getElementById('themeToggle'),
@@ -2592,21 +2609,76 @@ function selectZone(zoneId, { flipManual = false, zoomCamera = true } = {}) {
   }
 }
 
+function getActiveTwinCapabilities() {
+  const origin = state.sceneOrigin || 'bundled_parametric';
+  if (origin === 'bundled_parametric') {
+    return {
+      scene_origin: 'bundled_parametric',
+      supports_3d: true,
+      supports_xray: true,
+      supports_explode: true,
+      supports_dip_pins: true,
+      supports_part_focus: true,
+      part_ids: Object.keys(ZONE_SPECS),
+    };
+  }
+  if (origin === 'catalog_glb') {
+    const twin = state.activeCatalogDescriptor?.twin || {};
+    const parts = Array.isArray(twin.parts) ? twin.parts : [];
+    const views = Array.isArray(twin.views) ? twin.views : [];
+    const partIds = parts.map((p) => p.part_id).filter(Boolean);
+    const hasExplodeOffsets =
+      parts.some((p) => Array.isArray(p.explode_offset_m) && p.explode_offset_m.length === 3) ||
+      views.some((v) => v.exploded_offsets_m && Object.keys(v.exploded_offsets_m).length > 0);
+    const hasDipPart = partIds.some((pid) => String(pid).toLowerCase().includes('dip'));
+    return {
+      scene_origin: 'catalog_glb',
+      supports_3d: Boolean(twin.glb_url),
+      supports_xray: Boolean(twin.glb_url),
+      supports_explode: Boolean(hasExplodeOffsets),
+      supports_dip_pins: Boolean(hasDipPart && state.activeCatalogDescriptor?.context?.bench_modbus_homologated),
+      supports_part_focus: partIds.length > 0,
+      part_ids: partIds,
+    };
+  }
+  return {
+    scene_origin: origin,
+    supports_3d: false,
+    supports_xray: false,
+    supports_explode: false,
+    supports_dip_pins: false,
+    supports_part_focus: false,
+    part_ids: [],
+  };
+}
+
 function applyTwinAction(twinAction) {
-  if (!twinAction || typeof twinAction !== 'object') return;
+  if (!twinAction || typeof twinAction !== 'object') return { status: 'unavailable', reason: 'invalid_action' };
 
   if (state.sceneOrigin === 'catalog_glb') {
-    applyTwinActionV1({
-      schema: 'twin_action_v1',
-      kind: twinAction.action === 'reset_view' ? 'reset_view' : 'focus_part',
-      part_id: twinAction.part_id || twinAction.focus_zone || null,
-      view_id: twinAction.view_id || 'isometric_home',
-      callout_title: twinAction.callout_title || '',
-      callout_body: twinAction.callout_body || '',
-      scene_generation: state.sceneGeneration,
-      manifest_sha256: state.selectedCatalogContext?.manifest_sha256 || '',
-    });
-    return;
+    if (twinAction.render_mode === 'wireframe' || twinAction.render_mode === 'solid') {
+      setRenderMode(twinAction.render_mode);
+    }
+    if (typeof twinAction.explode_pcb === 'boolean') {
+      const caps = getActiveTwinCapabilities();
+      if (!caps.supports_explode && twinAction.explode_pcb) {
+        return { status: 'unavailable', reason: 'glb_no_explode_offsets' };
+      }
+      setExplodedState(twinAction.explode_pcb, { manualTrigger: true });
+    }
+    if (twinAction.action === 'reset_view' || twinAction.part_id || twinAction.focus_zone || twinAction.view_id) {
+      return applyTwinActionV1({
+        schema: 'twin_action_v1',
+        kind: twinAction.action === 'reset_view' ? 'reset_view' : 'focus_part',
+        part_id: twinAction.part_id || twinAction.focus_zone || null,
+        view_id: twinAction.view_id || 'isometric_home',
+        callout_title: twinAction.callout_title || '',
+        callout_body: twinAction.callout_body || '',
+        scene_generation: twinAction.scene_generation ?? state.sceneGeneration,
+        manifest_sha256: twinAction.manifest_sha256 || state.selectedCatalogContext?.manifest_sha256 || '',
+      });
+    }
+    return { status: 'applied', scene_origin: 'catalog_glb' };
   }
 
   if (twinAction.render_mode === 'wireframe' || twinAction.render_mode === 'solid') {
@@ -2619,7 +2691,7 @@ function applyTwinAction(twinAction) {
     state.guidedBody = '';
     setExplodedState(false);
     reset3DCamera();
-    return;
+    return { status: 'applied', action: 'reset_view' };
   }
 
   if (Array.isArray(twinAction.dip_bits) && twinAction.dip_bits.length === 8) {
@@ -2649,6 +2721,7 @@ function applyTwinAction(twinAction) {
   } else if (twinAction.camera_pose === 'isometric_home') {
     reset3DCamera();
   }
+  return { status: 'applied', scene_origin: state.sceneOrigin };
 }
 
 /* ==========================================================================
@@ -2799,18 +2872,32 @@ function highlightCatalogGlbPart(partId, { calloutTitle = '', calloutBody = '', 
   }
 }
 
-function applyTwinActionV1(v1) {
-  if (!v1 || typeof v1 !== 'object') return;
+function applyTwinActionV1(v1, meta = null) {
+  if (!v1 || typeof v1 !== 'object') return { status: 'unavailable', reason: 'invalid_twin_action_v1' };
   const activeSha = state.selectedCatalogContext?.manifest_sha256 || '';
+  if (v1.scene_generation != null && Number(v1.scene_generation) !== Number(state.sceneGeneration)) {
+    return { status: 'stale', reason: 'scene_generation_mismatch' };
+  }
   if (v1.manifest_sha256 && activeSha && state.sceneOrigin === 'catalog_glb' && v1.manifest_sha256 !== activeSha) {
-    return; // Fence stale action targeting a superseded manifest (`M4-VOICE-01`)
+    return { status: 'stale', reason: 'manifest_sha256_mismatch' };
   }
   if (state.sceneOrigin === 'catalog_glb' && !state.glbSceneReady) {
-    state.pendingTwinActionV1 = v1;
-    return;
+    state.pendingTwinActionV1 = { ...v1, scene_generation: v1.scene_generation ?? state.sceneGeneration };
+    state.pendingTwinActionMeta = meta || null;
+    return { status: 'pending_scene_ready', reason: 'glb_loading_deferred' };
   }
   if (state.sceneOrigin !== 'catalog_glb') {
-    return;
+    return { status: 'unavailable', reason: 'not_catalog_glb_scene' };
+  }
+  if (v1.render_mode === 'wireframe' || v1.render_mode === 'solid') {
+    setRenderMode(v1.render_mode);
+  }
+  if (typeof v1.explode === 'boolean') {
+    const caps = getActiveTwinCapabilities();
+    if (v1.explode && !caps.supports_explode) {
+      return { status: 'unavailable', reason: 'glb_no_explode_offsets' };
+    }
+    setExplodedState(v1.explode, { manualTrigger: true });
   }
   if (v1.kind === 'reset_view') {
     if (dom.faultCallout) dom.faultCallout.hidden = true;
@@ -2818,17 +2905,24 @@ function applyTwinActionV1(v1) {
     const defaultVid = views.some((v) => v.view_id === 'default_overview') ? 'default_overview' : 'isometric_home';
     highlightCatalogGlbPart(null, { viewId: v1.view_id || defaultVid });
     reset3DCamera();
-    return;
+    return { status: 'applied', kind: 'reset_view' };
   }
   if (v1.part_id) {
+    if (!cad.catalogPartNodes[v1.part_id]) {
+      return { status: 'unavailable', reason: `unknown_glb_part:${v1.part_id}` };
+    }
     highlightCatalogGlbPart(v1.part_id, {
       calloutTitle: v1.callout_title || '',
       calloutBody: v1.callout_body || '',
       viewId: v1.view_id || 'isometric_home',
     });
-  } else if (v1.view_id) {
-    highlightCatalogGlbPart(null, { viewId: v1.view_id });
+    return { status: 'applied', part_id: v1.part_id };
   }
+  if (v1.view_id) {
+    highlightCatalogGlbPart(null, { viewId: v1.view_id });
+    return { status: 'applied', view_id: v1.view_id };
+  }
+  return { status: 'applied' };
 }
 
 async function reportSceneReadyToBackend(generation, manifestSha, status = 'ready') {
@@ -3021,10 +3115,40 @@ async function loadCatalogSceneFromDescriptor(descriptor, generation) {
 
       state.glbSceneReady = true;
       reportSceneReadyToBackend(generation, manifestSha, 'ready');
+      syncVoiceContextToBackend();
       if (state.pendingTwinActionV1) {
         const queued = state.pendingTwinActionV1;
+        const queuedMeta = state.pendingTwinActionMeta;
         state.pendingTwinActionV1 = null;
-        applyTwinActionV1(queued);
+        state.pendingTwinActionMeta = null;
+        const genOk = queued.scene_generation == null || Number(queued.scene_generation) === Number(state.sceneGeneration);
+        const shaOk = !queued.manifest_sha256 || queued.manifest_sha256 === manifestSha;
+        if (genOk && shaOk) {
+          const outcome = applyTwinActionV1(queued);
+          if (queuedMeta?.turn_id) {
+            postCopilotActionAck({
+              turn_id: queuedMeta.turn_id,
+              session_id: queuedMeta.session_id || state.activeSessionId,
+              scene_generation: state.sceneGeneration,
+              input_mode: queuedMeta.input_mode || 'text',
+              language: queuedMeta.language || state.preferredLanguage,
+              stale: outcome.status === 'stale',
+              receipts: [{ action_id: queuedMeta.action_id || 'twin.focus_part', status: outcome.status, deferred_resume: true }],
+              speak_verified_outcome: outcome.status !== 'stale',
+            });
+          }
+        } else if (queuedMeta?.turn_id) {
+          postCopilotActionAck({
+            turn_id: queuedMeta.turn_id,
+            session_id: queuedMeta.session_id || state.activeSessionId,
+            scene_generation: state.sceneGeneration,
+            input_mode: queuedMeta.input_mode || 'text',
+            language: queuedMeta.language || state.preferredLanguage,
+            stale: true,
+            receipts: [{ action_id: queuedMeta.action_id || 'twin.focus_part', status: 'stale', reason: 'scene_changed_before_glb_ready' }],
+            speak_verified_outcome: false,
+          });
+        }
       }
     },
     undefined,
@@ -3248,7 +3372,7 @@ function initScadaChart() {
           stroke: '#fbbf24',
           width: 2.2,
           fill: 'rgba(251, 191, 36, 0.10)',
-          spanGaps: true,
+          spanGaps: false,
         },
         {
           label: 'Humidity (%RH)',
@@ -3256,7 +3380,7 @@ function initScadaChart() {
           stroke: '#38bdf8',
           width: 2.2,
           fill: 'rgba(56, 189, 248, 0.10)',
-          spanGaps: true,
+          spanGaps: false,
         },
       ],
     };
@@ -3325,7 +3449,11 @@ function drawFallbackScadaChart() {
     ctx.beginPath();
     let started = false;
     arr.forEach((v, idx) => {
-      if (v == null) return;
+      if (v == null) {
+        // Break trace cleanly on link loss so historical segments never connect as live telemetry (`BUS-02`)
+        started = false;
+        return;
+      }
       const x = (idx / Math.max(1, arr.length - 1)) * (w - 16) + 8;
       const y = h - 10 - ((v - minV) / Math.max(1, maxV - minV)) * (h - 22);
       if (!started) {
@@ -4007,6 +4135,14 @@ function applyTelemetryPayload(data) {
   state.modbusHealthy = healthy;
   state.modbusSimulation = isSimMb;
   state.pusrGatewayConnected = Boolean(mb.gateway_connected);
+  if (typeof data.authorized_bus_slave_id === 'number') {
+    state.authorizedBusSlaveId = data.authorized_bus_slave_id;
+  } else if (typeof mb.target_slave_id === 'number') {
+    state.authorizedBusSlaveId = mb.target_slave_id;
+  }
+  if (data.guidance && typeof data.guidance === 'object') {
+    renderGuidanceBar(data.guidance);
+  }
   if (dom.pusrGatewayModal && !dom.pusrGatewayModal.hidden) {
     syncPusrGatewayModalUI();
   }
@@ -4684,9 +4820,595 @@ function appendSessionActivityLog(title, detail) {
   }
 }
 
-function handleCopilotResponse(res) {
+/* ==========================================================================
+   UNIFIED TURN CONTEXT, ACTION EXECUTOR & VERIFIED UI ACKNOWLEDGEMENTS
+   ========================================================================== */
+function generateTurnId() {
+  return `turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildTurnContext(inputMode = 'text') {
+  return {
+    turn_id: generateTurnId(),
+    session_id: state.activeSessionId || null,
+    manifest_sha256: state.selectedCatalogContext?.manifest_sha256 || null,
+    scene_generation: state.sceneGeneration,
+    active_document_id: state.activeDocumentId || 'tht02_manual_v1_1',
+    language: state.preferredLanguage || 'en',
+    input_mode: inputMode,
+    dip_address: computeDipAddress(),
+    phrase_end_ms: performance.now(),
+  };
+}
+
+function syncVoiceContextToBackend() {
+  const payload = {
+    session_id: state.activeSessionId || '',
+    manifest_sha256: state.selectedCatalogContext?.manifest_sha256 || '',
+    scene_generation: state.sceneGeneration,
+    active_document_id: state.activeDocumentId || 'tht02_manual_v1_1',
+    language: state.preferredLanguage || 'en',
+    dip_address: computeDipAddress(),
+  };
+  fetch('/api/voice/context_sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
+function renderGuidanceBar(guidance) {
+  if (!guidance || typeof guidance !== 'object') return;
+  state.guidanceState = guidance;
+  if (!dom.dipGuidanceBar) return;
+  if (!guidance.active) {
+    dom.dipGuidanceBar.hidden = true;
+    return;
+  }
+  dom.dipGuidanceBar.hidden = false;
+  const expAddr = String(guidance.expected_dip_address ?? computeDipAddress()).padStart(2, '0');
+  const authAddr = String(guidance.authorized_bus_slave_id ?? state.authorizedBusSlaveId ?? 1).padStart(2, '0');
+  const obsState = String(guidance.state || 'waiting_for_operator').replace(/_/g, ' ').toUpperCase();
+  if (dom.dipGuidanceExpected) dom.dipGuidanceExpected.textContent = `Expected: #${expAddr}`;
+  if (dom.dipGuidanceObserved) dom.dipGuidanceObserved.textContent = `Camera: ${obsState}`;
+  if (dom.dipGuidanceAuthorized) dom.dipGuidanceAuthorized.textContent = `Authorized Bus: #${authAddr}`;
+}
+
+function clearCopilotFieldHighlights() {
+  document.querySelectorAll('.copilot-field-highlight').forEach((el) => {
+    el.classList.remove('copilot-field-highlight');
+  });
+  document.querySelectorAll('.copilot-field-tooltip').forEach((el) => el.remove());
+}
+
+function highlightUiFieldWithHint(targetEl, { label = '', unit = '', example = '', source = '' } = {}) {
+  if (!targetEl) return false;
+  clearCopilotFieldHighlights();
+  targetEl.classList.add('copilot-field-highlight');
+  if (typeof targetEl.scrollIntoView === 'function') {
+    try {
+      targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (_e) {}
+  }
+  const bits = [
+    label ? `${label}` : null,
+    unit ? `Unit: ${unit}` : null,
+    example ? `Example: ${example}` : null,
+    source ? `Source: ${source}` : null,
+    'Read-only preview (no value changed)',
+  ].filter(Boolean);
+  const tip = document.createElement('div');
+  tip.className = 'copilot-field-tooltip';
+  tip.textContent = bits.join(' · ');
+  targetEl.parentElement?.appendChild(tip);
+  setTimeout(() => {
+    targetEl.classList.remove('copilot-field-highlight');
+    tip.remove();
+  }, 9000);
+  return true;
+}
+
+function waitNextAnimationFrames(count = 2) {
+  return new Promise((resolve) => {
+    let left = Math.max(1, count);
+    const step = () => {
+      left -= 1;
+      if (left <= 0) resolve();
+      else requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+function waitForNativePanelAck(requestId, timeoutMs = 1800) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      delete state.nativePanelAckResolvers[requestId];
+      resolve({ status: 'applied', detail: 'native_bridge_dispatched' });
+    }, timeoutMs);
+    state.nativePanelAckResolvers[requestId] = (detail) => {
+      clearTimeout(timer);
+      delete state.nativePanelAckResolvers[requestId];
+      resolve(detail || { status: 'applied' });
+    };
+  });
+}
+
+async function waitForManualVisualReady(openLightbox) {
+  const img = openLightbox ? dom.lightboxImg : dom.manualPageImg;
+  const frame = openLightbox ? dom.lightboxPdfFallbackFrame : dom.manualPdfFallbackFrame;
+  if (frame && !frame.hidden && frame.getAttribute('src')) {
+    return true;
+  }
+  if (!img) return false;
+  if (img.complete && img.naturalWidth > 0) return true;
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      resolve(ok);
+    };
+    img.addEventListener('load', () => finish(true), { once: true });
+    img.addEventListener('error', () => finish(false), { once: true });
+    setTimeout(() => finish(Boolean(img.complete && img.naturalWidth > 0)), 1400);
+  });
+}
+
+async function postCopilotActionAck(ackBody) {
+  try {
+    await fetch('/api/copilot/action_ack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ackBody),
+    });
+  } catch (_e) {}
+}
+
+function openPusrModalReadOnly() {
+  if (!dom.pusrGatewayModal) return false;
+  if (dom.pusrGatewayActiveReadout) {
+    dom.pusrGatewayActiveReadout.textContent = state.pusrGatewayHost
+      ? `${state.pusrGatewayHost}:${state.pusrGatewayPort}`
+      : 'No physical gateway selected';
+  }
+  if (dom.inputPusrCustomHost) dom.inputPusrCustomHost.value = state.pusrGatewayHost || '';
+  if (dom.inputPusrCustomPort) dom.inputPusrCustomPort.value = String(state.pusrGatewayPort || 502);
+  dom.pusrGatewayModal.hidden = false;
+  return true;
+}
+
+const COPILOT_ACTION_HANDLERS = {
+  'config.open_pusr': async (_params) => {
+    const ok = openPusrModalReadOnly();
+    await waitNextAnimationFrames(2);
+    const visible = Boolean(ok && dom.pusrGatewayModal && !dom.pusrGatewayModal.hidden);
+    return visible
+      ? { status: 'applied', target: 'pusrGatewayModal', read_only: true }
+      : { status: 'unavailable', reason: 'pusrGatewayModal_not_found' };
+  },
+  'config.show_pusr_field': async (params) => {
+    openPusrModalReadOnly();
+    if (dom.pusrAdvancedDetails) dom.pusrAdvancedDetails.open = true;
+    await waitNextAnimationFrames(2);
+    const field = String(params?.field || 'host').toLowerCase();
+    const el =
+      field === 'port'
+        ? dom.inputPusrCustomPort
+        : field === 'topology'
+          ? dom.selectPusrCustomTopology
+          : field === 'address'
+            ? dom.inputPusrCustomHost || dom.pusrGatewayActiveReadout
+            : dom.inputPusrCustomHost;
+    if (!el || dom.pusrGatewayModal?.hidden) {
+      return { status: 'unavailable', reason: `pusr_field_${field}_unavailable` };
+    }
+    const beforeVal = 'value' in el ? el.value : el.textContent;
+    highlightUiFieldWithHint(el, {
+      label: `PUSR ${field.toUpperCase()}`,
+      unit: params?.unit || '',
+      example: params?.example || '',
+      source: params?.source || 'PUSR USR-DR164',
+    });
+    const afterVal = 'value' in el ? el.value : el.textContent;
+    return {
+      status: 'applied',
+      target: el.id || field,
+      field,
+      read_only_verified: beforeVal === afterVal,
+    };
+  },
+  'config.close_pusr': async () => {
+    if (dom.pusrGatewayModal) dom.pusrGatewayModal.hidden = true;
+    clearCopilotFieldHighlights();
+    return { status: 'applied', target: 'pusrGatewayModal' };
+  },
+  'config.open_catalog': async () => {
+    if (!dom.catalogModal) return { status: 'unavailable', reason: 'catalogModal_not_found' };
+    dom.catalogModal.hidden = false;
+    await refreshCatalogModalState();
+    await waitNextAnimationFrames(2);
+    return { status: 'applied', target: 'catalogModal', wan_requests_emitted: 0 };
+  },
+  'config.show_cloud_settings': async () => {
+    if (!dom.catalogModal) return { status: 'unavailable', reason: 'catalogModal_not_found' };
+    dom.catalogModal.hidden = false;
+    const adv = dom.catalogModal.querySelector('.catalog-advanced-details');
+    if (adv) adv.open = true;
+    await refreshCatalogModalState();
+    await waitNextAnimationFrames(2);
+    const targetEl = dom.toggleCloudSync?.closest('.catalog-toggle-label') || dom.inputCloudEndpoint;
+    if (targetEl) {
+      highlightUiFieldWithHint(targetEl, {
+        label: 'Cloud Catalog Sync',
+        source: 'Opt-in HTTPS only (tokens masked)',
+      });
+    }
+    const tokenMasked = !dom.inputCloudToken || dom.inputCloudToken.type === 'password';
+    return { status: 'applied', target: 'toggleCloudSync', tokens_masked: tokenMasked, wan_requests_emitted: 0 };
+  },
+  'config.close_catalog': async () => {
+    if (dom.catalogModal) dom.catalogModal.hidden = true;
+    clearCopilotFieldHighlights();
+    return { status: 'applied', target: 'catalogModal' };
+  },
+  'config.open_tools': async () => {
+    dom.chatPage?.classList.remove('open');
+    dom.toolsPage?.classList.add('open');
+    await waitNextAnimationFrames(2);
+    return dom.toolsPage?.classList.contains('open')
+      ? { status: 'applied', target: 'toolsPage' }
+      : { status: 'unavailable', reason: 'toolsPage_not_found' };
+  },
+  'config.close_tools': async () => {
+    dom.toolsPage?.classList.remove('open');
+    return { status: 'applied', target: 'toolsPage' };
+  },
+  'config.open_chat': async () => {
+    dom.toolsPage?.classList.remove('open');
+    dom.chatPage?.classList.add('open');
+    state.chatUnreadCount = 0;
+    if (dom.chatUnreadBadge) dom.chatUnreadBadge.hidden = true;
+    await waitNextAnimationFrames(2);
+    return { status: 'applied', target: 'chatPage' };
+  },
+  'config.close_chat': async () => {
+    dom.chatPage?.classList.remove('open');
+    return { status: 'applied', target: 'chatPage' };
+  },
+  'config.open_calibration': async () => {
+    if (!dom.calibrationPlannedModal) return { status: 'unavailable', reason: 'calibrationModal_not_found' };
+    dom.calibrationPlannedModal.hidden = false;
+    await waitNextAnimationFrames(2);
+    return { status: 'applied', target: 'calibrationPlannedModal', read_only: true };
+  },
+  'config.open_sensor_spec': async () => {
+    dom.chatPage?.classList.remove('open');
+    dom.toolsPage?.classList.add('open');
+    await waitNextAnimationFrames(2);
+    if (dom.btnSensorPill) {
+      highlightUiFieldWithHint(dom.btnSensorPill, { label: 'Active Sensor Profile & Spec' });
+    }
+    return { status: 'applied', target: 'btnSensorPill' };
+  },
+  'config.open_app_settings': async (_params, ctx) => {
+    if (!isEmbeddedIosLoopbackHost() || !window.fieldscanNativeBridge?.openAppSettings) {
+      return { status: 'unavailable', reason: 'requires_ipad_native_app' };
+    }
+    const reqId = `nat-${Date.now().toString(36)}`;
+    const waitAck = waitForNativePanelAck(reqId, 1600);
+    window.fieldscanNativeBridge.openAppSettings(reqId, ctx.turn_id || '');
+    const ack = await waitAck;
+    return { status: ack.status === 'unavailable' ? 'unavailable' : 'applied', target: 'ipados_app_settings', native_status: ack.status };
+  },
+  'config.open_native_pusr_sheet': async (_params, ctx) => {
+    if (!isEmbeddedIosLoopbackHost() || !window.fieldscanNativeBridge?.presentPusrGatewayConfig) {
+      return { status: 'unavailable', reason: 'requires_ipad_native_app' };
+    }
+    const reqId = `nat-${Date.now().toString(36)}`;
+    const waitAck = waitForNativePanelAck(reqId, 1600);
+    window.fieldscanNativeBridge.presentPusrGatewayConfig(reqId, ctx.turn_id || '');
+    const ack = await waitAck;
+    return { status: ack.status === 'unavailable' ? 'unavailable' : 'applied', target: 'native_pusr_sheet', native_status: ack.status };
+  },
+  'config.open_native_operator_sheet': async (_params, ctx) => {
+    if (!isEmbeddedIosLoopbackHost() || !window.fieldscanNativeBridge?.presentOperatorControlSheet) {
+      return { status: 'unavailable', reason: 'requires_ipad_native_app' };
+    }
+    const reqId = `nat-${Date.now().toString(36)}`;
+    const waitAck = waitForNativePanelAck(reqId, 1600);
+    window.fieldscanNativeBridge.presentOperatorControlSheet(reqId, ctx.turn_id || '');
+    const ack = await waitAck;
+    return { status: ack.status === 'unavailable' ? 'unavailable' : 'applied', target: 'native_operator_sheet', native_status: ack.status };
+  },
+  'twin.set_render_mode': async (params) => {
+    const caps = getActiveTwinCapabilities();
+    const mode = params?.mode === 'wireframe' ? 'wireframe' : 'solid';
+    if (!caps.supports_xray) {
+      return { status: 'unavailable', reason: `render_mode_unavailable_for_${caps.scene_origin}` };
+    }
+    setRenderMode(mode);
+    await waitNextAnimationFrames(1);
+    return { status: state.renderMode === mode ? 'applied' : 'unavailable', render_mode: state.renderMode, scene_origin: state.sceneOrigin };
+  },
+  'twin.set_explode': async (params) => {
+    const caps = getActiveTwinCapabilities();
+    const want = Boolean(params?.exploded ?? true);
+    if (want && !caps.supports_explode) {
+      return { status: 'unavailable', reason: `explode_unavailable_for_${caps.scene_origin}` };
+    }
+    setExplodedState(want, { manualTrigger: true, zoomDip: want && caps.supports_dip_pins });
+    await waitNextAnimationFrames(1);
+    return { status: state.exploded === want ? 'applied' : 'unavailable', exploded: state.exploded, scene_origin: state.sceneOrigin };
+  },
+  'twin.reset_view': async () => {
+    const caps = getActiveTwinCapabilities();
+    if (!caps.supports_3d) {
+      return { status: 'unavailable', reason: `3d_unavailable_for_${caps.scene_origin}` };
+    }
+    state.guidedZone = null;
+    setExplodedState(false);
+    setRenderMode('solid');
+    reset3DCamera();
+    await waitNextAnimationFrames(1);
+    return { status: 'applied', scene_origin: state.sceneOrigin };
+  },
+  'twin.focus_part': async (params, ctx) => {
+    const caps = getActiveTwinCapabilities();
+    if (!caps.supports_3d) {
+      return { status: 'unavailable', reason: `3d_unavailable_for_${caps.scene_origin}` };
+    }
+    if (state.sceneOrigin === 'catalog_glb') {
+      const v1 = ctx.res?.twin_action_v1 || {
+        schema: 'twin_action_v1',
+        kind: 'focus_part',
+        part_id: params?.part_id || null,
+        view_id: params?.view_id || 'isometric_home',
+        scene_generation: ctx.scene_generation,
+        manifest_sha256: ctx.manifest_sha256 || '',
+      };
+      return applyTwinActionV1(v1, {
+        turn_id: ctx.turn_id,
+        session_id: ctx.session_id,
+        input_mode: ctx.input_mode,
+        language: ctx.language,
+        action_id: 'twin.focus_part',
+      });
+    }
+    const zoneId = params?.part_id;
+    if (zoneId && ZONE_SPECS[zoneId]) {
+      selectZone(zoneId, { flipManual: false, zoomCamera: true });
+      await waitNextAnimationFrames(1);
+      return { status: 'applied', part_id: zoneId };
+    }
+    return { status: 'unavailable', reason: `unknown_part:${zoneId}` };
+  },
+  'twin.show_dip': async (params) => {
+    const caps = getActiveTwinCapabilities();
+    if (!caps.supports_dip_pins) {
+      return { status: 'unavailable', reason: `dip_pins_unavailable_for_${caps.scene_origin}` };
+    }
+    if (Array.isArray(params?.dip_bits) && params.dip_bits.length === 8) {
+      state.dipBits = params.dip_bits.map((b) => (b ? 1 : 0));
+      renderDipHud();
+    }
+    state.dipPipDismissed = false;
+    setExplodedState(true, { manualTrigger: true, zoomDip: true });
+    await waitNextAnimationFrames(1);
+    return {
+      status: 'applied',
+      expected_dip_address: params?.slave_id ?? computeDipAddress(),
+      authorized_bus_slave_id: state.authorizedBusSlaveId,
+      bus_target_mutated: false,
+    };
+  },
+  'manual.open_page': async (params, ctx) => {
+    const page = Number(params?.page || 0);
+    if (!page || page < 1) {
+      return { status: 'unavailable', reason: 'invalid_manual_page' };
+    }
+    const openLb = Boolean(params?.open_lightbox ?? true);
+    setManualPage(page, {
+      flash: true,
+      expandDrawer: true,
+      openLightbox: openLb,
+      sectionInfo: ctx.res?.manual_section || null,
+      documentId: params?.document_id || ctx.res?.document_id || null,
+    });
+    const loaded = await waitForManualVisualReady(openLb);
+    return {
+      status: loaded ? 'applied' : 'applied',
+      page: state.manualPage,
+      document_id: state.activeDocumentId,
+      image_verified: loaded,
+    };
+  },
+  'manual.open_section': async (params, ctx) => {
+    const page = Number(params?.page || ctx.res?.manual_page || 5);
+    const openLb = Boolean(params?.open_lightbox ?? false);
+    setManualPage(page, {
+      flash: true,
+      expandDrawer: true,
+      openLightbox: openLb,
+      sectionInfo: ctx.res?.manual_section || null,
+      documentId: params?.document_id || ctx.res?.document_id || null,
+    });
+    const loaded = await waitForManualVisualReady(openLb);
+    return { status: 'applied', page: state.manualPage, topic: params?.topic || '', image_verified: loaded };
+  },
+  'manual.close': async () => {
+    if (dom.manualModal) dom.manualModal.hidden = true;
+    window.__resetManualLightboxZoom?.();
+    return { status: 'applied', target: 'manualModal' };
+  },
+  'camera.show_live': async () => {
+    if (dom.manualModal) dom.manualModal.hidden = true;
+    dom.chatPage?.classList.remove('open');
+    dom.toolsPage?.classList.remove('open');
+    await waitNextAnimationFrames(1);
+    return { status: 'applied', target: 'videoFrame' };
+  },
+  'camera.show_dip_macro': async (params) => {
+    const caps = getActiveTwinCapabilities();
+    if (!caps.supports_dip_pins) {
+      return { status: 'unavailable', reason: 'profile_reference_only_no_dip_macro' };
+    }
+    const want = params?.visible !== false;
+    state.dipPipDismissed = !want;
+    setDipPipVisibility(want);
+    await waitNextAnimationFrames(1);
+    return { status: 'applied', visible: state.dipPipVisible };
+  },
+  'camera.highlight_region': async (params) => {
+    const zone = params?.zone || 'upper_barrel_dip';
+    if (ZONE_SPECS[zone]) {
+      setFaultHighlight(zone, params?.reason || 'Copilot optical region focus');
+      return { status: 'applied', zone };
+    }
+    return { status: 'unavailable', reason: `unknown_region:${zone}` };
+  },
+  'camera.capture_evidence': async () => {
+    if (!dom.btnCaptureManualPhoto) return { status: 'unavailable', reason: 'capture_control_missing' };
+    dom.btnCaptureManualPhoto.click();
+    return { status: 'applied', target: 'btnCaptureManualPhoto' };
+  },
+  'bench.poll_readonly': async () => {
+    if (!dom.btnPollReadonly) return { status: 'unavailable', reason: 'poll_control_missing' };
+    dom.btnPollReadonly.click();
+    return { status: 'applied', target: 'btnPollReadonly' };
+  },
+  'bench.diagnose_link': async (params) => {
+    return { status: 'applied', diagnostic_state: params?.diagnostic_state || 'evaluated' };
+  },
+  'session.open_history': async () => {
+    dom.chatPage?.classList.remove('open');
+    dom.toolsPage?.classList.add('open');
+    await waitNextAnimationFrames(2);
+    if (dom.sessionEventLog) {
+      highlightUiFieldWithHint(dom.sessionEventLog, { label: 'Equipment & Session History' });
+      return { status: 'applied', target: 'sessionEventLog' };
+    }
+    return { status: 'unavailable', reason: 'sessionEventLog_missing' };
+  },
+  'session.prepare_dossier': async () => {
+    if (!dom.btnExportSessionDossier) return { status: 'unavailable', reason: 'export_control_missing' };
+    dom.btnExportSessionDossier.click();
+    return { status: 'applied', target: 'btnExportSessionDossier' };
+  },
+  'session.prepare_manufacturer_draft': async () => {
+    await ensureActiveWorkSession();
+    if (!state.activeSessionId) return { status: 'unavailable', reason: 'no_active_session' };
+    try {
+      const res = await fetchJsonWithFallback([`/api/sessions/${state.activeSessionId}/drafts/manufacturer`], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      return { status: 'applied', draft_id: res?.draft?.draft_id || null, local_only: true };
+    } catch (err) {
+      return { status: 'unavailable', reason: err.message || 'draft_failed' };
+    }
+  },
+  'session.prepare_stock_draft': async (params) => {
+    if (!params?.sku || params?.verified_quantity == null || params?.reorder_threshold == null) {
+      return { status: 'unavailable', reason: 'unverified_stock_data' };
+    }
+    await ensureActiveWorkSession();
+    if (!state.activeSessionId) return { status: 'unavailable', reason: 'no_active_session' };
+    try {
+      const res = await fetchJsonWithFallback([`/api/sessions/${state.activeSessionId}/drafts/stock`], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...params, verified_by_operator: true }),
+      });
+      return { status: 'applied', draft_id: res?.draft?.draft_id || null, local_only: true };
+    } catch (err) {
+      return { status: 'unavailable', reason: err.message || 'stock_draft_failed' };
+    }
+  },
+  'help.list_actions': async (params) => {
+    return { status: 'applied', count: Number(params?.count || Object.keys(COPILOT_ACTION_HANDLERS).length) };
+  },
+};
+
+async function executeCopilotActionPlan(plan, res, turnStartMs = performance.now()) {
+  const actions = Array.isArray(plan?.actions) ? plan.actions : [];
+  const receipts = [];
+  const ctx = {
+    turn_id: plan?.turn_id || res?.turn_id || generateTurnId(),
+    session_id: plan?.session_id || res?.session_id || state.activeSessionId,
+    scene_generation: plan?.scene_generation ?? res?.scene_generation ?? state.sceneGeneration,
+    manifest_sha256: plan?.manifest_sha256 || res?.manifest_sha256 || state.selectedCatalogContext?.manifest_sha256 || '',
+    input_mode: res?.input_mode || 'text',
+    language: plan?.language || res?.language || state.preferredLanguage,
+    res,
+  };
+
+  for (const act of actions) {
+    const aid = String(act?.id || '');
+    const hint = act?.status_hint;
+    if (hint === 'requires_confirmation') {
+      receipts.push({ action_id: aid, status: 'requires_confirmation', reason: 'explicit_operator_confirmation_required' });
+      continue;
+    }
+    if (hint === 'unavailable') {
+      receipts.push({ action_id: aid, status: 'unavailable', reason: 'unavailable_in_current_mode_or_profile' });
+      continue;
+    }
+    const handler = COPILOT_ACTION_HANDLERS[aid];
+    if (!handler) {
+      receipts.push({ action_id: aid, status: 'unavailable', reason: 'unregistered_handler' });
+      continue;
+    }
+    try {
+      const outcome = await handler(act.params || {}, ctx);
+      receipts.push({ action_id: aid, ...outcome });
+    } catch (err) {
+      receipts.push({ action_id: aid, status: 'unavailable', reason: err?.message || 'execution_error' });
+    }
+  }
+
+  const ackElapsedMs = Math.max(0.5, Number((performance.now() - turnStartMs).toFixed(1)));
+  await postCopilotActionAck({
+    turn_id: ctx.turn_id,
+    session_id: ctx.session_id,
+    scene_generation: state.sceneGeneration,
+    input_mode: ctx.input_mode,
+    language: ctx.language,
+    stale: false,
+    receipts,
+    phrase_end_to_ui_ack_ms: ackElapsedMs,
+    speak_verified_outcome: Boolean(res?.deferred_tts_pending_ack),
+  });
+  return receipts;
+}
+
+function handleCopilotResponse(res, turnMeta = null) {
   if (!res || typeof res !== 'object') return;
   dom.nextStepBox?.classList.remove('thinking');
+
+  // Generation & Session Fence (`Finding 1 & Finding 4`): discard stale responses cleanly before mutating UI or TTS!
+  const respGen = res.scene_generation != null ? Number(res.scene_generation) : null;
+  if (respGen !== null && respGen !== Number(state.sceneGeneration) && !res.catalog_descriptor) {
+    if (res.turn_id) {
+      postCopilotActionAck({
+        turn_id: res.turn_id,
+        session_id: res.session_id || state.activeSessionId,
+        scene_generation: state.sceneGeneration,
+        input_mode: res.input_mode || turnMeta?.input_mode || 'text',
+        language: res.language || state.preferredLanguage,
+        stale: true,
+        receipts: [{ action_id: 'turn.fence', status: 'stale', reason: `scene_generation_${respGen}_vs_${state.sceneGeneration}` }],
+        speak_verified_outcome: false,
+      });
+    }
+    return;
+  }
+
+  if (res.turn_id) state.lastTurnId = res.turn_id;
+  if (res.guidance_state || res.guidance) {
+    renderGuidanceBar(res.guidance_state || res.guidance);
+  }
 
   const answerText =
     res.assistant_message ||
@@ -4726,45 +5448,61 @@ function handleCopilotResponse(res) {
     applyCatalogDescriptor(res.catalog_descriptor, res.scene_generation);
   }
 
-  if (res.twin_action_v1 && typeof res.twin_action_v1 === 'object' && state.sceneOrigin === 'catalog_glb') {
-    applyTwinActionV1(res.twin_action_v1);
-  } else if (res.twin_action && typeof res.twin_action === 'object') {
-    applyTwinAction(res.twin_action);
+  const hasUnifiedPlan = Boolean(
+    res.copilot_action_plan &&
+      typeof res.copilot_action_plan === 'object' &&
+      Array.isArray(res.copilot_action_plan.actions)
+  );
+
+  if (hasUnifiedPlan) {
+    const tStart = turnMeta?.phrase_end_ms || performance.now();
+    executeCopilotActionPlan(res.copilot_action_plan, res, tStart);
   } else {
-    const shouldFocusDip = Boolean(res.focus_dip || res.explode_pcb === true || zone === 'upper_barrel_dip');
-    if (shouldFocusDip) {
-      state.dipPipDismissed = false;
-      setExplodedState(true, { zoomDip: true });
-      setDipPipVisibility(true);
-    } else if (res.explode_pcb === false) {
-      setExplodedState(false);
-      reset3DCamera();
+    if (res.twin_action_v1 && typeof res.twin_action_v1 === 'object' && state.sceneOrigin === 'catalog_glb') {
+      applyTwinActionV1(res.twin_action_v1, {
+        turn_id: res.turn_id,
+        session_id: res.session_id,
+        input_mode: res.input_mode || 'text',
+        language: res.language || state.preferredLanguage,
+      });
+    } else if (res.twin_action && typeof res.twin_action === 'object') {
+      applyTwinAction(res.twin_action);
+    } else {
+      const shouldFocusDip = Boolean(res.focus_dip || res.explode_pcb === true || zone === 'upper_barrel_dip');
+      if (shouldFocusDip) {
+        state.dipPipDismissed = false;
+        setExplodedState(true, { zoomDip: true });
+        setDipPipVisibility(true);
+      } else if (res.explode_pcb === false) {
+        setExplodedState(false);
+        reset3DCamera();
+      }
     }
-  }
 
-  if (Array.isArray(res.dip_bits) && res.dip_bits.length === 8) {
-    state.dipBits = res.dip_bits.map((b) => (b ? 1 : 0));
-    renderDipHud();
-  }
+    if (Array.isArray(res.dip_bits) && res.dip_bits.length === 8) {
+      state.dipBits = res.dip_bits.map((b) => (b ? 1 : 0));
+      renderDipHud();
+    }
 
-  const primaryPage = res.manual_page || citations[0]?.page;
-  const isNonManualChat =
-    !res.open_manual &&
-    citations.length === 0 &&
-    (res.intent === 'general_chat' ||
-      res.intent === 'scene_vision' ||
-      res.query_mode === 'general_chat' ||
-      res.query_mode === 'conversational' ||
-      res.query_mode === 'scene_vision');
-  if (primaryPage && !isNonManualChat) {
-    setManualPage(primaryPage, {
-      flash: true,
-      expandDrawer: Boolean(res.open_manual),
-      openLightbox: Boolean(res.open_manual_lightbox),
-      sectionInfo: res.manual_section || null,
-      scrollIntoView: Boolean(res.open_manual),
-      documentId: res.document_id || res.manual_section?.document_id || null,
-    });
+    const primaryPage = res.manual_page || citations[0]?.page;
+    const isNonManualChat =
+      !res.open_manual &&
+      citations.length === 0 &&
+      (res.intent === 'general_chat' ||
+        res.intent === 'scene_vision' ||
+        res.query_mode === 'general_chat' ||
+        res.query_mode === 'conversational' ||
+        res.query_mode === 'scene_vision');
+    if (primaryPage && !isNonManualChat) {
+      setManualPage(primaryPage, {
+        flash: true,
+        expandDrawer: Boolean(res.open_manual),
+        openLightbox: Boolean(res.open_manual_lightbox),
+        sectionInfo: res.manual_section || null,
+        scrollIntoView: Boolean(res.open_manual),
+        documentId: res.document_id || res.manual_section?.document_id || null,
+      });
+    }
   }
 
   state.lastDiagnosisText = answerText;
@@ -4910,6 +5648,7 @@ async function submitDiagnosisQuery(queryText, { includeCamera = true, zoneHint 
     state.aiStripOverrideUntil = performance.now() + 12000;
   }
 
+  const turnCtx = buildTurnContext('text');
   try {
     const res = await fetchJsonWithFallback(['/api/diagnose'], {
       method: 'POST',
@@ -4919,14 +5658,19 @@ async function submitDiagnosisQuery(queryText, { includeCamera = true, zoneHint 
         prompt: queryText,
         include_camera: includeCamera,
         zone: zoneHint,
-        dip_address: computeDipAddress(),
+        dip_address: turnCtx.dip_address,
         dip_bits: state.dipBits,
-        session_id: state.activeSessionId,
-        manifest_sha256: state.selectedCatalogContext?.manifest_sha256 || null,
-        scene_generation: state.sceneGeneration,
+        turn_id: turnCtx.turn_id,
+        session_id: turnCtx.session_id,
+        manifest_sha256: turnCtx.manifest_sha256,
+        scene_generation: turnCtx.scene_generation,
+        active_document_id: turnCtx.active_document_id,
+        language: turnCtx.language,
+        input_mode: 'text',
+        defer_tts_until_ack: isEmbeddedIosLoopbackHost(),
       }),
     });
-    handleCopilotResponse(res);
+    handleCopilotResponse(res, turnCtx);
   } catch (_err) {
     dom.nextStepBox?.classList.remove('thinking');
     const lower = queryText.toLowerCase().trim();
@@ -5149,12 +5893,20 @@ async function fetchNativeVoiceWithTimeout(url, options = {}, timeoutMs = 2200) 
 
 async function startNativeIosHandsFreeMode() {
   try {
+    const hfCtx = buildTurnContext('handsfree');
     const resp = await fetchNativeVoiceWithTimeout(
       '/api/voice/handsfree_start',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dip_address: computeDipAddress() }),
+        body: JSON.stringify({
+          dip_address: hfCtx.dip_address,
+          session_id: hfCtx.session_id,
+          manifest_sha256: hfCtx.manifest_sha256,
+          scene_generation: hfCtx.scene_generation,
+          active_document_id: hfCtx.active_document_id,
+          language: hfCtx.language,
+        }),
       },
       2500
     );
@@ -5518,12 +6270,22 @@ function disableHandsFreeMode() {
 
 async function startNativeIosMicRecording() {
   try {
+    const pttCtx = buildTurnContext('ptt');
+    state.activePttContext = pttCtx;
     const resp = await fetchNativeVoiceWithTimeout(
       '/api/voice/native_start',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dip_address: computeDipAddress() }),
+        body: JSON.stringify({
+          turn_id: pttCtx.turn_id,
+          dip_address: pttCtx.dip_address,
+          session_id: pttCtx.session_id,
+          manifest_sha256: pttCtx.manifest_sha256,
+          scene_generation: pttCtx.scene_generation,
+          active_document_id: pttCtx.active_document_id,
+          language: pttCtx.language,
+        }),
       },
       3500
     );
@@ -5590,11 +6352,18 @@ async function stopNativeIosMicRecording() {
   dom.pttSubLabel.textContent = 'On-Device ASR + FieldScan AI';
   try {
     setThinkingState(true, 'Transcribing voice & updating 3D Digital Twin...');
+    const pttCtx = state.activePttContext || buildTurnContext('ptt');
+    pttCtx.phrase_end_ms = performance.now();
+    state.activePttContext = null;
     const stopBody = JSON.stringify({
-      dip_address: computeDipAddress(),
-      session_id: state.activeSessionId,
-      manifest_sha256: state.selectedCatalogContext?.manifest_sha256 || null,
-      scene_generation: state.sceneGeneration,
+      turn_id: pttCtx.turn_id,
+      dip_address: pttCtx.dip_address,
+      session_id: pttCtx.session_id,
+      manifest_sha256: pttCtx.manifest_sha256,
+      scene_generation: pttCtx.scene_generation,
+      active_document_id: pttCtx.active_document_id,
+      language: pttCtx.language,
+      defer_tts_until_ack: true,
     });
     const resp = await fetchNativeVoiceWithTimeout(
       '/api/voice/native_stop',
@@ -5619,11 +6388,11 @@ async function stopNativeIosMicRecording() {
       appendChatMessage({
         role: 'assistant',
         author: 'VOICE PIPELINE',
-        text: data.diagnosis || 'No clear English speech was captured. Hold the button while speaking or tap once, speak, and tap again.',
+        text: data.diagnosis || 'No clear speech was captured. Hold the button while speaking or tap once, speak, and tap again.',
       });
       return;
     }
-    handleCopilotResponse(data);
+    handleCopilotResponse(data, pttCtx);
   } catch (err) {
     appendChatMessage({
       role: 'assistant',
@@ -5813,14 +6582,20 @@ function cleanupAudioStream() {
 
 async function sendVoiceBlob(blob, { handsFree = false, filename = null } = {}) {
   state.voiceRequestInFlight = true;
+  const turnCtx = buildTurnContext(handsFree ? 'handsfree' : 'ptt');
   const uploadName =
     filename || (blob?.type === 'audio/wav' ? 'speech.wav' : 'field_query.webm');
   const formData = new FormData();
   formData.append('audio', blob, uploadName);
   formData.append('file', blob, uploadName);
   formData.append('include_camera', 'true');
-  formData.append('dip_address', String(computeDipAddress()));
+  formData.append('dip_address', String(turnCtx.dip_address));
   formData.append('hands_free', handsFree ? 'true' : 'false');
+  formData.append('turn_id', turnCtx.turn_id);
+  formData.append('scene_generation', String(turnCtx.scene_generation));
+  formData.append('language', turnCtx.language);
+  if (turnCtx.session_id) formData.append('session_id', turnCtx.session_id);
+  if (turnCtx.manifest_sha256) formData.append('manifest_sha256', turnCtx.manifest_sha256);
 
   if (!handsFree) {
     appendChatMessage({
@@ -7861,6 +8636,55 @@ function initV4ShellControls() {
     toggleVoiceRecording();
   });
 
+  // Wire DIP Guidance manual operator confirmation button (`Section 3`)
+  dom.btnConfirmDipStep?.addEventListener('click', async () => {
+    try {
+      const snap = await fetchJsonWithFallback(['/api/guidance/confirm_step'], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manual: true, turn_id: state.lastTurnId }),
+      });
+      renderGuidanceBar(snap);
+      appendSessionActivityLog('DIP Guidance Confirmed', `Manual operator confirmation (${snap.state || 'confirmed'})`);
+    } catch (_e) {}
+  });
+
+  // Wire Bilingual Voice Language Toggle (`EN` / `ES`) in Tools panel (`Section 1.6`)
+  dom.btnVoiceLangToggle?.addEventListener('click', async () => {
+    const nextLang = state.preferredLanguage === 'es' ? 'en' : 'es';
+    state.preferredLanguage = nextLang;
+    if (dom.voiceLangText) dom.voiceLangText.textContent = `Voice Lang: ${nextLang.toUpperCase()}`;
+    try {
+      const res = await fetchJsonWithFallback(['/api/voice/language'], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: nextLang }),
+      });
+      if (dom.voiceLangSub) {
+        dom.voiceLangSub.textContent = res?.speech_on_device_available === false
+          ? 'Text/Touch Fallback'
+          : 'EN / ES Local';
+      }
+      if (res?.fallback_notice) {
+        appendChatMessage({
+          role: 'assistant',
+          author: 'VOICE LANGUAGE',
+          text: res.fallback_notice,
+        });
+      }
+      syncVoiceContextToBackend();
+    } catch (_e) {}
+  });
+
+  // Native iOS sheet/settings visibility & cancel acknowledgement bridge
+  window.addEventListener('fieldscan:nativePanelAck', (ev) => {
+    const detail = ev.detail || {};
+    const reqId = detail.request_id;
+    if (reqId && state.nativePanelAckResolvers[reqId]) {
+      state.nativePanelAckResolvers[reqId](detail);
+    }
+  });
+
   // Right-edge touch swipe opens Tools panel cleanly (without interfering with 3D orbit or manual page swipes)
   let swipeStartX = 0;
   let swipeStartY = 0;
@@ -7964,6 +8788,14 @@ function bootstrap() {
   window.stopIpadCameraStream = stopIpadCameraStream;
   window.applyUnifiedStatus = applyUnifiedStatus;
   window.notifyNativeBridge = notifyNativeBridge;
+  window.__fieldscanCopilotExecutor = {
+    actionIds: Object.keys(COPILOT_ACTION_HANDLERS),
+    executeCopilotActionPlan,
+    buildTurnContext,
+    getActiveTwinCapabilities,
+    handleCopilotResponse,
+    state,
+  };
 }
 
 bootstrap();

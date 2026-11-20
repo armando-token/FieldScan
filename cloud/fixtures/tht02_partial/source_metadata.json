@@ -1,0 +1,27 @@
+{
+  "source_id": "tht02_manual_v1_0_partial",
+  "product_id": "tzone_tht02",
+  "manufacturer": "TZONE",
+  "model": "TZ THT-02",
+  "variant_id": "v1_0_partial",
+  "variant_code": "V1.0-PARTIAL",
+  "hardware_revision": "V1.0",
+  "display_name": "TZ THT-02 RS-485 Temperature & Humidity Sensor (V1.0 Documentation Only)",
+  "discriminant_hint": "Early V1.0 revision without verified internal DIP geometry recipe",
+  "aliases": [
+    "TZONE TZ THT-02 V1.0",
+    "TZ THT-02 V1.0",
+    "THT-02 V1.0"
+  ],
+  "origin_kind": "test_fixture",
+  "canonical_url": "https://p.globalsources.com/IMAGES/PDT/SPEC/387/K1195613387.pdf#fixture-partial",
+  "final_url": "https://p.globalsources.com/IMAGES/PDT/SPEC/387/K1195613387.pdf#fixture-partial",
+  "allowed_domain": "p.globalsources.com",
+  "source_class": "manual_pdf",
+  "permission_policy": "redistributable",
+  "revision_label": "V1.0",
+  "pdf_filename": "../tht02_v1_1/THT02_Users_Manual_v1.1.pdf",
+  "has_twin_recipe": false,
+  "reason_codes": ["INTERNAL_GEOMETRY_UNCONFIRMED"],
+  "decision_evidence": "Reference documentation-only fixture demonstrating partial publication when internal geometry is not confirmed."
+}

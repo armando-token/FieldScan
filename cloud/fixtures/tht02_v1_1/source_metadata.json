@@ -1,0 +1,27 @@
+{
+  "source_id": "tht02_manual_v1_1",
+  "product_id": "tzone_tht02",
+  "manufacturer": "TZONE",
+  "model": "TZ THT-02",
+  "variant_id": "v1_1_rs485",
+  "variant_code": "V1.1-RS485",
+  "hardware_revision": "V1.1",
+  "display_name": "TZ THT-02 RS-485 Temperature & Humidity Sensor (V1.1)",
+  "discriminant_hint": "Label shows TZ THT-02 RS-485 with internal 8-bit DIP switch (Manual V1.1)",
+  "aliases": [
+    "TZONE TZ THT-02",
+    "TZ THT-02",
+    "THT-02",
+    "THT02",
+    "TZ-THT-02"
+  ],
+  "origin_kind": "test_fixture",
+  "canonical_url": "https://www.tzonedigital.com/en/product/details/31.aspx#manual-v1.1-fixture",
+  "final_url": "https://www.tzonedigital.com/en/product/details/31.aspx#manual-v1.1-fixture",
+  "allowed_domain": "www.tzonedigital.com",
+  "source_class": "manual_pdf",
+  "permission_policy": "redistributable",
+  "revision_label": "V1.1",
+  "pdf_filename": "THT02_Users_Manual_v1.1.pdf",
+  "decision_evidence": "OEM V1.1 manual committed in FieldScan repository (commit 8e6a06504f916cc40e0e7c85177efb7cffa16d04) paired with verified parametric geometry recipe."
+}

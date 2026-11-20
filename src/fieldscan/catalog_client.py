@@ -142,6 +142,8 @@ class FieldScanCatalogClient:
 
         if has_token and not force_reenroll:
             return
+        if force_reenroll and has_token:
+            self.configure_endpoint(target_base, sync_enabled=True, auth_token="")
 
         dev_id = device_id or f"station-{uuid.getnode():012x}"
         resp = self._request(

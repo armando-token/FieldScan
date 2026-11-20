@@ -79,8 +79,8 @@
       "size_bytes": 3189
     },
     "static/app.js": {
-      "sha256": "6faeab6552916a9a07e1b56f56a2994ded6b5bb6d4a25909423a18ce7ad0ab68",
-      "size_bytes": 250782
+      "sha256": "5d5c0562df74cea169cdaf8084a99cf16923a90187c11036daf3c8eb00958460",
+      "size_bytes": 251284
     },
     "static/index.html": {
       "sha256": "764596636ba5478bdb40d9ee8dd8a5b4105b49f3d58e765b30423fa099598ebc",
@@ -128,5 +128,5 @@
     }
   },
   "schema_version": 1,
-  "tree_sha256": "750106f53fa89f04309eafaff35b845f722d214823a31b227b9bb121980031c6"
+  "tree_sha256": "20d6fb4b6e5f1bbcde988f4e193f60fc55d90bf7c8a662e31d4c8ca5be649435"
 }

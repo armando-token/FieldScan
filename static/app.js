@@ -6652,6 +6652,19 @@ function bindCatalogModalEvents() {
 
   dom.btnCheckCloudHealth?.addEventListener('click', async () => {
     try {
+      if (dom.catalogCloudResultBox) {
+        dom.catalogCloudResultBox.textContent = 'Checking FieldScan Cloud server health...';
+      }
+      if (!dom.toggleCloudSync?.checked) {
+        await fetchJsonWithFallback(['/api/catalog/sync_config'], {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base_url: dom.inputCloudEndpoint?.value?.trim() || '',
+            sync_enabled: true,
+          }),
+        });
+      }
       const h = await fetchJsonWithFallback(['/api/catalog/healthz']);
       if (dom.catalogCloudResultBox) {
         dom.catalogCloudResultBox.textContent = h.ok

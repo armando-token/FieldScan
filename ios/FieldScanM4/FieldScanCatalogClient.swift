@@ -197,6 +197,9 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         if hasToken && !forceReenroll {
             return
         }
+        if forceReenroll && hasToken {
+            _ = try configureEndpoint(baseURL: targetBase, syncEnabled: true, authToken: "", persistInKeychain: true)
+        }
 
         let enrollBody: [String: Any] = [
             "device_id": persistentDeviceIdentifier(),

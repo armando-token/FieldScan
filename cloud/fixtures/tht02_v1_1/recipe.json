@@ -1,9 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "recipe_schema_version": 2,
   "product_id": "tzone_tht02",
   "variant_id": "v1_1_rs485",
   "hardware_revisions": ["V1.1", "rev_1_1"],
-  "recipe_version": "1.0.0",
+  "recipe_version": "2.0.0",
   "input_unit": "mm",
   "output_unit": "m",
   "scale_to_meters": 0.001,
@@ -26,24 +27,96 @@
       "node_id": "StrainerHead",
       "legacy_zone_id": "strainer_head",
       "aliases": ["strainer", "probe head", "SHT30", "strainer_head"],
-      "kind": "cylinder",
-      "z_start_mm": 0.0,
-      "z_end_mm": 32.0,
-      "diameter_mm": 16.0,
-      "color_rgba": [184, 196, 208, 255],
+      "kind": "composite_part",
       "citation_id": "tht02_manual_v1_1:p1:section1",
-      "page": 1
+      "page": 1,
+      "children": [
+        {
+          "kind": "lathe_profile",
+          "segments": 48,
+          "points_mm": [
+            [0.0, 0.0],
+            [4.8, 0.0],
+            [6.4, 0.6],
+            [7.4, 1.6],
+            [8.0, 2.8],
+            [8.0, 4.2]
+          ],
+          "material": {
+            "name": "strainer_brushed_stainless",
+            "baseColorFactor": [0.76, 0.80, 0.84, 1.0],
+            "metallicFactor": 0.88,
+            "roughnessFactor": 0.26
+          }
+        },
+        {
+          "kind": "slotted_cylinder",
+          "outer_diameter_mm": 16.0,
+          "inner_diameter_mm": 12.8,
+          "z_start_mm": 4.0,
+          "z_end_mm": 30.2,
+          "slot_count": 10,
+          "slot_rows": 3,
+          "slot_ratio": 0.56,
+          "end_band_mm": 2.2,
+          "ring_thickness_mm": 1.6,
+          "segments": 48,
+          "core_diameter_mm": 10.6,
+          "core_inset_mm": 1.4,
+          "material": {
+            "name": "strainer_slotted_cage",
+            "baseColorFactor": [0.78, 0.82, 0.86, 1.0],
+            "metallicFactor": 0.88,
+            "roughnessFactor": 0.28
+          },
+          "core_material": {
+            "name": "sintered_sensor_core",
+            "baseColorFactor": [0.36, 0.39, 0.44, 1.0],
+            "metallicFactor": 0.52,
+            "roughnessFactor": 0.74
+          }
+        },
+        {
+          "kind": "lathe_profile",
+          "segments": 48,
+          "points_mm": [
+            [7.9, 30.0],
+            [8.05, 30.5],
+            [8.05, 31.6],
+            [7.85, 32.0]
+          ],
+          "material": {
+            "name": "strainer_collar_steel",
+            "baseColorFactor": [0.74, 0.78, 0.82, 1.0],
+            "metallicFactor": 0.86,
+            "roughnessFactor": 0.28
+          }
+        }
+      ]
     },
     {
       "part_id": "seal.upper",
       "node_id": "UpperSealRing",
       "legacy_zone_id": "upper_seal_ring",
       "aliases": ["seal ring", "upper seal", "upper_seal_ring"],
-      "kind": "cylinder",
-      "z_start_mm": 32.0,
-      "z_end_mm": 38.0,
-      "diameter_mm": 16.2,
-      "color_rgba": [31, 38, 46, 255],
+      "kind": "lathe_profile",
+      "segments": 48,
+      "points_mm": [
+        [7.6, 32.0],
+        [8.22, 32.6],
+        [8.22, 34.1],
+        [7.78, 34.8],
+        [7.78, 35.2],
+        [8.22, 35.9],
+        [8.22, 37.4],
+        [7.6, 38.0]
+      ],
+      "material": {
+        "name": "nitrile_seal_elastomer",
+        "baseColorFactor": [0.11, 0.13, 0.16, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.84
+      },
       "citation_id": "tht02_manual_v1_1:p1:section1",
       "page": 1
     },
@@ -52,48 +125,210 @@
       "node_id": "UpperBarrel",
       "legacy_zone_id": "upper_barrel_dip",
       "aliases": ["upper barrel", "housing cover", "upper_barrel_dip"],
-      "kind": "cylinder",
-      "z_start_mm": 38.0,
-      "z_end_mm": 68.0,
-      "diameter_mm": 16.0,
-      "color_rgba": [203, 212, 220, 255],
+      "kind": "composite_part",
       "citation_id": "tht02_manual_v1_1:p5:section1",
-      "page": 5
+      "page": 5,
+      "children": [
+        {
+          "kind": "lathe_profile",
+          "segments": 48,
+          "points_mm": [
+            [7.6, 38.0],
+            [8.0, 38.6],
+            [8.0, 41.2],
+            [7.75, 41.6],
+            [8.0, 42.0],
+            [8.0, 66.0],
+            [7.75, 66.4],
+            [8.0, 66.8],
+            [8.0, 67.5],
+            [7.7, 68.0]
+          ],
+          "material": {
+            "name": "housing_satin_stainless",
+            "baseColorFactor": [0.80, 0.83, 0.87, 1.0],
+            "metallicFactor": 0.82,
+            "roughnessFactor": 0.30
+          }
+        },
+        {
+          "kind": "lathe_profile",
+          "segments": 48,
+          "cap_ends": false,
+          "points_mm": [
+            [8.08, 44.5],
+            [8.08, 61.5]
+          ],
+          "material": {
+            "name": "housing_nameplate_band",
+            "metallicFactor": 0.15,
+            "roughnessFactor": 0.42
+          },
+          "procedural_label": {
+            "title": "TZ THT-02  V1.1",
+            "subtitle": "RS-485 MODBUS RTU",
+            "detail": "TEMP & RH PROBE   IP67",
+            "bg_rgba": [232, 236, 240, 255],
+            "fg_rgba": [22, 30, 40, 255],
+            "accent_rgba": [24, 110, 196, 255],
+            "mapping": "cylindrical"
+          }
+        }
+      ]
     },
     {
       "part_id": "dip.bank",
       "node_id": "DIPBank",
       "legacy_zone_id": "upper_barrel_dip",
       "aliases": ["DIP bank", "DIP switch", "switch block", "SW1", "address switch"],
-      "kind": "box",
-      "size_mm": [10.0, 5.2, 18.0],
-      "center_mm": [0.0, 0.0, 53.0],
-      "color_rgba": [196, 48, 48, 255],
+      "kind": "composite_part",
       "citation_id": "tht02_manual_v1_1:p5:section1",
-      "page": 5
+      "page": 5,
+      "children": [
+        {
+          "kind": "rounded_box",
+          "size_mm": [11.6, 1.6, 20.0],
+          "center_mm": [0.0, -1.6, 53.0],
+          "bevel_mm": 0.35,
+          "material": {
+            "name": "internal_fr4_pcb",
+            "baseColorFactor": [0.09, 0.40, 0.21, 1.0],
+            "metallicFactor": 0.08,
+            "roughnessFactor": 0.44
+          }
+        },
+        {
+          "kind": "rounded_box",
+          "size_mm": [9.2, 3.8, 17.6],
+          "center_mm": [0.0, 1.0, 53.0],
+          "bevel_mm": 0.35,
+          "material": {
+            "name": "dip_housing_red_epoxy",
+            "baseColorFactor": [0.78, 0.15, 0.15, 1.0],
+            "metallicFactor": 0.02,
+            "roughnessFactor": 0.36
+          }
+        },
+        {
+          "kind": "rounded_box",
+          "size_mm": [4.6, 0.8, 15.8],
+          "center_mm": [0.0, 2.75, 53.0],
+          "bevel_mm": 0.12,
+          "material": {
+            "name": "dip_recess_charcoal",
+            "baseColorFactor": [0.14, 0.16, 0.19, 1.0],
+            "metallicFactor": 0.05,
+            "roughnessFactor": 0.72
+          }
+        },
+        {
+          "kind": "pattern",
+          "mode": "linear",
+          "count": 8,
+          "centered": true,
+          "step_mm": [0.0, 0.0, 1.85],
+          "item": {
+            "kind": "rounded_box",
+            "size_mm": [2.2, 1.45, 0.92],
+            "center_mm": [-0.55, 3.25, 53.0],
+            "bevel_mm": 0.12,
+            "material": {
+              "name": "dip_actuator_ivory",
+              "baseColorFactor": [0.95, 0.95, 0.93, 1.0],
+              "metallicFactor": 0.0,
+              "roughnessFactor": 0.42
+            }
+          }
+        }
+      ]
     },
     {
       "part_id": "housing.mounting_flange",
       "node_id": "MountingFlange",
       "legacy_zone_id": "mounting_flange",
       "aliases": ["mounting flange", "bracket", "mounting ears", "mounting_flange"],
-      "kind": "box",
-      "size_mm": [42.0, 18.0, 20.0],
-      "center_mm": [0.0, 0.0, 78.0],
-      "color_rgba": [154, 166, 178, 255],
+      "kind": "composite_part",
       "citation_id": "tht02_manual_v1_1:p9:section1",
-      "page": 9
+      "page": 9,
+      "children": [
+        {
+          "kind": "extruded_polygon",
+          "z_start_mm": 73.5,
+          "z_end_mm": 82.5,
+          "outer_mm": [
+            [-14.0, -9.0],
+            [14.0, -9.0],
+            [18.2, -7.8],
+            [20.4, -4.6],
+            [21.0, 0.0],
+            [20.4, 4.6],
+            [18.2, 7.8],
+            [14.0, 9.0],
+            [-14.0, 9.0],
+            [-18.2, 7.8],
+            [-20.4, 4.6],
+            [-21.0, 0.0],
+            [-20.4, -4.6],
+            [-18.2, -7.8]
+          ],
+          "circular_holes_mm": [
+            {"x": -15.5, "y": 0.0, "diameter_mm": 4.4, "segments": 24},
+            {"x": 15.5, "y": 0.0, "diameter_mm": 4.4, "segments": 24}
+          ],
+          "material": {
+            "name": "flange_anodized_aluminum",
+            "baseColorFactor": [0.64, 0.69, 0.74, 1.0],
+            "metallicFactor": 0.74,
+            "roughnessFactor": 0.36
+          }
+        },
+        {
+          "kind": "lathe_profile",
+          "segments": 48,
+          "points_mm": [
+            [8.0, 68.0],
+            [8.8, 68.8],
+            [9.4, 71.0],
+            [10.2, 73.5],
+            [10.2, 82.5],
+            [9.4, 85.0],
+            [8.8, 87.2],
+            [8.0, 88.0]
+          ],
+          "material": {
+            "name": "flange_hub_machined",
+            "baseColorFactor": [0.68, 0.73, 0.78, 1.0],
+            "metallicFactor": 0.78,
+            "roughnessFactor": 0.34
+          }
+        }
+      ]
     },
     {
       "part_id": "housing.lower_barrel",
       "node_id": "LowerBarrel",
       "legacy_zone_id": "lower_barrel_rs485",
       "aliases": ["lower barrel", "RS-485 transceiver", "lower_barrel_rs485"],
-      "kind": "cylinder",
-      "z_start_mm": 88.0,
-      "z_end_mm": 122.0,
-      "diameter_mm": 16.0,
-      "color_rgba": [194, 204, 214, 255],
+      "kind": "lathe_profile",
+      "segments": 48,
+      "points_mm": [
+        [7.7, 88.0],
+        [8.0, 88.6],
+        [8.0, 113.5],
+        [7.65, 114.0],
+        [8.0, 114.6],
+        [8.0, 116.5],
+        [7.65, 117.0],
+        [8.0, 117.6],
+        [8.0, 120.4],
+        [7.6, 121.0]
+      ],
+      "material": {
+        "name": "lower_barrel_stainless",
+        "baseColorFactor": [0.76, 0.80, 0.84, 1.0],
+        "metallicFactor": 0.82,
+        "roughnessFactor": 0.30
+      },
       "citation_id": "tht02_manual_v1_1:p4:section1",
       "page": 4
     },
@@ -102,13 +337,169 @@
       "node_id": "WaterproofGland",
       "legacy_zone_id": "waterproof_gland_leads",
       "aliases": ["waterproof gland", "terminal nut", "cable gland", "waterproof_gland_leads"],
-      "kind": "cylinder",
-      "z_start_mm": 122.0,
-      "z_end_mm": 140.0,
-      "diameter_mm": 15.5,
-      "color_rgba": [123, 135, 148, 255],
+      "kind": "composite_part",
       "citation_id": "tht02_manual_v1_1:p5:section1",
-      "page": 5
+      "page": 5,
+      "children": [
+        {
+          "kind": "hex_prism",
+          "across_flats_mm": 15.6,
+          "z_start_mm": 121.0,
+          "z_end_mm": 127.8,
+          "sides": 6,
+          "chamfer_mm": 0.9,
+          "material": {
+            "name": "gland_hex_nut_steel",
+            "baseColorFactor": [0.46, 0.50, 0.56, 1.0],
+            "metallicFactor": 0.84,
+            "roughnessFactor": 0.32
+          }
+        },
+        {
+          "kind": "lathe_profile",
+          "segments": 40,
+          "points_mm": [
+            [6.4, 127.8],
+            [6.4, 129.0],
+            [5.7, 129.5],
+            [6.1, 130.2],
+            [5.3, 130.9],
+            [5.6, 131.6],
+            [4.7, 132.4],
+            [4.4, 133.2]
+          ],
+          "material": {
+            "name": "gland_epdm_boot",
+            "baseColorFactor": [0.13, 0.15, 0.18, 1.0],
+            "metallicFactor": 0.0,
+            "roughnessFactor": 0.86
+          }
+        },
+        {
+          "kind": "tube_path",
+          "diameter_mm": 1.5,
+          "sections": 14,
+          "points_mm": [
+            [-1.3, 1.3, 132.6],
+            [-2.2, 2.0, 135.4],
+            [-3.4, 2.6, 138.6]
+          ],
+          "material": {
+            "name": "wire_rs485_vcc_red",
+            "baseColorFactor": [0.84, 0.14, 0.14, 1.0],
+            "metallicFactor": 0.0,
+            "roughnessFactor": 0.52
+          }
+        },
+        {
+          "kind": "tube_path",
+          "diameter_mm": 1.0,
+          "sections": 12,
+          "points_mm": [
+            [-3.4, 2.6, 138.5],
+            [-3.8, 2.8, 140.0]
+          ],
+          "material": {
+            "name": "wire_tip_tinned",
+            "baseColorFactor": [0.88, 0.90, 0.93, 1.0],
+            "metallicFactor": 0.94,
+            "roughnessFactor": 0.18
+          }
+        },
+        {
+          "kind": "tube_path",
+          "diameter_mm": 1.5,
+          "sections": 14,
+          "points_mm": [
+            [1.3, 1.3, 132.6],
+            [2.2, 2.0, 135.4],
+            [3.4, 2.6, 138.6]
+          ],
+          "material": {
+            "name": "wire_rs485_gnd_black",
+            "baseColorFactor": [0.12, 0.13, 0.15, 1.0],
+            "metallicFactor": 0.0,
+            "roughnessFactor": 0.62
+          }
+        },
+        {
+          "kind": "tube_path",
+          "diameter_mm": 1.0,
+          "sections": 12,
+          "points_mm": [
+            [3.4, 2.6, 138.5],
+            [3.8, 2.8, 140.0]
+          ],
+          "material": {
+            "name": "wire_tip_tinned",
+            "baseColorFactor": [0.88, 0.90, 0.93, 1.0],
+            "metallicFactor": 0.94,
+            "roughnessFactor": 0.18
+          }
+        },
+        {
+          "kind": "tube_path",
+          "diameter_mm": 1.5,
+          "sections": 14,
+          "points_mm": [
+            [-1.3, -1.3, 132.6],
+            [-2.2, -2.0, 135.4],
+            [-3.4, -2.6, 138.6]
+          ],
+          "material": {
+            "name": "wire_rs485_a_yellow",
+            "baseColorFactor": [0.92, 0.76, 0.12, 1.0],
+            "metallicFactor": 0.0,
+            "roughnessFactor": 0.48
+          }
+        },
+        {
+          "kind": "tube_path",
+          "diameter_mm": 1.0,
+          "sections": 12,
+          "points_mm": [
+            [-3.4, -2.6, 138.5],
+            [-3.8, -2.8, 140.0]
+          ],
+          "material": {
+            "name": "wire_tip_tinned",
+            "baseColorFactor": [0.88, 0.90, 0.93, 1.0],
+            "metallicFactor": 0.94,
+            "roughnessFactor": 0.18
+          }
+        },
+        {
+          "kind": "tube_path",
+          "diameter_mm": 1.5,
+          "sections": 14,
+          "points_mm": [
+            [1.3, -1.3, 132.6],
+            [2.2, -2.0, 135.4],
+            [3.4, -2.6, 138.6]
+          ],
+          "material": {
+            "name": "wire_rs485_b_green",
+            "baseColorFactor": [0.14, 0.66, 0.28, 1.0],
+            "metallicFactor": 0.0,
+            "roughnessFactor": 0.50
+          }
+        },
+        {
+          "kind": "tube_path",
+          "diameter_mm": 1.0,
+          "sections": 12,
+          "points_mm": [
+            [3.4, -2.6, 138.5],
+            [3.8, -2.8, 140.0]
+          ],
+          "material": {
+            "name": "wire_tip_tinned",
+            "baseColorFactor": [0.88, 0.90, 0.93, 1.0],
+            "metallicFactor": 0.94,
+            "roughnessFactor": 0.18
+          }
+        }
+      ]
     }
   ],
   "views": [

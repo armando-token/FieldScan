@@ -109,14 +109,14 @@ def filter_artifacts_by_permission(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """
     Enforce source distribution rights (CL-SRC-06):
-    - redistributable: original PDF + derived index/markdown allowed
-    - derived_only: exclude raw `manual_pdf`, publish derived `document_index` / `manual_markdown`
-    - reference_only / restricted: emit no raw PDF and flag SOURCE_RIGHTS_RESTRICTED
+    - redistributable: original PDF + rasterized page PNGs + derived index/markdown allowed
+    - derived_only: exclude raw `manual_pdf` and `manual_page_image`, publish derived `document_index` / `manual_markdown`
+    - reference_only / restricted: emit no raw PDF/images and flag SOURCE_RIGHTS_RESTRICTED
     """
     if permission_policy == "redistributable":
         return list(artifacts), []
     if permission_policy == "derived_only":
-        filtered = [a for a in artifacts if a.get("role") != "manual_pdf"]
+        filtered = [a for a in artifacts if a.get("role") not in {"manual_pdf", "manual_page_image"}]
         return filtered, ["SOURCE_RIGHTS_DERIVED_ONLY"]
     filtered = [a for a in artifacts if a.get("role") == "document_index"]
     return filtered, ["SOURCE_RIGHTS_RESTRICTED"]

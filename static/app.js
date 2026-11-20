@@ -122,6 +122,15 @@ function notifyNativeBridge(event, payload = {}) {
   return false;
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 /* ==========================================================================
    APPLICATION STATE
    ========================================================================== */
@@ -5697,7 +5706,9 @@ function handleCopilotResponse(res, turnMeta = null) {
     if (dom.nextStepTitle) dom.nextStepTitle.textContent = 'AI RESPONSE';
     state.aiStripOverrideUntil = performance.now() + 9000;
   }
-  appendSessionActivityLog(res.model || 'AI Engineer', answerText.slice(0, 140));
+  try {
+    appendSessionActivityLog(res.model || 'AI Engineer', answerText.slice(0, 140));
+  } catch (_logErr) {}
 
   const causes = res.probable_causes || res.causes || res.recommendations || [];
   const citations = normalizeCitations(res);
@@ -8474,6 +8485,9 @@ async function resetSensorWorkspaceCleanSlate({ clearInstalledPackages = true, s
       body: JSON.stringify({ clear_installed_packages: Boolean(clearInstalledPackages) }),
     });
     state.activeSessionId = null;
+    if (dom.catalogModal) dom.catalogModal.hidden = true;
+    dom.toolsPage?.classList.remove('open');
+    dom.chatPage?.classList.remove('open');
     if (res?.catalog_descriptor) {
       applyCatalogDescriptor(res.catalog_descriptor, res.scene_generation);
     }

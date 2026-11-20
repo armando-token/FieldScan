@@ -231,7 +231,7 @@ def audit_frontend_ptt_bargein_twin_and_manual(errors: list[str]) -> None:
         _fail(errors, "[3D-GLB] `applyTwinActionV1` or `loadCatalogSceneFromDescriptor` missing in static/app.js")
 
     # 7. Unified Copilot Action Executor & Action Registry Handler Coverage (`Section 1 & 2`)
-    for req_fn in ("function buildTurnContext(", "function executeCopilotActionPlan(", "function postCopilotActionAck(", "COPILOT_ACTION_HANDLERS"):
+    for req_fn in ("function escapeHtml(", "function buildTurnContext(", "function executeCopilotActionPlan(", "function postCopilotActionAck(", "COPILOT_ACTION_HANDLERS"):
         if req_fn not in app_js:
             _fail(errors, f"[COPILOT-UNIFIED] `{req_fn}` missing from static/app.js")
     if "/api/copilot/action_ack" not in app_js:

@@ -83,12 +83,12 @@
       "size_bytes": 3189
     },
     "static/app.js": {
-      "sha256": "7bef69a45db4d3492e67ad220a476b3a892ede284e101f290fe422e7c567ce16",
-      "size_bytes": 355981
+      "sha256": "377eb94d060dc233b6e935ae73482f6010ce9eca953fe584149956a3293586a1",
+      "size_bytes": 356362
     },
     "static/index.html": {
-      "sha256": "c349ec157682ea9b31b37332791dfedba424253505db9fa14cccf8dbee41452f",
-      "size_bytes": 43008
+      "sha256": "95640875eb21f23d3928860cafb5c3c0f3d965afaef83a8657f502af8b45f008",
+      "size_bytes": 43009
     },
     "static/styles.css": {
       "sha256": "a43d037dec91efc4b9783c0462260e45a94f51d82e668424ca75c915fdd864b7",
@@ -132,5 +132,5 @@
     }
   },
   "schema_version": 1,
-  "tree_sha256": "ef9ee4345ed85c2b98749adc93621e65f90882eb1421a0aac059d6a53e57df22"
+  "tree_sha256": "fb412083b39c176d4a6c3ef83e1d656af713e64d6048fdcceedbac61a8ca791c"
 }

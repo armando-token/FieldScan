@@ -441,9 +441,20 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
         if url.isFileURL {
             let readAccessDir = url.deletingLastPathComponent().deletingLastPathComponent()
             webView.loadFileURL(url, allowingReadAccessTo: readAccessDir)
-        } else {
-            let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10.0)
-            webView.load(request)
+            return
+        }
+        // Bust any cached WKWebView disk/memory HTML/CSS/JS across Xcode installs so latest HMI always renders.
+        let cacheTypes: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        var items = comps?.queryItems ?? []
+        items.append(URLQueryItem(name: "boot", value: "\(Int(Date().timeIntervalSince1970))"))
+        comps?.queryItems = items
+        let freshURL = comps?.url ?? url
+        let request = URLRequest(url: freshURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 10.0)
+        WKWebsiteDataStore.default().removeData(ofTypes: cacheTypes, modifiedSince: Date.distantPast) { [weak self] in
+            DispatchQueue.main.async {
+                self?.webView?.load(request)
+            }
         }
     }
 

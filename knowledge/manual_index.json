@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "profile_id": "tzone_tht02",
+  "manual_id": "tht02_manual_v1_1",
+  "manual_title": "TZ THT-02 Temperature and humidity Sensor User's Manual V1.1",
+  "visible_revision": "V1.1",
+  "header_date_raw": "Mach 18th, 2021",
+  "pdf_url": "/assets/THT02_Users_Manual_v1.1.pdf",
+  "pdf_sha256": "fe5be7370ac42ad80d0e43c32c2b61d5f971a33ea9175c8405398d0fde4932cb",
+  "page_count": 9,
+  "pages": [
+    {
+      "page": 1,
+      "title": "Cover & Sensor Physical Anatomy Callouts",
+      "image_url": "/assets/manual_pages/page_1.png",
+      "image_sha256": "180ab16d6fd79d2199779f65616b3efd7f3c15e184e31ec656b257bee0fdb47b",
+      "pdf_embedded_text": "",
+      "highlights": [
+        "TZ THT-02 User's Manual V1.1",
+        "Stainless steel strainer, Quality probe, Wiring, Mounting holes, Standard 1m lead, Waterproof terminal"
+      ],
+      "sections": [
+        {
+          "section_id": "1.1",
+          "heading": "Physical Callouts & Probe Anatomy",
+          "verified_excerpt": "TZ THT-02 Temperature and humidity Sensor User's Manual V1.1: Stainless steel strainer, Quality probe, Wiring, Mounting holes, Standard 1m lead, Waterproof terminal."
+        }
+      ]
+    },
+    {
+      "page": 2,
+      "title": "Overview, Features & Application Areas",
+      "image_url": "/assets/manual_pages/page_2.png",
+      "image_sha256": "4909c1ef1e9a76db921d2c0fc02a41b019136bc67d7e302a965481793e2a5a6d",
+      "pdf_embedded_text": "",
+      "highlights": [
+        "RS-485 Modbus-RTU interface",
+        "SHT30 CMOSens capacitive humidity & energy-gap temperature chip",
+        "On-board DIP switch address setting; HVAC, cleanroom, pharma & warehouse applications"
+      ],
+      "sections": [
+        {
+          "section_id": "2.1",
+          "heading": "Product Overview & Features",
+          "verified_excerpt": "RS-485 bus Modbus-RTU protocol transmitter integrating SHT30 temperature and SHT3X capacitive humidity sensing with on-board 8-bit DIP address switch."
+        }
+      ]
+    },
+    {
+      "page": 3,
+      "title": "Technical Data: Power, RS-485, Temperature & Humidity",
+      "image_url": "/assets/manual_pages/page_3.png",
+      "image_sha256": "8cfed59b33666ba82cc71db602589a5dff46a370e807aa6455a2a6094e4388a2",
+      "pdf_embedded_text": "",
+      "highlights": [
+        "Power: DC 5~24V, 5mA",
+        "RS-485: 4800/9600/19200 bps, 1200m max distance, 32 theoretical nodes",
+        "Temp (SHT30): -40~125\u00b0C, res 0.1\u00b0C, \u00b10.3\u00b0C (0~60\u00b0C)",
+        "Humidity (SHT3X): 5~95%RH, res 0.1%RH, \u00b12%RH, ~8s response, <\u00b10.25%RH/yr drift"
+      ],
+      "sections": [
+        {
+          "section_id": "3.1",
+          "heading": "Electrical & Sensing Specifications",
+          "verified_excerpt": "Supply DC 5~24V (5 mA); RS-485 4800/9600/19200 bps up to 1200 m; Temperature SHT30 -40~125 degC (res 0.1 degC, +/-0.3 degC at 0~60 degC); Humidity SHT3X 5~95 %RH (res 0.1 %RH, +/-2 %RH)."
+        }
+      ]
+    },
+    {
+      "page": 4,
+      "title": "Environmental Conditions, 4-Lead Wiring & PC Bus Schematic",
+      "image_url": "/assets/manual_pages/page_4.png",
+      "image_sha256": "a1d4eed027c8ea9a03caeac081bbd584613a790f6173ff8b30e5dd013c090923",
+      "pdf_embedded_text": "",
+      "highlights": [
+        "Working/Storage environment: -40~85\u00b0C / 5~95%RH (Non-condensing)",
+        "Leads: Green = B-, Yellow = A+, Black = GND, Red = V+",
+        "Common-mode voltage warning: tie sensor GND and cable shield to RS-232/RS-485 transverter ground"
+      ],
+      "sections": [
+        {
+          "section_id": "4.1",
+          "heading": "4-Lead Wiring & RS-485 Common-Mode Grounding",
+          "verified_excerpt": "Red = Power V+ (DC 5~24V), Black = Public GND, Yellow = RS-485 A+, Green = RS-485 B-. Bond sensor Black GND and cable shield to RS-232/RS-485 transverter ground."
+        }
+      ]
+    },
+    {
+      "page": 5,
+      "title": "8-Bit DIP Switch Address Code, 2-Step Opening & Data Frame Format",
+      "image_url": "/assets/manual_pages/page_5.png",
+      "image_sha256": "9991ec38acedf112dd1a20b6185da61d772c5d273348686aee67f051c1c9bea6",
+      "pdf_embedded_text": "",
+      "highlights": [
+        "DIP weights 1..8 = [128, 64, 32, 16, 8, 4, 2, 1]; example 1,3,4 ON = 176",
+        "First Step: unscrew waterproof terminal nut; Second Step: unscrew barrel to access DIP switch",
+        "Default serial frame: 1 start bit, 8 data bits, 0 parity, 1 stop bit (8N1)"
+      ],
+      "sections": [
+        {
+          "section_id": "5.1",
+          "heading": "8-Bit DIP Switch Address & 2-Step Housing Opening",
+          "verified_excerpt": "First Step: unscrew rear waterproof terminal nut. Second Step: unscrew middle barrel seam to access SW1 8-position DIP switch (weights 128, 64, 32, 16, 8, 4, 2, 1; e.g. Pins 1,3,4 ON = 176; Pin 8 ON = 1). Serial frame 8N1."
+        }
+      ]
+    },
+    {
+      "page": 6,
+      "title": "RTU Frame Timing & Holding Register Map",
+      "image_url": "/assets/manual_pages/page_6.png",
+      "image_sha256": "b21bfc66bc7f2d206c0ab81e4ffb40d0d898b26b63ddb6911bdad72432ab00c7",
+      "pdf_embedded_text": "",
+      "highlights": [
+        ">=3.5 char frame boundary; >1.5 char inter-byte gap causes silent drop",
+        "0x0000 Temp (0.1\u00b0C) & 0x0001 RH (0.1%RH) \u2014 7FFF H means sensor is abnormal",
+        "0x0004 DIP Address (R), 0x0005 Baud Rate 4800/9600/19200 (R/W), 0x0006 HW ver, 0x0007 SW ver"
+      ],
+      "sections": [
+        {
+          "section_id": "5.2",
+          "heading": "RTU Timing & Holding Register Map (0x0000..0x0007)",
+          "verified_excerpt": "0x0000 Temperature (0.1 degC signed, 7FFFH = abnormal), 0x0001 Relative Humidity (0.1 %RH, 7FFFH = abnormal), 0x0004 Address Code (R), 0x0005 Baud Rate (R/W), 0x0006 HW Version, 0x0007 SW Version."
+        }
+      ]
+    },
+    {
+      "page": 7,
+      "title": "Modbus Poll Example & Function Code 03 Read Request/Response",
+      "image_url": "/assets/manual_pages/page_7.png",
+      "image_sha256": "e0dba69f82c1ee8e20823c3efa46a0869c66f154110f510dd6130257afe1da05",
+      "pdf_embedded_text": "",
+      "highlights": [
+        "Function 0x03 host request: 01 03 00 00 00 08 44 0C",
+        "21-byte response frame layout for registers 0x0000..0x0007"
+      ],
+      "sections": [
+        {
+          "section_id": "5.3",
+          "heading": "Function Code 0x03 Poll Request & 21-Byte Response",
+          "verified_excerpt": "Master read request for Slave 1 registers 0x0000..0x0007: 01 03 00 00 00 08 44 0C. Sensor replies with 21-byte RTU frame including 16 data bytes and trailing little-endian CRC-16."
+        }
+      ]
+    },
+    {
+      "page": 8,
+      "title": "Data Decoding Example, Function Code 06 Baud Write & Abnormal Response",
+      "image_url": "/assets/manual_pages/page_8.png",
+      "image_sha256": "d8ae4049819d2fd3de109256f047b4226df75745dc23164501b224a020a390f1",
+      "pdf_embedded_text": "",
+      "highlights": [
+        "00FAH = 25.0\u00b0C, 0258H = 60.0%RH, 2580H = 9600 bps, 000AH = V1.0",
+        "Function 0x06 set 9600 bps: 01 06 00 05 25 80 82 FB",
+        "Abnormal response sets function code MSB to 1 (0x83 / 0x86)"
+      ],
+      "sections": [
+        {
+          "section_id": "5.4",
+          "heading": "Register Decoding Example, Function 0x06 Baud Write & Exceptions",
+          "verified_excerpt": "Example: 00FAH = 25.0 degC, 0258H = 60.0 %RH, 2580H = 9600 bps, 000AH = V1.0. Function 0x06 baud write applies only to register 0x0005; abnormal replies set function MSB to 1 (0x83/0x86)."
+        }
+      ]
+    },
+    {
+      "page": 9,
+      "title": "Exception Error Codes, CRC-16 Algorithm & Mechanical Dimensions",
+      "image_url": "/assets/manual_pages/page_9.png",
+      "image_sha256": "1f0a516618515d38fc2bd81ea4020483e29dd93b561a04c88c0f7c8a1b6a982f",
+      "pdf_embedded_text": "",
+      "highlights": [
+        "Error codes: 01 Illegal function, 02 Illegal data address, 03 Illegal data value",
+        "CRC-16 init 0xFFFF, right-shift XOR polynomial 0xA001",
+        "Physical envelope: 140 MM length x 16 MM diameter (16.0 mm OD)"
+      ],
+      "sections": [
+        {
+          "section_id": "6.1",
+          "heading": "Exception Codes, CRC-16 (0xA001) & 140x16 mm Dimensions",
+          "verified_excerpt": "Exception codes: 01 Illegal Function, 02 Illegal Data Address, 03 Illegal Data Value. CRC-16 init 0xFFFF, right-shift XOR 0xA001. Envelope: 140.0 mm total length x 16.0 mm outer diameter."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Unlocks the 12 GB LPDDR5X Unified Memory ceiling on iPad Air M4 so LFM3-VL-2B (1.45 GB),
+         LFM3-Audio-2B (1.35 GB), Piper TTS (80 MB), OpenCV 30 FPS, and Three.js 60 FPS reside in RAM
+         simultaneously without iPadOS Jetsam termination. -->
+    <key>com.apple.developer.kernel.increased-memory-limit</key>
+    <true/>
+</dict>
+</plist>

@@ -1,5 +1,43 @@
-node_modules/
+# Python virtual environments & caches
+.venv/
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Local downloaded model weights / llama.cpp binaries (root vendor only; keep static/vendor/ Three.js!)
+/vendor/
+!static/vendor/
+!static/vendor/**
+
+# Runtime logs & generated CAD/Outbox artifacts
+logs/
+exports/*
+!exports/.gitkeep
+outbox/*
+!outbox/.gitkeep
+
+# macOS / Editor / Xcode build & user state
 .DS_Store
-demo.html
+.idea/
+.vscode/
+ios/build/
+ios/FieldScanM4/BundleResources/
+ios/FieldScanM4/Frameworks/*.dylib
+**/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Runtime SQLite session databases, private TLS keys & test artifacts
+data/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.key
+*.crt
+*.pem
+
+# Clean source & git history delivery folder (untracked export)
+/fieldscan_source_delivery/

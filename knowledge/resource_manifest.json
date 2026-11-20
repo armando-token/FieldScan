@@ -1,0 +1,112 @@
+{
+  "contract_version": "2.1.0",
+  "file_count": 26,
+  "files": {
+    "assets/THT02_Users_Manual_v1.1.pdf": {
+      "sha256": "fe5be7370ac42ad80d0e43c32c2b61d5f971a33ea9175c8405398d0fde4932cb",
+      "size_bytes": 1295659
+    },
+    "assets/manual_pages/page_1.png": {
+      "sha256": "180ab16d6fd79d2199779f65616b3efd7f3c15e184e31ec656b257bee0fdb47b",
+      "size_bytes": 179592
+    },
+    "assets/manual_pages/page_2.png": {
+      "sha256": "4909c1ef1e9a76db921d2c0fc02a41b019136bc67d7e302a965481793e2a5a6d",
+      "size_bytes": 167237
+    },
+    "assets/manual_pages/page_3.png": {
+      "sha256": "8cfed59b33666ba82cc71db602589a5dff46a370e807aa6455a2a6094e4388a2",
+      "size_bytes": 112506
+    },
+    "assets/manual_pages/page_4.png": {
+      "sha256": "a1d4eed027c8ea9a03caeac081bbd584613a790f6173ff8b30e5dd013c090923",
+      "size_bytes": 145271
+    },
+    "assets/manual_pages/page_5.png": {
+      "sha256": "9991ec38acedf112dd1a20b6185da61d772c5d273348686aee67f051c1c9bea6",
+      "size_bytes": 218489
+    },
+    "assets/manual_pages/page_6.png": {
+      "sha256": "b21bfc66bc7f2d206c0ab81e4ffb40d0d898b26b63ddb6911bdad72432ab00c7",
+      "size_bytes": 143556
+    },
+    "assets/manual_pages/page_7.png": {
+      "sha256": "e0dba69f82c1ee8e20823c3efa46a0869c66f154110f510dd6130257afe1da05",
+      "size_bytes": 318308
+    },
+    "assets/manual_pages/page_8.png": {
+      "sha256": "d8ae4049819d2fd3de109256f047b4226df75745dc23164501b224a020a390f1",
+      "size_bytes": 179535
+    },
+    "assets/manual_pages/page_9.png": {
+      "sha256": "1f0a516618515d38fc2bd81ea4020483e29dd93b561a04c88c0f7c8a1b6a982f",
+      "size_bytes": 212296
+    },
+    "knowledge/THT02_datasheet.md": {
+      "sha256": "0bf298080498d4138f9cfca5092768d2775a1344b2e3e5ede9b10036f7103b12",
+      "size_bytes": 15760
+    },
+    "knowledge/THT02_spec.json": {
+      "sha256": "d1b34e86bc9e2b0887f5d67ff61869be83264513fb6a3782c7f39b841a7fc863",
+      "size_bytes": 22304
+    },
+    "knowledge/fixtures/golden_contracts_v2_1.json": {
+      "sha256": "0b9ecafa37e4575b9e8300a0f414c70dc1b84fb0a98e20427a2c3215ec7c09d5",
+      "size_bytes": 6829
+    },
+    "knowledge/manual_index.json": {
+      "sha256": "2fd05fbce244f184a402f40f3e3b0432d778bd67b82c060242c56f400043129f",
+      "size_bytes": 8517
+    },
+    "knowledge/profiles/tzone_tht02.json": {
+      "sha256": "f84367cb1d062ca53f03b323bad63b9795bb2e4e500c0de23eadfe3b845cda90",
+      "size_bytes": 7516
+    },
+    "knowledge/profiles/tzone_tht03r.json": {
+      "sha256": "c99ec5a1857c96494e08fd1f8afde672ae51141c5d3c2b484ec7ff52f063dd55",
+      "size_bytes": 3189
+    },
+    "static/app.js": {
+      "sha256": "cbcb203d37f7be00e3620e2fc3b56f72aa14f7b6c7326cd71ad550ac01f4a61f",
+      "size_bytes": 209802
+    },
+    "static/index.html": {
+      "sha256": "2e42258c89788e38c23eec4127bbeb5ea28a026317d48b100ec24eb210bea14f",
+      "size_bytes": 39911
+    },
+    "static/styles.css": {
+      "sha256": "1c907cafbab3d67e579355d9f0d0db280ed507e68f318ce30817557bc845432f",
+      "size_bytes": 62808
+    },
+    "static/vendor/OrbitControls.js": {
+      "sha256": "6f3052dd8860a60fe6999260d50558ff54609523724c6e374326228e5590cf55",
+      "size_bytes": 32146
+    },
+    "static/vendor/STLExporter.js": {
+      "sha256": "4d219efc8c5e04d5edd82134ce10d70378bf1c0a98e21b9bc084a2d83d49a395",
+      "size_bytes": 3902
+    },
+    "static/vendor/lucide.min.js": {
+      "sha256": "5f4dd76ebdc867a225c56791e055f6eae335621a4f1c3c8aa1dc95707dc9d5bc",
+      "size_bytes": 486325
+    },
+    "static/vendor/open-props.min.css": {
+      "sha256": "4bc9bec663eb7fef2cb7680d2983e21f0f79778a61a77bee74224030dc981f5c",
+      "size_bytes": 29566
+    },
+    "static/vendor/three.module.js": {
+      "sha256": "08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7",
+      "size_bytes": 691648
+    },
+    "static/vendor/uPlot.iife.min.js": {
+      "sha256": "19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f",
+      "size_bytes": 51081
+    },
+    "static/vendor/uPlot.min.css": {
+      "sha256": "df630c6a8d6f8eeaff264b50f73ce5b114f646ffd9a0bb74f049b0a00135fa04",
+      "size_bytes": 1857
+    }
+  },
+  "schema_version": 1,
+  "tree_sha256": "0bbdae70f4db781b692e45ed4a1dde36b878627b64b22b37b3000afe6bb5507b"
+}

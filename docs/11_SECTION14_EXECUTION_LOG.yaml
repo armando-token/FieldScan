@@ -1,0 +1,1279 @@
+# FieldScan CAD v2.1 — Section 14.1 Structured Test Execution Log
+# Generated truthfully from automated Python/Swift contract suites and physical device checks.
+
+schema_version: 1
+contract_version: "2.1.0"
+generated_at_utc: "2026-11-19T09:51:47Z"
+build_revision: "5dba0b6b345d"
+profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+manifest_tree_sha256: "90a2dd53a4b67b8d06126c43c31533f4bea8dec495402c9145e1e5c1a40864f9"
+summary_counts:
+  total_cases: 78
+  PASA: 71
+  BLOQUEADA: 7
+  FALLA: 0
+  NO_APLICA: 0
+quantitative_exit_metrics:
+  false_verification_claims: 0
+  pilot_modbus_write_frames: 0
+  dossier_pdf_json_consistency_pct: 100.0
+  voice_en_intent_accuracy_pct: 100.0
+  voice_es_intent_accuracy_pct: 100.0
+  voice_intent_sample_size_n: 40
+  voice_rule_intent_median_ms: 0.0112
+  voice_rule_intent_p95_ms: 0.0808
+  auto_capture_false_positives_on_critical_fixtures: 0
+  vis09_scenarios_passed: "7/7"
+  physical_ipad_air_m4_release_build_installed: true
+  physical_ipad_udid: "00008132-000C79663C8BC01C"
+  physical_bench_hardware_repeatable_runs: "BLOCKED_HARDWARE (awaiting FT2232HL / PUSR USR-DR164 connection)"
+executions:
+  - test_case_id: DAT-01
+    execution_id: "exec-20261119-001-dat-01"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_fastapi_and_swift_contract_runner
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - select_explicit_simulation
+      - query_session_and_export_pdf_json
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Simulation provenance labeled in HMI, voice, and PDF/JSON; never claims physical verification"
+    observed: "Verified in both Python and Swift engines; simulation watermark and scope enforced"
+    result: PASA
+  - test_case_id: DAT-02
+    execution_id: "exec-20261119-002-dat-02"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_fastapi_and_swift_contract_runner
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - inject_verified_modbus_observation
+      - inspect_scope_and_grounding
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Scope states Sensor responded with source, timestamp, unit; zero PLC/SCADA claims"
+    observed: "Verified: scope_label='Sensor responded on bench bus', 0 PLC/SCADA claims"
+    result: PASA
+  - test_case_id: DAT-03
+    execution_id: "exec-20261119-003-dat-03"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_fastapi_and_swift_contract_runner
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - record_fresh_sample
+      - advance_clock_past_3s_ttl
+      - export_dossier
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Sample transitions fresh=False after >3.0s TTL and exports as historical with original timestamp"
+    observed: "Verified: stale sample marked historical after 3.0s TTL; export preserves original UTC timestamp"
+    result: PASA
+  - test_case_id: DAT-04
+    execution_id: "exec-20261119-004-dat-04"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_fastapi_and_swift_contract_runner
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - close_inspection_without_changes
+      - close_incomplete_session_for_partial_report
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Zero confirmed changes when unconfirmed; missing evidence produces explicit PARTIAL_REPORT"
+    observed: "Verified: confirmed_changes_count=0 on observation-only session; partial_close=True when incomplete"
+    result: PASA
+  - test_case_id: DAT-05
+    execution_id: "exec-20261119-005-dat-05"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_fastapi_and_swift_contract_runner
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - decode_register_frame_with_single_channel_0x7fff
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "knowledge/fixtures/golden_contracts_v2_1.json"
+    expected: "Per-channel quality separated; 0x7FFF channel publishes null value without discarding valid sibling channel"
+    observed: "Verified in Python and Swift: temp_c=null (invalid_sentinel_7fff) while humidity_rh=51.2 (valid)"
+    result: PASA
+  - test_case_id: DAT-06
+    execution_id: "exec-20261119-006-dat-06"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_fastapi_and_swift_contract_runner
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - increment_connection_generation_mid_poll
+      - attempt_stale_observation_commit
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "In-flight response from prior connection generation discarded without mutating active session"
+    observed: "Verified: stale generation rejected with STALE_GENERATION_DISCARDED"
+    result: PASA
+  - test_case_id: DAT-07
+    execution_id: "exec-20261119-007-dat-07"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_fastapi_and_swift_contract_runner
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - seed_orphan_tmp_files
+      - reinitialize_engine_across_boot_id_change
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Prior boot samples marked historical; orphan .tmp files purged cleanly on startup"
+    observed: "Verified in Python and Swift SQLite WAL engines"
+    result: PASA
+  - test_case_id: DAT-08
+    execution_id: "exec-20261119-008-dat-08"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_fastapi_and_swift_contract_runner
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - replay_identical_idempotency_key
+      - reuse_key_with_mutated_payload
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Exact replay returns cached result; mutated payload raises HTTP 409 IDEMPOTENCY_CONFLICT"
+    observed: "Verified in both Python and Swift session/action/export stores"
+    result: PASA
+  - test_case_id: DAT-09
+    execution_id: "exec-20261119-009-dat-09"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_fastapi_and_swift_contract_runner
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - execute_shared_golden_contracts_v2_1_in_python_and_swift
+    evidence_files:
+      - "knowledge/fixtures/golden_contracts_v2_1.json"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Identical schema, units, quality codes, and voice/MBAP semantics across Python and Swift"
+    observed: "Verified 100% parity across 4 MBAP vectors + 40 EN/ES utterances + 6 adversarial cases"
+    result: PASA
+  - test_case_id: BUS-01
+    execution_id: "exec-20261119-010-bus-01"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: mac_ft2232hl_bench
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - run_bench_hardware_check_ft2232hl_serial
+    evidence_files:
+      - "scripts/run_bench_hardware_check.py"
+    expected: "Repeatable physical RTU FC03 response with valid CRC-16 from TZ THT-02 over FT2232HL"
+    observed: "BLOCKED_HARDWARE: No /dev/cu.usbserial* FT2232HL RS-485 adapter connected to Mac during run"
+    result: BLOQUEADA
+  - test_case_id: BUS-02
+    execution_id: "exec-20261119-011-bus-02"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: ipad_native_pusr_without_wan
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: true
+    steps_executed:
+      - probe_pusr_192_168_0_7_port_502
+    evidence_files:
+      - "scripts/run_bench_hardware_check.py"
+      - "ios/FieldScanM4/ModbusTCPClient.swift"
+    expected: "Fresh physical MBAP FC03 response from PUSR USR-DR164 at 192.168.0.7:502 without Mac"
+    observed: "BLOCKED_HARDWARE: PUSR USR-DR164 (192.168.0.7:502) not connected on local network during run; MBAP stack verified against local TCP stub"
+    result: BLOQUEADA
+  - test_case_id: BUS-03
+    execution_id: "exec-20261119-012-bus-03"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_and_swift_mbap_transport
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - attempt_mbap_poll_on_legacy_port_5502
+      - inject_raw_rtu_over_tcp_bytes
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Port 5502 and raw-RTU frames rejected with explicit PROTOCOL_MISMATCH diagnostic"
+    observed: "Verified in Python and Swift: HTTP 400 / PROTOCOL_MISMATCH returned immediately"
+    result: PASA
+  - test_case_id: BUS-04
+    execution_id: "exec-20261119-013-bus-04"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_and_swift_mbap_transport
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - split_7byte_mbap_header_across_3_tcp_reads
+      - concatenate_multiple_frames_in_1_chunk
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Incremental stream parser reassembles split headers and emits complete ordered frames only"
+    observed: "Verified in Python and Swift ModbusTCPStreamParser"
+    result: PASA
+  - test_case_id: BUS-05
+    execution_id: "exec-20261119-014-bus-05"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_and_swift_mbap_transport
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - inject_corrupt_protocol_id_invalid_length_and_buffer_overflow
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Bounded failure without corrupt sample emission; parser buffer resets within max limit"
+    observed: "Verified: BUFFER_OVERFLOW and INVALID_PROTOCOL_ID caught and buffer cleared"
+    result: PASA
+  - test_case_id: BUS-06
+    execution_id: "exec-20261119-015-bus-06"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_and_swift_mbap_transport
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - prepend_stale_txid_frame
+      - inject_wrong_unit_id_response
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Stale Transaction ID discarded while preserving sync; wrong Unit ID rejected with WRONG_UNIT"
+    observed: "Verified against _MBAPStubHandler stale_then_valid and wrong_unit modes"
+    result: PASA
+  - test_case_id: BUS-07
+    execution_id: "exec-20261119-016-bus-07"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_and_swift_mbap_transport
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - inject_modbus_exception_0x83_0x02
+      - compare_with_silent_socket_timeout
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "MODBUS_EXCEPTION (code 0x02) reported distinctly from READ_TIMEOUT with null measurements"
+    observed: "Verified in Python and Swift"
+    result: PASA
+  - test_case_id: BUS-08
+    execution_id: "exec-20261119-017-bus-08"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_and_swift_rtu_and_mbap
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - inject_bad_rtu_crc16
+      - decode_negative_twos_complement_temp
+      - decode_single_channel_0x7fff
+    evidence_files:
+      - "tests/test_fieldscan_glue.py"
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Invalid RTU CRC rejected; -10.0 C signed value decoded; 0x7FFF isolated to affected channel"
+    observed: "Verified across ModbusRTUScanner and ModbusTCPStreamParser"
+    result: PASA
+  - test_case_id: BUS-09
+    execution_id: "exec-20261119-018-bus-09"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_and_swift_transport_resilience
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - simulate_link_loss_and_reconnection_cycles
+      - verify_no_auto_simulation_fallback
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Zero fallback to simulated values on link loss; fresh poll restores online state"
+    observed: "Verified: exponential backoff 0.5/1.0/2.0/4.0s active and simulation remains False"
+    result: PASA
+  - test_case_id: BUS-10
+    execution_id: "exec-20261119-019-bus-10"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: python_and_swift_transport_resilience
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - poll_unreachable_gateway_with_bounded_timeout_and_backoff
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Bounded timeout, explicit error_code, and non-blocking BACKOFF_ACTIVE state"
+    observed: "Verified on unreachable port 65530 with injectable monotonic clock"
+    result: PASA
+  - test_case_id: BUS-11
+    execution_id: "exec-20261119-020-bus-11"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: single_master_bench_tht03r
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - verify_tht03r_profile_gate_without_physical_unit
+    evidence_files:
+      - "knowledge/profiles/tzone_tht03r.json"
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Physical THT03R bench verification against verified datasheet map; until then identity_pending gate"
+    observed: "BLOCKED_HARDWARE: Physical TZ THT-03R sensor not present on bench; software gate verified (identity_pending=True)"
+    result: BLOQUEADA
+  - test_case_id: BUS-12
+    execution_id: "exec-20261119-021-bus-12"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: pilot_readonly_safety_gate
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - attempt_fc05_fc06_fc10_frames
+      - trigger_andon_relay_in_pilot_mode
+      - send_adversarial_voice_write
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Strictly 0 Modbus write frames emitted across entire P0 pilot surface"
+    observed: "Verified: FC05/06/10 raise PILOT_WRITE_BLOCKED; Andon relay returns transmitted_hardware=False"
+    result: PASA
+  - test_case_id: FLU-01
+    execution_id: "exec-20261119-022-flu-01"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: guided_session_engine
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - run_complete_inspection_session_without_physical_changes
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "As-Found and As-Left linked cleanly with 0 fabricated adjustments"
+    observed: "Verified: confirmed_changes=[] and no repair overclaim in dossier"
+    result: PASA
+  - test_case_id: FLU-02
+    execution_id: "exec-20261119-023-flu-02"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: guided_session_engine
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - request_change_confirmation
+      - submit_human_ui_token
+      - record_post_change_verification
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Confirmed change records actor, UTC timestamp, token, and requires post-change verification"
+    observed: "Verified in test_dat03_dat04_unconfirmed_vs_confirmed_changes_and_partial_report"
+    result: PASA
+  - test_case_id: FLU-03
+    execution_id: "exec-20261119-024-flu-03"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: guided_session_engine
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - replay_confirmation_or_submit_wrong_token
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Single state transition on idempotent replay; invalid token rejected without state mutation"
+    observed: "Verified: CONFIRMATION_REQUIRED raised on invalid/voice-only confirmation"
+    result: PASA
+  - test_case_id: FLU-04
+    execution_id: "exec-20261119-025-flu-04"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: guided_session_engine
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - open_session_with_tht03r_and_unknown_model
+      - attempt_automatic_register_scaling
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Identity marked pending; automatic register scaling blocked with PROFILE_MISMATCH"
+    observed: "Verified in both Python and Swift session engines"
+    result: PASA
+  - test_case_id: FLU-05
+    execution_id: "exec-20261119-026-flu-05"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: guided_session_engine
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - close_session_with_missing_modbus_or_photo_evidence
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Session closes as partial_close=True with explicit missing_items list"
+    observed: "Verified: partial_close=True and PDF watermarked PARTIAL REPORT"
+    result: PASA
+  - test_case_id: FLU-06
+    execution_id: "exec-20261119-027-flu-06"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: guided_session_engine
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - persist_session_to_sqlite_wal
+      - simulate_foreground_reopen_and_live_invalidation
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "ios/FieldScanM4/SceneDelegate.swift"
+    expected: "Workflow step restored from SQLite WAL while live connection/telemetry re-verifies"
+    observed: "Verified in SessionEngine and wired to UIApplication lifecycle hooks in SceneDelegate.swift"
+    result: PASA
+  - test_case_id: VIS-01
+    execution_id: "exec-20261119-028-vis-01"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: vision_quality_and_session_capture
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - feed_5_sharp_unoccluded_frames_within_1_5s_window
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Exactly one automatic physical photo persisted with SHA-256, timestamp, and step context"
+    observed: "Verified: 5th consecutive valid frame within 1.5s triggers single capture"
+    result: PASA
+  - test_case_id: VIS-02
+    execution_id: "exec-20261119-029-vis-02"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: vision_quality_and_session_capture
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - feed_hand_screwdriver_and_white_sticker_occluded_frames
+      - trigger_manual_capture
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Auto-capture blocked under occlusion; manual capture explicitly labeled manual_trigger=True"
+    observed: "Verified: FRAME_REJECTED_OCCLUDED_OR_BLURRY on auto, manual capture labeled truthfully"
+    result: PASA
+  - test_case_id: VIS-03
+    execution_id: "exec-20261119-030-vis-03"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: vision_quality_and_session_capture
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - feed_blurry_frame_then_5_sharp_frames
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Unstable/blurry frame resets stability window; capture occurs only after 5 stable frames"
+    observed: "Verified via Laplacian sharpness gate and 5-of-1.5s stability deque"
+    result: PASA
+  - test_case_id: VIS-04
+    execution_id: "exec-20261119-031-vis-04"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: physical_uvc_hotplug_on_ipad_or_mac
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - probe_external_uvc_camera_hotplug
+    evidence_files:
+      - "scripts/run_bench_hardware_check.py"
+      - "src/fieldscan/session_engine.py"
+    expected: "Physical UVC disconnect/reconnect updates visible source and invalidates prior ROI window"
+    observed: "BLOCKED_HARDWARE: External USB UVC macro camera not physically plugged in during run (software ROI reset verified)"
+    result: BLOQUEADA
+  - test_case_id: VIS-05
+    execution_id: "exec-20261119-032-vis-05"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: vision_coordinate_alignment
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - test_multi_angle_probe_pose_and_overlay_quad_alignment
+    evidence_files:
+      - "tests/test_fieldscan_glue.py"
+      - "tests/test_ipad_m4_port_parity.py"
+    expected: "Overlay quad and keypoints remain aligned with original image frame coordinates"
+    observed: "Verified across rotation/translation sweep in test_live_camera_multi_background_all_angle_and_no_fake_fallback"
+    result: PASA
+  - test_case_id: VIS-06
+    execution_id: "exec-20261119-033-vis-06"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: vision_freeze_detector
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - repeat_identical_jpeg_bytes_3_times_with_advancing_clock
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Duplicate SHA-256 frame digest marks stream_frozen=True and pauses automatic capture"
+    observed: "Verified: 3rd identical JPEG digest sets stream_frozen=True"
+    result: PASA
+  - test_case_id: VIS-07
+    execution_id: "exec-20261119-034-vis-07"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: vision_provenance_guard
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - feed_simulator_and_uploaded_frames_into_session_capture
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Simulator/uploaded frames blocked from auto-capture and never labeled live_physical_camera"
+    observed: "Verified: NON_PHYSICAL_SOURCE_AUTO_CAPTURE_BLOCKED enforced"
+    result: PASA
+  - test_case_id: VIS-08
+    execution_id: "exec-20261119-035-vis-08"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: parametric_3d_viewer_and_hmi
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - inspect_hmi_badge_and_component_highlight_intents
+    evidence_files:
+      - "static/index.html"
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "3D viewer labeled PARAMETRIC CAD MODEL (never 100% DIGITAL TWIN MATCH) and highlights target component"
+    observed: "Verified in static/index.html and highlight_component action"
+    result: PASA
+  - test_case_id: VIS-09
+    execution_id: "exec-20261119-036-vis-09"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: cross_scenario_vision_corpus
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - execute_7_scenario_vis09_corpus_matrix
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Deterministic anomaly localization on 4 probe modes and 0 false auto-captures on 3 occluded/blurry modes"
+    observed: "Verified across sim_normal, sim_open_dip, sim_strainer_patch, sim_gland_fault, sim_hand_screwdriver, white_sticker, blur_dark"
+    result: PASA
+  - test_case_id: VIS-10
+    execution_id: "exec-20261119-037-vis-10"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: manual_sha256_citation_integrity
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - resolve_valid_pages_4_5_9
+      - inject_page_99_and_tampered_sha256
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Valid citations verify SHA-256; missing page or tampered manual hash blocks dependent instruction"
+    observed: "Verified in both Python and Swift: MANUAL_HASH_MISMATCH / CITATION_PAGE_OUT_OF_RANGE"
+    result: PASA
+  - test_case_id: VOZ-01
+    execution_id: "exec-20261119-038-voz-01"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: bilingual_voice_engine_offline
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - evaluate_40_en_es_golden_utterances_with_offline_socket_guard
+    evidence_files:
+      - "knowledge/fixtures/golden_contracts_v2_1.json"
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: ">=90% intent accuracy in EN and ES offline; readings grounded in fresh or labeled historical state"
+    observed: "Verified 20/20 (100%) EN and 20/20 (100%) ES in both Python and Swift"
+    result: PASA
+  - test_case_id: VOZ-02
+    execution_id: "exec-20261119-039-voz-02"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: bilingual_voice_engine_offline
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - query_component_and_manual_page_in_en_and_es
+    evidence_files:
+      - "knowledge/fixtures/golden_contracts_v2_1.json"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Component 3D ID and verified manual page resolved accurately in both languages"
+    observed: "Verified across 6 component rules and pages 4, 5, 6, 7, 9"
+    result: PASA
+  - test_case_id: VOZ-03
+    execution_id: "exec-20261119-040-voz-03"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: handsfree_state_machine_and_hmi
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - verify_visible_mic_state_and_pause_controls
+    evidence_files:
+      - "static/index.html"
+      - "static/app.js"
+      - "src/fieldscan/session_engine.py"
+    expected: "Audio state (idle/listening/processing/speaking/muted) visible with pause/PTT fallback"
+    observed: "Verified in HMI controls and SessionEngine audio_state transitions"
+    result: PASA
+  - test_case_id: VOZ-04
+    execution_id: "exec-20261119-041-voz-04"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: tts_acoustic_echo_guard
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - register_tts_playback
+      - inject_matching_utterance_during_cooldown
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "TTS echo and speech while speaking rejected with 0 state mutations"
+    observed: "Verified in Python and Swift: ignored=True on TTS echo"
+    result: PASA
+  - test_case_id: VOZ-05
+    execution_id: "exec-20261119-042-voz-05"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: speech_fallback_degradation
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - verify_touch_and_text_action_paths_without_asr
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "static/index.html"
+    expected: "Full inspection workflow operable via touch/API actions when speech permission unavailable"
+    observed: "Verified: every session step and export completable via deterministic REST/touch actions"
+    result: PASA
+  - test_case_id: VOZ-06
+    execution_id: "exec-20261119-043-voz-06"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: ambiguous_numeric_utterance_guard
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - inject_bare_numbers_25_176_neg12_4_without_units
+    evidence_files:
+      - "knowledge/fixtures/golden_contracts_v2_1.json"
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Bare numbers without explicit unit trigger AMBIGUOUS_NUMERIC_WITHOUT_UNIT clarification"
+    observed: "Verified in Python and Swift across positive, integer, and negative decimals"
+    result: PASA
+  - test_case_id: VOZ-07
+    execution_id: "exec-20261119-044-voz-07"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: voice_confirmation_separation_gate
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - inject_skip_confirmation_and_voice_confirm_without_ui_token
+    evidence_files:
+      - "knowledge/fixtures/golden_contracts_v2_1.json"
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Spoken bypass blocked; physical change confirmation requires separate UI token"
+    observed: "Verified: bypass_blocked=True and DomainError(CONFIRMATION_REQUIRED) on token mismatch"
+    result: PASA
+  - test_case_id: VOZ-08
+    execution_id: "exec-20261119-045-voz-08"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: utterance_dedup_and_audio_recovery
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - submit_duplicate_utterance_id_and_reset_audio_state
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Duplicate utterance_id ignored without duplicate action execution"
+    observed: "Verified: DUPLICATE_UTTERANCE_ID suppressed cleanly"
+    result: PASA
+  - test_case_id: VOZ-09
+    execution_id: "exec-20261119-046-voz-09"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: flapping_transition_alert_suppression
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - trigger_3_rapid_link_drops_and_repeated_transition_alerts
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "3.0s per-event cooldown and intermittent_link flag prevent alert storms"
+    observed: "Verified: intermittent=True and repeat alert suppressed with COOLDOWN_3S"
+    result: PASA
+  - test_case_id: VOZ-10
+    execution_id: "exec-20261119-047-voz-10"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: mid_session_language_switch
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - switch_en_to_es_and_es_to_en_mid_session
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Preferred language updates cleanly while preserving active session state and sequence"
+    observed: "Verified in Python and Swift"
+    result: PASA
+  - test_case_id: IA-01
+    execution_id: "exec-20261119-048-ia-01"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: inference_provider_truthfulness
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - query_capabilities_and_verify_effective_provider_disclosure
+    evidence_files:
+      - "src/fieldscan/lfm_engine.py"
+      - "ios/FieldScanM4/LlamaServerBridge.swift"
+    expected: "Effective provider ID and modality disclosed truthfully without silent substitution"
+    observed: "Verified in /api/capabilities and LlamaServerBridge runtime status"
+    result: PASA
+  - test_case_id: IA-02
+    execution_id: "exec-20261119-049-ia-02"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: autonomous_ipad_mac_probe_suppression
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: true
+    steps_executed:
+      - verify_autonomous_mode_suppresses_mac_lan_probes
+    evidence_files:
+      - "ios/FieldScanM4/LlamaServerBridge.swift"
+      - "ios/FieldScanM4/FieldScanRuntimeConfig.swift"
+    expected: "Autonomous iPad mode suppresses Mac :8090/:8091 probing and runs local deterministic rules/provider"
+    observed: "Verified in LlamaServerBridge.swift (`macProbingSuppressedInAutonomousMode`) and signed iPadOS build"
+    result: PASA
+  - test_case_id: IA-03
+    execution_id: "exec-20261119-050-ia-03"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: apple_intelligence_and_rule_fallback
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: true
+    steps_executed:
+      - verify_deterministic_rule_engine_fallback_when_generative_model_absent
+    evidence_files:
+      - "src/fieldscan/lfm_engine.py"
+      - "ios/FieldScanM4/FieldScanSessionEngine.swift"
+    expected: "Clean deterministic fallback when FoundationModels or GGUF server is unavailable"
+    observed: "Verified in --no-llm mode (`scripts/start_all.sh --no-llm`) and Swift rule engine"
+    result: PASA
+  - test_case_id: IA-04
+    execution_id: "exec-20261119-051-ia-04"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: deterministic_grounding_filter
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - inject_hallucinated_scada_calibrated_and_page_14_claims
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Hallucinated SCADA/PLC/calibrated claims and out-of-range manual pages rejected and replaced with truth"
+    observed: "Verified in both Python and Swift grounding filters"
+    result: PASA
+  - test_case_id: IA-05
+    execution_id: "exec-20261119-052-ia-05"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: ipad_m4_inprocess_gguf_sustained_run
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: true
+    steps_executed:
+      - verify_10_llama_dylibs_embedded_and_signed_in_ipa
+      - defer_sustained_camera_thermal_benchmark
+    evidence_files:
+      - "ios/FieldScanM4.xcodeproj/project.pbxproj"
+      - "scripts/build_ipad_m4_app.sh"
+    expected: "Measured cold-load and sustained thermal/RSS run on unlocked physical iPad with camera active (P2 gate)"
+    observed: "BLOCKED_HARDWARE: 10 arm64 llama.cpp dylibs embedded & signed and installed on Armando's iPad (00008132-000C79663C8BC01C), but physical iPad screen was locked (BSErrorCodeDescription=Locked) preventing sustained camera+GGUF thermal benchmark"
+    result: BLOQUEADA
+  - test_case_id: IA-06
+    execution_id: "exec-20261119-053-ia-06"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: inference_cancellation_and_timeout_guard
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - verify_bounded_http_timeout_and_stale_generation_discard
+    evidence_files:
+      - "src/fieldscan/lfm_engine.py"
+      - "ios/FieldScanM4/LlamaServerBridge.swift"
+    expected: "In-flight requests bounded by timeout and superseded session/generation results discarded"
+    observed: "Verified in LFMEngine and LlamaServerBridge"
+    result: PASA
+  - test_case_id: EXP-01
+    execution_id: "exec-20261119-054-exp-01"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: atomic_dossier_exporter
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - export_complete_session_to_pdf_and_json
+      - verify_sha256_and_revision_parity
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "PDF and JSON open cleanly, share session_seq, list provenance, and match SHA-256 digests"
+    observed: "Verified in both Python (PyMuPDF) and Swift (UIGraphicsPDFRenderer/CoreGraphics)"
+    result: PASA
+  - test_case_id: EXP-02
+    execution_id: "exec-20261119-055-exp-02"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: multipage_and_partial_sim_dossier
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - export_28_event_session_across_multiple_pages
+      - export_partial_and_simulated_sessions
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Long timelines paginate across >=2 PDF pages without truncation; partial/sim watermarks applied"
+    observed: "Verified: 2+ PDF pages rendered with checkpoint #28 preserved and explicit watermarks"
+    result: PASA
+  - test_case_id: EXP-03
+    execution_id: "exec-20261119-056-exp-03"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: crash_atomic_export_recovery
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - seed_incomplete_tmp_artifact
+      - verify_manifest_excludes_uncommitted_files
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Write-to-.tmp + fsync + os.replace prevents broken export manifests; .tmp cleaned on init"
+    observed: "Verified in Python and Swift"
+    result: PASA
+  - test_case_id: EXP-04
+    execution_id: "exec-20261119-057-exp-04"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: disk_full_and_serial_masking
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - simulate_insufficient_free_bytes
+      - export_public_demo_masked_serial
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "DISK_FULL error preserves confirmed SQLite session with 0 leftover .tmp files; public_demo masks serial"
+    observed: "Verified: HTTP 507 / DISK_FULL raised cleanly and serial masked to last 4 chars"
+    result: PASA
+  - test_case_id: EXP-05
+    execution_id: "exec-20261119-058-exp-05"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: authorized_share_path_allowlist
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - attempt_path_traversal_and_unknown_export_file_lookup
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Path traversal (`../`) and unauthorized paths rejected; only canonical session exports served"
+    observed: "Verified in Python (`resolve_authorized_export_path`) and Swift (`resolveAuthorizedExportFile`)"
+    result: PASA
+  - test_case_id: EXP-06
+    execution_id: "exec-20261119-059-exp-06"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: cad_dxf_stl_and_zip_validators
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - generate_and_validate_dxf_r2010_binary_stl_and_zip_bundle
+    evidence_files:
+      - "tests/test_fieldscan_glue.py"
+    expected: "DXF passes ezdxf.audit() with 0 errors; binary STL triangle count matches byte length; ZIP intact"
+    observed: "Verified in test_cad_exporter_dxf_stl_and_offline_outbox (<150ms)"
+    result: PASA
+  - test_case_id: EXP-07
+    execution_id: "exec-20261119-060-exp-07"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: idempotent_and_amended_export_chain
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - repeat_export_on_same_seq
+      - amend_closed_session_and_export_with_supersedes_id
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Same revision replays idempotently; amended session creates new export linked via supersedes_export_id"
+    observed: "Verified: original export preserved and v2 links supersedes_export_id"
+    result: PASA
+  - test_case_id: OFF-01
+    execution_id: "exec-20261119-061-off-01"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: offline_bundle_and_local_hmi
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: true
+    steps_executed:
+      - verify_zero_external_cdn_links
+      - verify_standalone_swift_bundle_resources
+    evidence_files:
+      - "tests/test_fieldscan_glue.py"
+      - "knowledge/resource_manifest.json"
+    expected: "HMI, 9 manual pages, 3D vendor libs, and profiles load 100% offline with zero CDN links"
+    observed: "Verified across 26 SHA-256-locked files in BundleResources"
+    result: PASA
+  - test_case_id: OFF-02
+    execution_id: "exec-20261119-062-off-02"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: ipad_pusr_wifi_without_wan
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: true
+    steps_executed:
+      - probe_pusr_ap_without_wan
+    evidence_files:
+      - "scripts/run_bench_hardware_check.py"
+      - "src/fieldscan/offline_guard.py"
+    expected: "Local PUSR subnet traffic succeeds with WAN cut and distinguishes no-WAN from sensor loss"
+    observed: "BLOCKED_HARDWARE: Physical PUSR Wi-Fi AP / gateway not active during run (subnet allowlist verified in OfflineSocketGuard)"
+    result: BLOQUEADA
+  - test_case_id: OFF-03
+    execution_id: "exec-20261119-063-off-03"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: mac_usb_tether_without_8091_llm
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - verify_dynamic_usbc_link_local_detection_and_no_llm_mode
+    evidence_files:
+      - "scripts/start_all.sh"
+      - "tests/test_ipad_m4_port_parity.py"
+    expected: "Bench HMI and sensor polling operate without WAN and without :8091 llama-server (`--no-llm`)"
+    observed: "Verified in start_all.sh and LFMEngine fallback"
+    result: PASA
+  - test_case_id: OFF-04
+    execution_id: "exec-20261119-064-off-04"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: ipados_local_network_permission_toggle
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: true
+    steps_executed:
+      - toggle_ios_local_network_privacy_switch_interactively
+    evidence_files:
+      - "ios/FieldScanM4/Info.plist"
+      - "docs/10_BENCH_SETUP_EVENT_RUNBOOK_AND_TEST_MATRIX.md"
+    expected: "Interactive iPadOS Settings > Privacy > Local Network deny/grant recovery on unlocked physical iPad"
+    observed: "BLOCKED_HARDWARE: Requires interactive human toggle on unlocked iPadOS Settings UI (NSLocalNetworkUsageDescription configured in Info.plist)"
+    result: BLOQUEADA
+  - test_case_id: OFF-05
+    execution_id: "exec-20261119-065-off-05"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: wkwebview_navigation_and_ats_lockdown
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: true
+    steps_executed:
+      - audit_info_plist_ats_and_wkwebview_scheme_host_whitelist
+    evidence_files:
+      - "ios/FieldScanM4/Info.plist"
+      - "ios/FieldScanM4/FieldScanWebViewController.swift"
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "NSAllowsArbitraryLoadsInWebContent absent; external navigation/bridges blocked in WKWebView"
+    observed: "Verified in Info.plist audit test and FieldScanWebViewController navigation policy"
+    result: PASA
+  - test_case_id: OFF-06
+    execution_id: "exec-20261119-066-off-06"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: tls_trust_scope_restriction
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: true
+    steps_executed:
+      - audit_server_trust_host_scoping_in_webview_controller
+    evidence_files:
+      - "ios/FieldScanM4/FieldScanWebViewController.swift"
+    expected: "Self-signed TLS trust exception restricted strictly to configured local Mac tether host"
+    observed: "Verified in FieldScanWebViewController.swift (`webView(_:didReceive:completionHandler:)`)"
+    result: PASA
+  - test_case_id: OFF-07
+    execution_id: "exec-20261119-067-off-07"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: runtime_egress_socket_audit
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - install_offline_socket_guard_and_attempt_public_wan_connect
+    evidence_files:
+      - "tests/test_fieldscan_glue.py"
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "All non-local socket egress blocked and logged; zero external calls during full test suite"
+    observed: "Verified: connect(('8.8.8.8', 443)) blocked immediately by OfflineSocketGuard"
+    result: PASA
+  - test_case_id: OFF-08
+    execution_id: "exec-20261119-068-off-08"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: release_bundle_sha256_manifest_parity
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: true
+    steps_executed:
+      - run_sync_manifest_verify_and_install_release_app_on_physical_ipad_m4
+    evidence_files:
+      - "knowledge/resource_manifest.json"
+      - "scripts/sync_manifest.py"
+      - "scripts/build_ipad_m4_app.sh"
+    expected: "100% SHA-256 parity between knowledge/assets/static and ios/FieldScanM4/BundleResources; signed app installed on iPad Air M4"
+    observed: "Verified 26/26 files (tree_sha256=90a2dd53a4b6...) and installed on Armando's iPad (00008132-000C79663C8BC01C)"
+    result: PASA
+  - test_case_id: CAL-00
+    execution_id: "exec-20261119-069-cal-00"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: event_hmi_and_api_p0
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - open_planned_calibration_modal_during_tzone_session
+    evidence_files:
+      - "static/index.html"
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Displays 'Calibration & Verified Adjustment \u00b7 Planned' card; 0 write buttons or active adjustment claims"
+    observed: "Verified in /api/calibration/planned, Modal 3 UI, and Swift standalone server"
+    result: PASA
+  - test_case_id: CAL-01
+    execution_id: "exec-20261119-070-cal-01"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: metrology_contract_suite
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - evaluate_expired_reference_certificate_and_unit_mismatch
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Blocks adjustment proposal with REFERENCE_EXPIRED / UNIT_MISMATCH diagnostic"
+    observed: "Verified in evaluate_calibration_comparison_contract"
+    result: PASA
+  - test_case_id: CAL-02
+    execution_id: "exec-20261119-071-cal-02"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: metrology_contract_suite
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - evaluate_drifting_or_time_skewed_sample_window
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Declares INDETERMINATE_UNSTABLE_OR_SKEWED with 0 modifications"
+    observed: "Verified in Python and Swift calibration contract evaluators"
+    result: PASA
+  - test_case_id: CAL-03
+    execution_id: "exec-20261119-072-cal-03"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: metrology_contract_suite
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - compare_valid_reference_against_readonly_tzone_tht02
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+      - "scripts/run_swift_contract_tests.swift"
+    expected: "Computes error_uut_minus_ref (+0.6 C) as READONLY_COMPARISON_COMPLETE with writes_emitted=0"
+    observed: "Verified in both Python and Swift"
+    result: PASA
+  - test_case_id: CAL-04
+    execution_id: "exec-20261119-073-cal-04"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: metrology_contract_suite
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - compute_additive_offset_with_nonzero_prior_offset_on_novus_lab_profile
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Proposed offset accounts for prior_device_offset (0.2 - 0.6 = -0.4 C) within profile bounds"
+    observed: "Verified on novus_rht_climate_lab contract fixture"
+    result: PASA
+  - test_case_id: CAL-05
+    execution_id: "exec-20261119-074-cal-05"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: metrology_contract_suite
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - verify_as_found_preserved_human_confirmation_readback_and_residual_pass
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "As-Found preserved, human confirmation enforced, residual error <= acceptance limit -> VERIFIED_ADJUSTMENT_PASS"
+    observed: "Verified on novus_rht_climate_lab contract fixture (writes_emitted=0 in software test)"
+    result: PASA
+  - test_case_id: CAL-06
+    execution_id: "exec-20261119-075-cal-06"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: metrology_contract_suite
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - simulate_link_drop_after_parameter_send
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Marks UNCERTAIN_RESULT_RECONCILIATION_REQUIRED and sets retry_blocked=True until readback"
+    observed: "Verified in evaluate_calibration_comparison_contract"
+    result: PASA
+  - test_case_id: CAL-07
+    execution_id: "exec-20261119-076-cal-07"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: metrology_contract_suite
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - verify_post_reboot_offset_readback_persistence
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Verifies readback_offset_after_reboot matches target offset and sets persistence_verified=True"
+    observed: "Verified in evaluate_calibration_comparison_contract"
+    result: PASA
+  - test_case_id: CAL-08
+    execution_id: "exec-20261119-077-cal-08"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: metrology_contract_suite
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - evaluate_two_point_nonlinear_deviation_exceeding_criteria
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Flags NONLINEAR_OR_RESIDUAL_OUT_OF_CRITERIA and never claims calibrated"
+    observed: "Verified on vaisala_hmp110_lab two-point fixture"
+    result: PASA
+  - test_case_id: CAL-09
+    execution_id: "exec-20261119-078-cal-09"
+    timestamp_utc: "2026-11-19T09:51:47Z"
+    build_revision: "5dba0b6b345d (contract_v2.1.0)"
+    profile_revision: "tzone_tht02@v1:sha256:f84367cb1d062ca5"
+    environment: metrology_contract_suite
+    device_revision: "iPad_Air_11_M4_iPad16,8_iPadOS_27.0.1 + Mac_Xcode_27.2_Py3.12.15"
+    mac_physically_disconnected: false
+    steps_executed:
+      - evaluate_vaisala_profile_with_ambiguous_spoken_reference
+    evidence_files:
+      - "tests/test_megaplan_contracts_and_matrix.py"
+    expected: "Blocks action with CLARIFICATION_REQUIRED when spoken reference lacks confirmed unit"
+    observed: "Verified in evaluate_calibration_comparison_contract"
+    result: PASA

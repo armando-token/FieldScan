@@ -162,7 +162,75 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
     }
 
     public func setSyncEnabled(_ enabled: Bool) throws -> [String: Any] {
-        return try configureEndpoint(baseURL: baseURLString, syncEnabled: enabled)
+        let effectiveBase = baseURLString.isEmpty ? FieldScanRuntimeConfig.shared.cloudCatalogBaseURL : baseURLString
+        return try configureEndpoint(baseURL: effectiveBase, syncEnabled: enabled)
+    }
+
+    private func persistentDeviceIdentifier() -> String {
+        let key = "fieldscan.cloud.device_id"
+        if let existing = UserDefaults.standard.string(forKey: key), existing.count >= 6 {
+            return existing
+        }
+        let generated = "ipad-\(UUID().uuidString.lowercased())"
+        UserDefaults.standard.set(generated, forKey: key)
+        return generated
+    }
+
+    /// Automatically connects to the default server and enrolls a per-device Keychain Bearer token (zero manual typing).
+    public func ensureAutoEnrolledIfNeeded(
+        defaultBaseURL: String = FieldScanRuntimeConfig.shared.cloudCatalogBaseURL,
+        forceReenroll: Bool = false
+    ) throws {
+        lock.lock()
+        let currentBase = baseURLString
+        let hasToken = resolveAuthTokenUnlocked() != nil
+        let isEnabled = syncEnabledFlag
+        lock.unlock()
+
+        let targetBase = currentBase.isEmpty ? defaultBaseURL : currentBase
+        if currentBase.isEmpty || !isEnabled {
+            _ = try configureEndpoint(baseURL: targetBase, syncEnabled: true, persistInKeychain: true)
+            FieldScanRuntimeConfig.shared.cloudCatalogBaseURL = targetBase
+            FieldScanRuntimeConfig.shared.cloudCatalogSyncEnabled = true
+        }
+
+        if hasToken && !forceReenroll {
+            return
+        }
+
+        let enrollBody: [String: Any] = [
+            "device_id": persistentDeviceIdentifier(),
+            "platform": "ipados",
+            "app_version": "2.1",
+        ]
+        let res = try performDataRequest(method: "POST", relPath: "/v1/devices/enroll", jsonBody: enrollBody)
+        guard res.statusCode == 200,
+              let json = (try? JSONSerialization.jsonObject(with: res.body)) as? [String: Any],
+              let token = json["access_token"] as? String,
+              !token.isEmpty else {
+            throw FieldScanCatalogError(
+                code: "AUTO_ENROLL_FAILED",
+                message: "Automatic device enrollment with FieldScan Cloud did not return an access token.",
+                statusCode: res.statusCode
+            )
+        }
+        _ = try configureEndpoint(baseURL: targetBase, syncEnabled: true, authToken: token, persistInKeychain: true)
+    }
+
+    /// One-tap update flow: auto-connects, enrolls transparently in Keychain, verifies Ed25519 + SHA-256, and installs latest.
+    public func downloadLatestPackage(
+        productId: String = "tzone_tht02",
+        variantId: String = "v1_1_rs485",
+        defaultBaseURL: String = FieldScanRuntimeConfig.shared.cloudCatalogBaseURL
+    ) throws -> [String: Any] {
+        try ensureAutoEnrolledIfNeeded(defaultBaseURL: defaultBaseURL, forceReenroll: false)
+        do {
+            return try fetchAndInstallVariant(productId: productId, variantId: variantId, channel: "pilot")
+        } catch let cerr as FieldScanCatalogError where cerr.code == "HTTP_UNAUTHORIZED" {
+            // Token rotated or revoked on server -> transparently re-enroll once and retry
+            try ensureAutoEnrolledIfNeeded(defaultBaseURL: defaultBaseURL, forceReenroll: true)
+            return try fetchAndInstallVariant(productId: productId, variantId: variantId, channel: "pilot")
+        }
     }
 
     private func saveSecretToKeychain(_ token: String?, account: String) {

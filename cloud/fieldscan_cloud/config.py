@@ -77,6 +77,9 @@ class ApiConfig(BaseConfig):
     max_body_bytes: int
     max_active_jobs_per_tenant: int
     enable_range_requests: bool
+    allow_device_auto_enroll: bool = False
+    max_enrolled_devices: int = 50
+    signing_key_id: str = "pilot-1"
 
 
 @dataclass(frozen=True)
@@ -152,6 +155,11 @@ def load_api_config(environ: dict[str, str] | None = None) -> ApiConfig:
             "FS_MAX_ACTIVE_JOBS", env_map.get("FS_MAX_ACTIVE_JOBS"), 8, min_value=1
         ),
         enable_range_requests=_parse_bool(env_map.get("FS_ENABLE_RANGE_REQUESTS"), True),
+        allow_device_auto_enroll=_parse_bool(env_map.get("FS_ALLOW_DEVICE_AUTO_ENROLL"), False),
+        max_enrolled_devices=_parse_int(
+            "FS_MAX_ENROLLED_DEVICES", env_map.get("FS_MAX_ENROLLED_DEVICES"), 50, min_value=1
+        ),
+        signing_key_id=env_map.get("FS_SIGNING_KEY_ID", "pilot-1").strip() or "pilot-1",
     )
 
 

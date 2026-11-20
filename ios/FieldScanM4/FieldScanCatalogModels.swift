@@ -118,6 +118,12 @@ public enum FieldScanCatalogContract {
     /// Labeled reference fixture Ed25519 public key (`demo-1`, matches Python `DEMO_FIXTURE_PUBLIC_KEY_B64`).
     public static let demo1PublicKeyBase64 = "dY3z2CiJZsOxQuwsAHq4jGNIfYDzRWQ4U1yAV3IMsb0="
 
+    /// Pinned production/pilot Boat.dev Cloud Ed25519 public key (`pilot-1`, 32 raw bytes Base64).
+    public static let pilot1PublicKeyBase64 = "Zn5ZenJKf/TvAmETMhr+eNl66WpSfbSRbU179Tt9HQI="
+
+    /// Default managed FieldScan Cloud HTTPS endpoint (overridable in Advanced settings).
+    public static let defaultPilotCloudBaseURL = "https://box-node-507a5a88ccd86113-8080.on.boat.dev"
+
     public static let forbiddenExecutableExtensions: Set<String> = [
         "sh", "bash", "zsh", "exe", "dll", "dylib", "so", "bin",
         "py", "pyc", "js", "mjs", "html", "htm", "command", "app",
@@ -162,6 +168,9 @@ public enum FieldScanCatalogContract {
         var out: [String: Data] = [:]
         if let raw = Data(base64Encoded: demo1PublicKeyBase64), raw.count == 32 {
             out["demo-1"] = raw
+        }
+        if let rawPilot = Data(base64Encoded: pilot1PublicKeyBase64), rawPilot.count == 32 {
+            out["pilot-1"] = rawPilot
         }
         return out
     }

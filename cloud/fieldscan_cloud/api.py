@@ -9,6 +9,7 @@ import json
 import logging
 from pathlib import Path
 import re
+import secrets
 import sqlite3
 from typing import Any
 import uuid
@@ -22,6 +23,7 @@ from fieldscan_cloud.config import ApiConfig, load_api_config
 from fieldscan_cloud.db import (
     connect_sqlite,
     enqueue_or_get_active_job,
+    enroll_device_credential,
     ensure_default_tenant_and_credential,
     find_matching_variants,
     get_authorized_blob,
@@ -33,6 +35,8 @@ from fieldscan_cloud.models import (
     CachedPublicationRef,
     CandidateVariant,
     CapabilitiesStatus,
+    DeviceEnrollRequest,
+    DeviceEnrollResponse,
     HealthResponse,
     IdentityInfo,
     JobStatusResponse,
@@ -110,6 +114,24 @@ def _format_pub_status(pub_row: sqlite3.Row) -> JobStatusResponse:
         publication_seq=int(pub_row["publication_seq"]),
         manifest_url=f"/v1/catalog/products/{product_id}/variants/{variant_id}/manifest",
     )
+
+
+def _etag_matches_if_none_match(if_none_match: str | None, current_etag: str) -> bool:
+    """RFC 9110 §13.1.2 weak comparison for If-None-Match (handles Cloudflare/Caddy W/ gzip ETags)."""
+    if not if_none_match:
+        return False
+    norm_cur = current_etag.strip()
+    if norm_cur.startswith("W/"):
+        norm_cur = norm_cur[2:].strip()
+    for part in if_none_match.split(","):
+        cand = part.strip()
+        if cand == "*":
+            return True
+        if cand.startswith("W/"):
+            cand = cand[2:].strip()
+        if cand == norm_cur:
+            return True
+    return False
 
 
 def _parse_single_byte_range(range_header: str, total_size: int) -> tuple[int, int]:
@@ -253,6 +275,43 @@ def create_app(config: ApiConfig | None = None) -> FastAPI:
             revision=get_release_revision(),
             schema_version=schema_ver,
             journal_mode=mode,
+        )
+
+    @app.post("/v1/devices/enroll", response_model=DeviceEnrollResponse)
+    def enroll_device(req: DeviceEnrollRequest):
+        cfg = _get_config()
+        if not cfg.allow_device_auto_enroll:
+            raise ApiAppError(403, "AUTO_ENROLL_DISABLED", "Automatic device enrollment is disabled on this server")
+        raw_token = secrets.token_hex(32)
+        digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        conn = _open_db()
+        try:
+            try:
+                cred_id = enroll_device_credential(
+                    conn,
+                    tenant_id=cfg.default_tenant_id,
+                    channel=cfg.channel,
+                    device_id=req.device_id,
+                    token_sha256=digest,
+                    max_devices=cfg.max_enrolled_devices,
+                    max_active_jobs=cfg.max_active_jobs_per_tenant,
+                )
+            except PermissionError:
+                raise ApiAppError(
+                    429,
+                    "RATE_LIMITED",
+                    "Maximum enrolled devices reached for this pilot environment",
+                    headers={"Retry-After": "60"},
+                )
+        finally:
+            conn.close()
+        logger.info("Enrolled device credential_id=%s platform=%s", cred_id, req.platform)
+        return DeviceEnrollResponse(
+            access_token=raw_token,
+            tenant_id=cfg.default_tenant_id,
+            channel=cfg.channel,
+            credential_id=cred_id,
+            key_id=cfg.signing_key_id,
         )
 
     @app.post("/v1/catalog/resolve")
@@ -434,7 +493,7 @@ def create_app(config: ApiConfig | None = None) -> FastAPI:
                 raise ApiAppError(404, "PUBLICATION_NOT_FOUND", "No active publication for this product variant")
 
             etag = str(pub_row["envelope_etag"])
-            if if_none_match and if_none_match.strip() == etag:
+            if _etag_matches_if_none_match(if_none_match, etag):
                 return Response(
                     status_code=304,
                     headers={"ETag": etag, "Cache-Control": "private, must-revalidate"},

@@ -194,3 +194,56 @@ def test_healthz_and_auth_and_resolve_and_blobs(api_config, worker_config, env_p
         assert r_429.status_code == 429
         assert r_429.headers.get("Retry-After") == "5"
         assert r_429.json()["error"]["code"] == "RATE_LIMITED"
+
+
+def test_device_auto_enroll_disabled_and_enabled(api_config, worker_config):
+    from dataclasses import replace
+
+    # Disabled by default -> 403 AUTO_ENROLL_DISABLED
+    app_disabled = create_app(api_config)
+    with TestClient(app_disabled) as client:
+        r_off = client.post(
+            "/v1/devices/enroll",
+            json={"device_id": "ipad-m4-demo-001", "platform": "ipados", "app_version": "2.1"},
+        )
+        assert r_off.status_code == 403
+        assert r_off.json()["error"]["code"] == "AUTO_ENROLL_DISABLED"
+
+    # Seed fixture so enrolled device can immediately resolve & download manifest
+    conn = connect_sqlite(worker_config.db_path, expected_journal_mode="DELETE")
+    try:
+        stage = worker_config.data_dir / "staging" / "seed_enroll"
+        stage.mkdir(parents=True, exist_ok=True)
+        _build_fixture_artifacts(
+            conn,
+            config=worker_config,
+            fixture_dir=FIXTURES_DIR / "tht02_v1_1",
+            staging_dir=stage,
+            tenant_id="pilot",
+            run_ocr=False,
+        )
+    finally:
+        conn.close()
+
+    cfg_on = replace(api_config, allow_device_auto_enroll=True, max_enrolled_devices=2)
+    app_enabled = create_app(cfg_on)
+    with TestClient(app_enabled) as client:
+        r_en = client.post(
+            "/v1/devices/enroll",
+            json={"device_id": "ipad-m4-demo-001", "platform": "ipados", "app_version": "2.1"},
+        )
+        assert r_en.status_code == 200
+        en = r_en.json()
+        assert len(en["access_token"]) == 64
+        assert en["key_id"] == "pilot-1"
+
+        dev_hdr = {"Authorization": f"Bearer {en['access_token']}"}
+        r_res = client.post(
+            "/v1/catalog/resolve",
+            headers=dev_hdr,
+            json={"manufacturer": "TZONE", "model": "TZ THT-02", "variant": "V1.1-RS485", "hardware_revision": "V1.1"},
+        )
+        assert r_res.status_code == 200
+        assert r_res.json()["availability"] == "ready"
+        m_resp = client.get("/v1/catalog/products/tzone_tht02/variants/v1_1_rs485/manifest", headers=dev_hdr)
+        assert m_resp.status_code == 200

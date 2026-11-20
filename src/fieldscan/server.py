@@ -1454,7 +1454,10 @@ async def api_catalog_import(request: Request) -> dict[str, Any]:
 
 @app.post("/api/catalog/sync_config")
 async def api_catalog_sync_config(payload: dict[str, Any]) -> dict[str, Any]:
-    base_url = str(payload.get("base_url") or "")
+    from fieldscan.catalog_store import DEFAULT_PILOT_CLOUD_BASE_URL
+
+    raw_base = str(payload.get("base_url") or "").strip()
+    base_url = raw_base or DEFAULT_PILOT_CLOUD_BASE_URL
     sync_en = payload.get("sync_enabled")
     auth_tok = payload.get("auth_token")
     boat_tok = payload.get("boat_port_auth_token")
@@ -1477,6 +1480,25 @@ async def api_catalog_sync_config(payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "sync": tel}
 
 
+@app.post("/api/catalog/download_latest")
+async def api_catalog_download_latest(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    global _ACTIVE_SCENE_GENERATION
+    body = payload or {}
+    pid = str(body.get("product_id") or "").strip() or "tzone_tht02"
+    vid = str(body.get("variant_id") or "").strip() or "v1_1_rs485"
+    res = await asyncio.to_thread(_CATALOG_CLIENT.download_latest_package, pid, vid)
+    pkg = res.get("package") if isinstance(res, dict) else None
+    if isinstance(pkg, dict) and pkg.get("manifest_sha256"):
+        ctx = await asyncio.to_thread(_CATALOG_STORE.select_context_for_next_session, str(pkg["manifest_sha256"]))
+        desc = await asyncio.to_thread(_CATALOG_STORE.build_scene_and_manual_descriptor, ctx)
+        _ACTIVE_SCENE_GENERATION += 1
+        res["selected_context"] = ctx.to_dict()
+        res["catalog_descriptor"] = desc
+        res["scene_generation"] = _ACTIVE_SCENE_GENERATION
+    res["sync"] = _CATALOG_CLIENT.get_sync_telemetry()
+    return res
+
+
 @app.get("/api/catalog/healthz")
 async def api_catalog_healthz() -> dict[str, Any]:
     return await asyncio.to_thread(_CATALOG_CLIENT.check_health)
@@ -1487,6 +1509,7 @@ async def api_catalog_resolve(payload: dict[str, Any]) -> dict[str, Any]:
     model = str(payload.get("model") or "").strip()
     if not model:
         raise CatalogDomainError("INVALID_ENVELOPE", "model is required")
+    await asyncio.to_thread(_CATALOG_CLIENT.ensure_auto_enrolled_if_needed)
     return await asyncio.to_thread(
         _CATALOG_CLIENT.resolve_catalog,
         manufacturer=payload.get("manufacturer"),

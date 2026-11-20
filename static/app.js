@@ -395,6 +395,7 @@ const dom = {
   inputCloudEndpoint: document.getElementById('inputCloudEndpoint'),
   inputCloudToken: document.getElementById('inputCloudToken'),
   inputBoatPortToken: document.getElementById('inputBoatPortToken'),
+  btnDownloadLatestCloud: document.getElementById('btnDownloadLatestCloud'),
   btnSaveSyncConfig: document.getElementById('btnSaveSyncConfig'),
   btnCheckCloudHealth: document.getElementById('btnCheckCloudHealth'),
   catalogResolveForm: document.getElementById('catalogResolveForm'),
@@ -6608,6 +6609,44 @@ function bindCatalogModalEvents() {
       if (dom.catalogCloudResultBox) {
         dom.catalogCloudResultBox.textContent = `Configuration error: ${err.message || err}`;
       }
+    }
+  });
+
+  dom.btnDownloadLatestCloud?.addEventListener('click', async () => {
+    const btn = dom.btnDownloadLatestCloud;
+    if (btn) btn.disabled = true;
+    if (dom.catalogCloudResultBox) {
+      dom.catalogCloudResultBox.textContent =
+        'Connecting to FieldScan Cloud, verifying Ed25519 signature, and checking for the latest version...';
+    }
+    try {
+      const res = await fetchJsonWithFallback(['/api/catalog/download_latest'], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          product_id: 'tzone_tht02',
+          variant_id: 'v1_1_rs485',
+        }),
+      });
+      if (res?.catalog_descriptor && !state.activeSessionId) {
+        applyCatalogDescriptor(res.catalog_descriptor, res.scene_generation);
+      } else if (res?.selected_context) {
+        state.selectedCatalogContext = res.selected_context;
+      }
+      const pkg = res?.package || {};
+      const seqLabel = pkg.publication_seq ? `seq #${pkg.publication_seq}` : 'latest';
+      if (dom.catalogCloudResultBox) {
+        dom.catalogCloudResultBox.textContent = res?.reused_cached
+          ? `Already on the latest verified version (${pkg.product_id || 'tzone_tht02'}/${pkg.variant_id || 'v1_1_rs485'} · ${seqLabel}).`
+          : `Downloaded & verified latest version (${pkg.product_id || 'tzone_tht02'}/${pkg.variant_id || 'v1_1_rs485'} · ${seqLabel}). Ready offline.`;
+      }
+      await refreshCatalogModalState();
+    } catch (err) {
+      if (dom.catalogCloudResultBox) {
+        dom.catalogCloudResultBox.textContent = `Update failed: ${err.message || err}`;
+      }
+    } finally {
+      if (btn) btn.disabled = false;
     }
   });
 

@@ -6318,7 +6318,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
             if req.method == "POST" && path == "/api/catalog/sync_config" {
                 let bodyJSON = parseJSONBody(req.body)
-                let baseURL = (bodyJSON["base_url"] as? String) ?? FieldScanRuntimeConfig.shared.cloudCatalogBaseURL
+                let rawBase = ((bodyJSON["base_url"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let baseURL = rawBase.isEmpty ? FieldScanRuntimeConfig.shared.cloudCatalogBaseURL : rawBase
                 let syncOpt: Bool? = (bodyJSON["sync_enabled"] != nil) ? boolFromAny(bodyJSON["sync_enabled"], defaultValue: false) : nil
                 let token = bodyJSON["auth_token"] as? String
                 let boatToken = bodyJSON["boat_port_auth_token"] as? String
@@ -6346,6 +6347,34 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 return
             }
 
+            if req.method == "POST" && path == "/api/catalog/download_latest" {
+                let bodyJSON = parseJSONBody(req.body)
+                let pid = ((bodyJSON["product_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let vid = ((bodyJSON["variant_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let targetProduct = pid.isEmpty ? "tzone_tht02" : pid
+                let targetVariant = vid.isEmpty ? "v1_1_rs485" : vid
+                var res = try FieldScanCatalogClient.shared.downloadLatestPackage(
+                    productId: targetProduct,
+                    variantId: targetVariant,
+                    defaultBaseURL: FieldScanRuntimeConfig.shared.cloudCatalogBaseURL
+                )
+                if let pkg = res["package"] as? [String: Any],
+                   let mSha = pkg["manifest_sha256"] as? String, !mSha.isEmpty {
+                    let ctx = try FieldScanPackageStore.shared.selectContextForNextSession(manifestSha256: mSha)
+                    let desc = try FieldScanPackageStore.shared.buildSceneAndManualDescriptor(context: ctx)
+                    stateLock.lock()
+                    activeSceneGeneration += 1
+                    let nextGen = activeSceneGeneration
+                    stateLock.unlock()
+                    res["selected_context"] = ctx.toDictionary()
+                    res["catalog_descriptor"] = desc
+                    res["scene_generation"] = nextGen
+                }
+                res["sync"] = FieldScanCatalogClient.shared.getSyncTelemetry()
+                sendJSONResponse(on: connection, statusCode: 200, payload: res)
+                return
+            }
+
             if req.method == "GET" && path == "/api/catalog/healthz" {
                 let res = FieldScanCatalogClient.shared.checkHealth()
                 sendJSONResponse(on: connection, statusCode: 200, payload: res)
@@ -6358,6 +6387,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 guard !model.isEmpty else {
                     throw FieldScanCatalogError(code: "INVALID_ENVELOPE", message: "model is required")
                 }
+                try FieldScanCatalogClient.shared.ensureAutoEnrolledIfNeeded(
+                    defaultBaseURL: FieldScanRuntimeConfig.shared.cloudCatalogBaseURL
+                )
                 let res = try FieldScanCatalogClient.shared.resolveCatalog(
                     manufacturer: bodyJSON["manufacturer"] as? String,
                     model: model,

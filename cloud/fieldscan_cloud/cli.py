@@ -17,6 +17,7 @@ from fieldscan_cloud.db import (
     ensure_default_tenant_and_credential,
     ensure_seed_sources,
     get_current_publication,
+    record_source_event,
     verify_schema,
 )
 from fieldscan_cloud.publication.publisher import (
@@ -25,6 +26,7 @@ from fieldscan_cloud.publication.publisher import (
 )
 from fieldscan_cloud.publication.signing import load_private_key, verify_signed_envelope
 from fieldscan_cloud.publication.storage import find_orphan_objects, resolve_object_path
+from fieldscan_cloud.sources.downloader import SourceDownloadError, download_allowlisted_source
 from fieldscan_cloud.sources.registry import SEED_TZONE_THT02_SOURCES
 from fieldscan_cloud.worker import FIXTURES_DIR, _build_fixture_artifacts
 
@@ -216,6 +218,60 @@ def _cmd_withdraw(args: argparse.Namespace) -> int:
         conn.close()
 
 
+def _cmd_check_sources(args: argparse.Namespace) -> int:
+    """Recheck known allowlisted OEM PDF sources via ETag/Last-Modified/SHA-256 (§8.2 step 6)."""
+    db_path = Path(args.db)
+    conn = connect_sqlite(db_path, expected_journal_mode=args.journal_mode)
+    try:
+        rows = conn.execute(
+            """
+            SELECT s.id, s.canonical_url, s.allowed_domain, s.source_class,
+                   sr.content_sha256, sr.etag, sr.last_modified
+            FROM sources s
+            LEFT JOIN source_revisions sr ON sr.source_id = s.id
+            WHERE s.origin_kind IN ('oem_official', 'oem_portal')
+              AND s.source_class IN ('manual_pdf', 'datasheet_pdf')
+            ORDER BY s.id ASC;
+            """
+        ).fetchall()
+        checked = []
+        for row in rows:
+            sid = str(row["id"])
+            url = str(row["canonical_url"])
+            dom = str(row["allowed_domain"])
+            try:
+                dl = download_allowlisted_source(
+                    url,
+                    allowed_domains={dom},
+                    expected_kind="pdf",
+                    if_none_match=row["etag"],
+                    if_modified_since=row["last_modified"],
+                )
+                changed = (not dl.not_modified) and (dl.sha256 != row["content_sha256"])
+                status = "not_modified" if dl.not_modified else ("changed" if changed else "unchanged_sha256")
+                record_source_event(
+                    conn,
+                    source_id=sid,
+                    actor="cli_check_sources",
+                    event_type="periodic_source_check",
+                    detail={"url": url, "status": status, "new_sha256": dl.sha256},
+                )
+                checked.append({"source_id": sid, "status": status, "sha256": dl.sha256})
+            except SourceDownloadError as err:
+                record_source_event(
+                    conn,
+                    source_id=sid,
+                    actor="cli_check_sources",
+                    event_type="periodic_source_check_error",
+                    detail={"url": url, "error_code": err.code},
+                )
+                checked.append({"source_id": sid, "status": "error", "error_code": err.code})
+        print(json.dumps({"status": "ok", "checked_count": len(checked), "results": checked}, indent=2))
+        return 0
+    finally:
+        conn.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fieldscan_cloud.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -261,6 +317,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_wd.add_argument("--procedure", action="append", required=True)
     p_wd.add_argument("--reason-code", default="PROCEDURE_WITHDRAWN")
     p_wd.set_defaults(func=_cmd_withdraw)
+
+    p_chk = sub.add_parser("check-sources", help="Periodically recheck known OEM PDF sources")
+    p_chk.add_argument("--db", required=True)
+    p_chk.add_argument("--journal-mode", default="DELETE")
+    p_chk.set_defaults(func=_cmd_check_sources)
 
     return parser
 

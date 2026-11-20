@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from contextlib import asynccontextmanager
 import hashlib
 import hmac
@@ -11,6 +13,7 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
+import time
 from typing import Any
 import uuid
 
@@ -32,6 +35,9 @@ from fieldscan_cloud.db import (
     verify_schema,
 )
 from fieldscan_cloud.models import (
+    AssistantChatRequest,
+    AssistantChatResponse,
+    AssistantStatusResponse,
     CachedPublicationRef,
     CandidateVariant,
     CapabilitiesStatus,
@@ -44,10 +50,16 @@ from fieldscan_cloud.models import (
     ResolveRequest,
 )
 from fieldscan_cloud.publication.storage import resolve_object_path
+from fieldscan_cloud.twin.synthesizer import VlmClient, VlmSynthesisError, encode_image_bytes_for_vlm
 
 logger = logging.getLogger("fieldscan_cloud.api")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
+_DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
+    "You are FieldScan AI, an industrial field engineering assistant for sensors, wiring, Modbus/RS-485, "
+    "and 3D Digital Twin guided repairs. Answer concisely, accurately, and strictly grounded in the provided "
+    "context, datasheet citations, and camera frame. Never invent unverified registers or measurements."
+)
 
 
 class ApiAppError(Exception):
@@ -157,13 +169,32 @@ def _parse_single_byte_range(range_header: str, total_size: int) -> tuple[int, i
     return start, end
 
 
-def create_app(config: ApiConfig | None = None) -> FastAPI:
-    state: dict[str, Any] = {"config": config}
+def create_app(
+    config: ApiConfig | None = None,
+    *,
+    assistant_client: VlmClient | None = None,
+) -> FastAPI:
+    state: dict[str, Any] = {"config": config, "assistant_client": assistant_client}
 
     def _get_config() -> ApiConfig:
         if state["config"] is None:
             state["config"] = load_api_config()
         return state["config"]
+
+    def _get_assistant_client(cfg: ApiConfig) -> VlmClient | None:
+        if state["assistant_client"] is not None:
+            return state["assistant_client"]
+        if not cfg.assistant_enabled or not cfg.assistant_api_key:
+            return None
+        client = VlmClient(
+            provider=cfg.assistant_provider,
+            api_url=cfg.assistant_api_url,
+            model=cfg.assistant_model,
+            api_key=cfg.assistant_api_key,
+            timeout_sec=cfg.assistant_timeout_sec,
+        )
+        state["assistant_client"] = client
+        return client
 
     def _open_db() -> sqlite3.Connection:
         cfg = _get_config()
@@ -203,15 +234,20 @@ def create_app(config: ApiConfig | None = None) -> FastAPI:
         rid = f"req_{uuid.uuid4().hex[:12]}"
         request.state.request_id = rid
         cfg = _get_config()
+        body_limit = (
+            cfg.assistant_max_body_bytes
+            if request.url.path == "/v1/assistant/chat"
+            else cfg.max_body_bytes
+        )
         cl = request.headers.get("content-length")
-        if cl and cl.isdigit() and int(cl) > cfg.max_body_bytes:
+        if cl and cl.isdigit() and int(cl) > body_limit:
             return _error_response(request, 413, "PAYLOAD_TOO_LARGE", "Request body exceeds allowed limit")
         if request.method in {"POST", "PUT", "PATCH"}:
             total_read = 0
             chunks: list[bytes] = []
             async for chunk in request.stream():
                 total_read += len(chunk)
-                if total_read > cfg.max_body_bytes:
+                if total_read > body_limit:
                     return _error_response(request, 413, "PAYLOAD_TOO_LARGE", "Request body exceeds allowed limit")
                 chunks.append(chunk)
             request._body = b"".join(chunks)
@@ -595,6 +631,85 @@ def create_app(config: ApiConfig | None = None) -> FastAPI:
         auth: dict[str, Any] = Depends(require_auth),
     ):
         return _serve_blob(sha256, auth=auth, range_header=None, head_only=True)
+
+    @app.get("/v1/assistant/status", response_model=AssistantStatusResponse)
+    def get_assistant_status(auth: dict[str, Any] = Depends(require_auth)):
+        _ = auth
+        cfg = _get_config()
+        is_ready = bool(cfg.assistant_enabled and (state["assistant_client"] is not None or cfg.assistant_api_key))
+        return AssistantStatusResponse(
+            enabled=is_ready,
+            provider=cfg.assistant_provider if is_ready else None,
+            model=cfg.assistant_model if is_ready else None,
+            vision_supported=True,
+            max_image_bytes=cfg.assistant_max_body_bytes,
+        )
+
+    @app.post("/v1/assistant/chat", response_model=AssistantChatResponse)
+    def post_assistant_chat(
+        req: AssistantChatRequest,
+        auth: dict[str, Any] = Depends(require_auth),
+    ):
+        cfg = _get_config()
+        client = _get_assistant_client(cfg)
+        if not cfg.assistant_enabled or client is None:
+            raise ApiAppError(503, "ASSISTANT_DISABLED", "Remote AI assistant is not enabled on this server")
+
+        encoded_images: list[tuple[str, str]] = []
+        if req.image_b64:
+            raw_b64 = req.image_b64.strip()
+            if raw_b64.startswith("data:") and "," in raw_b64:
+                raw_b64 = raw_b64.split(",", 1)[1].strip()
+            try:
+                raw_bytes = base64.b64decode(raw_b64, validate=True)
+            except (binascii.Error, ValueError):
+                raise ApiAppError(422, "INVALID_IMAGE", "image_b64 is not valid base64")
+            try:
+                out_fmt = "PNG" if req.image_media_type == "image/png" else "JPEG"
+                encoded_images.append(encode_image_bytes_for_vlm(raw_bytes, max_dim=1024, out_format=out_fmt))
+            except VlmSynthesisError:
+                raise ApiAppError(422, "INVALID_IMAGE", "Invalid or unsupported image attachment")
+
+        effective_max_tokens = min(req.max_tokens or cfg.assistant_max_tokens, cfg.assistant_max_tokens)
+        sys_prompt = (req.system_prompt or "").strip() or _DEFAULT_ASSISTANT_SYSTEM_PROMPT
+        history = [{"role": m.role, "content": m.content} for m in req.messages]
+
+        t0 = time.monotonic()
+        try:
+            res = client.generate_chat(
+                system_prompt=sys_prompt,
+                user_prompt=req.user_text,
+                history=history,
+                encoded_images=encoded_images,
+                max_tokens=effective_max_tokens,
+                temperature=req.temperature,
+            )
+        except VlmSynthesisError as exc:
+            if exc.code == "VLM_RATE_LIMITED":
+                raise ApiAppError(
+                    429,
+                    "UPSTREAM_RATE_LIMITED",
+                    "Remote AI provider rate limited; retry shortly",
+                    headers={"Retry-After": "5"},
+                )
+            if exc.code == "VLM_INVALID_IMAGE":
+                raise ApiAppError(422, "INVALID_IMAGE", "Invalid or unsupported image attachment")
+            logger.warning(
+                "Remote assistant upstream failure tenant=%s provider=%s code=%s",
+                auth["tenant_id"],
+                cfg.assistant_provider,
+                exc.code,
+            )
+            raise ApiAppError(502, "ASSISTANT_UPSTREAM_ERROR", f"Remote AI provider error ({exc.code})")
+
+        elapsed_ms = max(1, int(round((time.monotonic() - t0) * 1000.0)))
+        return AssistantChatResponse(
+            reply_text=str(res["reply_text"]),
+            model=str(res["model"]),
+            provider=str(res["provider"]),
+            usage=res.get("usage"),
+            latency_ms=elapsed_ms,
+        )
 
     return app
 

@@ -194,3 +194,38 @@ class DeviceEnrollResponse(BaseModel):
     channel: str
     credential_id: str
     key_id: str
+
+
+class AssistantChatMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=4000)
+
+
+class AssistantChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    system_prompt: str | None = Field(default=None, max_length=4000)
+    messages: list[AssistantChatMessage] = Field(default_factory=list, max_length=20)
+    user_text: str = Field(..., min_length=1, max_length=4000)
+    image_b64: str | None = Field(default=None, max_length=2_000_000)
+    image_media_type: Literal["image/jpeg", "image/png", "image/webp"] = Field(default="image/jpeg")
+    max_tokens: int | None = Field(default=None, ge=16, le=2048)
+    temperature: float = Field(default=0.2, ge=0.0, le=1.0)
+
+
+class AssistantChatResponse(BaseModel):
+    reply_text: str
+    model: str
+    provider: str
+    usage: dict[str, int] | None = None
+    latency_ms: int
+
+
+class AssistantStatusResponse(BaseModel):
+    enabled: bool
+    provider: str | None = None
+    model: str | None = None
+    vision_supported: bool = True
+    max_image_bytes: int

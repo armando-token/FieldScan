@@ -572,6 +572,99 @@ def test_stage3_vlm_providers_openai_gemini_anthropic(tmp_path: Path):
     )
     assert an.generate_json(system_prompt="s", user_prompt="u", image_paths=[sample_img]) == {"ok": True, "via": "anthropic"}
 
+    # Amazon Bedrock Mantle: base URL auto-completion, response_format fallback, and max_completion_tokens fallback
+    mantle_calls: list[dict] = []
+
+    def _mantle_handler(req: httpx.Request) -> httpx.Response:
+        assert str(req.url) == "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions"
+        assert req.headers.get("authorization") == "Bearer bedrock-mantle-key"
+        body = json.loads(req.content.decode("utf-8"))
+        mantle_calls.append(body)
+        if "response_format" in body:
+            return httpx.Response(400, text="Unsupported parameter: response_format is not supported for this model")
+        if "max_tokens" in body:
+            return httpx.Response(400, text="Use max_completion_tokens instead of max_tokens")
+        return httpx.Response(
+            200,
+            json={
+                "model": "anthropic.claude-sonnet-5",
+                "choices": [{"message": {"content": '```json\n{"ok": true, "via": "bedrock_mantle"}\n```'}}],
+                "usage": {"prompt_tokens": 110, "completion_tokens": 25, "total_tokens": 135},
+            },
+        )
+
+    bm = VlmClient(
+        provider="bedrock_mantle",
+        api_url="https://bedrock-mantle.us-east-1.api.aws/v1",
+        model="mistral.mistral-large-3-675b-instruct",
+        api_key="bedrock-mantle-key",
+        transport=httpx.MockTransport(_mantle_handler),
+    )
+    assert bm.generate_json(system_prompt="s", user_prompt="u", image_paths=[sample_img]) == {
+        "ok": True,
+        "via": "bedrock_mantle",
+    }
+    assert len(mantle_calls) == 3
+    assert "response_format" not in mantle_calls[-1]
+    assert "max_completion_tokens" in mantle_calls[-1] and "max_tokens" not in mantle_calls[-1]
+
+    # Bedrock Mantle with `anthropic.*` auto-routes to `/anthropic/v1/messages` with Bearer auth
+    def _mantle_anth_handler(req: httpx.Request) -> httpx.Response:
+        assert str(req.url) == "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"
+        assert req.headers.get("authorization") == "Bearer bedrock-mantle-key"
+        assert req.headers.get("anthropic-version") == "2023-06-01"
+        return httpx.Response(200, json={"content": [{"type": "text", "text": '{"ok": true, "via": "mantle_anthropic"}'}]})
+
+    bm_anth = VlmClient(
+        provider="bedrock_mantle",
+        api_url="https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+        model="anthropic.claude-sonnet-5",
+        api_key="bedrock-mantle-key",
+        transport=httpx.MockTransport(_mantle_anth_handler),
+    )
+    assert bm_anth.generate_json(system_prompt="s", user_prompt="u", image_paths=[sample_img]) == {
+        "ok": True,
+        "via": "mantle_anthropic",
+    }
+
+    # Amazon Bedrock native Converse REST API: modelId percent-encoding (`:` -> `%3A`), PNG image block, usage mapping
+    def _bedrock_converse_handler(req: httpx.Request) -> httpx.Response:
+        assert str(req.url) == "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.amazon.nova-pro-v1%3A0/converse"
+        assert req.headers.get("authorization") == "Bearer bedrock-api-key"
+        body = json.loads(req.content.decode("utf-8"))
+        assert body["system"] == [{"text": "s"}]
+        user_blocks = body["messages"][-1]["content"]
+        assert user_blocks[0]["image"]["format"] == "png"
+        assert len(user_blocks[0]["image"]["source"]["bytes"]) > 20
+        return httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": '{"ok": true, "via": "bedrock_converse"}'}]}},
+                "usage": {"inputTokens": 90, "outputTokens": 18, "totalTokens": 108},
+            },
+        )
+
+    bc = VlmClient(
+        provider="bedrock",
+        api_url="https://bedrock-runtime.us-west-2.amazonaws.com/model/{model}/converse",
+        model="us.amazon.nova-pro-v1:0",
+        api_key="bedrock-api-key",
+        transport=httpx.MockTransport(_bedrock_converse_handler),
+    )
+    assert bc.generate_json(system_prompt="s", user_prompt="u", image_paths=[sample_img]) == {
+        "ok": True,
+        "via": "bedrock_converse",
+    }
+    chat_res = bc.generate_chat(
+        system_prompt="s",
+        user_prompt="Inspect sensor",
+        history=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}],
+        image_paths=[sample_img],
+        max_tokens=200,
+    )
+    assert chat_res["provider"] == "bedrock"
+    assert chat_res["usage"] == {"prompt_tokens": 90, "completion_tokens": 18, "total_tokens": 108}
+
 
 def test_stages_1_to_5_end_to_end_retry_degradation_and_privacy_isolation(worker_config, tmp_path: Path):
     """

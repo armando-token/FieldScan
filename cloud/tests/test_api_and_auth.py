@@ -247,3 +247,170 @@ def test_device_auto_enroll_disabled_and_enabled(api_config, worker_config):
         assert r_res.json()["availability"] == "ready"
         m_resp = client.get("/v1/catalog/products/tzone_tht02/variants/v1_1_rs485/manifest", headers=dev_hdr)
         assert m_resp.status_code == 200
+
+
+def test_remote_assistant_status_and_chat_bedrock_mantle(api_config, api_token, tmp_path):
+    import base64
+    from dataclasses import replace
+    from io import BytesIO
+    import httpx
+    from PIL import Image
+    from fieldscan_cloud.twin.synthesizer import VlmClient
+
+    # Config loader auto-derives Bedrock Mantle URL from FS_BEDROCK_REGION
+    loaded = load_api_config(
+        {
+            "FS_ENV": "pilot",
+            "FS_CHANNEL": "pilot",
+            "FS_DATA_DIR": str(tmp_path),
+            "FS_DB_PATH": str(tmp_path / "catalog.sqlite3"),
+            "FS_SQLITE_JOURNAL_MODE": "DELETE",
+            "FS_API_TOKEN_SHA256": hashlib.sha256(api_token.encode("utf-8")).hexdigest(),
+            "FS_ASSISTANT_ENABLED": "true",
+            "FS_ASSISTANT_PROVIDER": "bedrock_mantle",
+            "FS_BEDROCK_REGION": "us-west-2",
+            "FS_ASSISTANT_MODEL": "google.gemma-4-31b-it",
+            "FS_ASSISTANT_API_KEY": "bedrock-secret-key-xyz",
+        }
+    )
+    assert loaded.assistant_enabled is True
+    assert loaded.assistant_api_url == "https://bedrock-mantle.us-west-2.api.aws/v1/chat/completions"
+    assert loaded.assistant_model == "google.gemma-4-31b-it"
+
+    auth_hdr = {"Authorization": f"Bearer {api_token}"}
+
+    # Case 1: Disabled by default -> status.enabled=False, chat -> 503 ASSISTANT_DISABLED
+    with TestClient(create_app(api_config)) as client:
+        assert client.get("/v1/assistant/status").status_code == 401
+        st_off = client.get("/v1/assistant/status", headers=auth_hdr)
+        assert st_off.status_code == 200
+        assert st_off.json()["enabled"] is False
+        assert st_off.json()["model"] is None
+
+        r_dis = client.post("/v1/assistant/chat", headers=auth_hdr, json={"user_text": "Hello"})
+        assert r_dis.status_code == 503
+        assert r_dis.json()["error"]["code"] == "ASSISTANT_DISABLED"
+
+    # Create a real ~22KB JPEG (> 16KB catalog limit) to test per-route body guard + vision flow
+    img = Image.new("RGB", (480, 360), (40, 120, 200))
+    px = img.load()
+    for y in range(0, 360, 2):
+        for x in range(0, 480, 2):
+            px[x, y] = ((x * 7) % 255, (y * 5) % 255, ((x + y) * 3) % 255)
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=92)
+    jpeg_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    assert len(jpeg_b64) > 16384
+
+    captured_requests: list[dict] = []
+
+    def _mantle_chat_handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content.decode("utf-8"))
+        captured_requests.append(body)
+        last_user = body["messages"][-1]["content"]
+        if isinstance(last_user, str) and "TRIGGER_429" in last_user:
+            return httpx.Response(429, text="Too Many Requests")
+        if isinstance(last_user, str) and "TRIGGER_500" in last_user:
+            return httpx.Response(500, text="Internal error with secret bedrock-secret-key-xyz")
+        has_img = isinstance(last_user, list) and any(item.get("type") == "image_url" for item in last_user)
+        reply = "I see the sensor housing clearly on the camera feed." if has_img else "Slave #1 uses DIP Pin 8 ON."
+        return httpx.Response(
+            200,
+            json={
+                "model": "google.gemma-4-31b-it",
+                "choices": [{"message": {"content": reply}}],
+                "usage": {"prompt_tokens": 80, "completion_tokens": 14, "total_tokens": 94},
+            },
+        )
+
+    mock_vlm = VlmClient(
+        provider="bedrock_mantle",
+        api_url="https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+        model="google.gemma-4-31b-it",
+        api_key="bedrock-secret-key-xyz",
+        transport=httpx.MockTransport(_mantle_chat_handler),
+    )
+    cfg_on = replace(
+        api_config,
+        assistant_enabled=True,
+        assistant_provider="bedrock_mantle",
+        assistant_model="google.gemma-4-31b-it",
+        assistant_api_key="bedrock-secret-key-xyz",
+        assistant_max_body_bytes=300_000,
+        assistant_max_tokens=256,
+    )
+
+    with TestClient(create_app(cfg_on, assistant_client=mock_vlm)) as client:
+        st_on = client.get("/v1/assistant/status", headers=auth_hdr)
+        assert st_on.status_code == 200
+        st_json = st_on.json()
+        assert st_json["enabled"] is True
+        assert st_json["provider"] == "bedrock_mantle"
+        assert st_json["model"] == "google.gemma-4-31b-it"
+        assert "bedrock-secret-key-xyz" not in st_on.text
+
+        # Text-only multi-turn chat
+        r_txt = client.post(
+            "/v1/assistant/chat",
+            headers=auth_hdr,
+            json={
+                "messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Ready."}],
+                "user_text": "How do I set DIP slave 1?",
+                "max_tokens": 500,  # clamped to cfg.assistant_max_tokens (256)
+            },
+        )
+        assert r_txt.status_code == 200
+        j_txt = r_txt.json()
+        assert "DIP Pin 8" in j_txt["reply_text"]
+        assert j_txt["provider"] == "bedrock_mantle"
+        assert j_txt["usage"]["total_tokens"] == 94
+        assert captured_requests[-1]["max_tokens"] == 256
+        assert "response_format" not in captured_requests[-1]
+
+        # Multimodal JPEG > 16KB succeeds on /v1/assistant/chat
+        r_vis = client.post(
+            "/v1/assistant/chat",
+            headers=auth_hdr,
+            json={
+                "user_text": "Inspect the sensor in the frame",
+                "image_b64": f"data:image/jpeg;base64,{jpeg_b64}",
+                "image_media_type": "image/jpeg",
+            },
+        )
+        assert r_vis.status_code == 200
+        assert "sensor housing" in r_vis.json()["reply_text"]
+
+        # Catalog endpoint STILL enforces strict 16KB cap
+        r_cat_huge = client.post(
+            "/v1/catalog/resolve",
+            headers={**auth_hdr, "Content-Type": "application/json"},
+            content=b'{"manufacturer":"' + (b"A" * 20000) + b'","model":"B"}',
+        )
+        assert r_cat_huge.status_code == 413
+
+        # Corrupt base64 image -> 422 INVALID_IMAGE
+        r_bad_img = client.post(
+            "/v1/assistant/chat",
+            headers=auth_hdr,
+            json={"user_text": "Look", "image_b64": "bm90LWFuLWltYWdl"},
+        )
+        assert r_bad_img.status_code == 422
+        assert r_bad_img.json()["error"]["code"] == "INVALID_IMAGE"
+
+        # Oversized assistant body (> assistant_max_body_bytes) -> 413
+        r_asst_huge = client.post(
+            "/v1/assistant/chat",
+            headers={**auth_hdr, "Content-Type": "application/json"},
+            content=b'{"user_text":"hi","image_b64":"' + (b"A" * 350_000) + b'"}',
+        )
+        assert r_asst_huge.status_code == 413
+
+        # Upstream 429 -> 429 with Retry-After
+        r_429 = client.post("/v1/assistant/chat", headers=auth_hdr, json={"user_text": "TRIGGER_429"})
+        assert r_429.status_code == 429
+        assert r_429.headers.get("Retry-After") == "5"
+
+        # Upstream 500 -> 502 sanitized (NEVER leaks API key or upstream secret)
+        r_502 = client.post("/v1/assistant/chat", headers=auth_hdr, json={"user_text": "TRIGGER_500"})
+        assert r_502.status_code == 502
+        assert "bedrock-secret-key-xyz" not in r_502.text

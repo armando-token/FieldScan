@@ -126,6 +126,7 @@ public enum FieldScanCatalogContract {
     public static let allowedArtifactRoles: Set<String> = [
         "manual_pdf",
         "manual_index",
+        "document_index",
         "manual_page_image",
         "manual_markdown",
         "twin_glb",
@@ -147,6 +148,7 @@ public enum FieldScanCatalogContract {
     public static let roleMimeTypes: [String: String] = [
         "manual_pdf": "application/pdf",
         "manual_index": "application/json; charset=utf-8",
+        "document_index": "application/json; charset=utf-8",
         "manual_page_image": "image/png",
         "manual_markdown": "text/markdown; charset=utf-8",
         "twin_glb": "model/gltf-binary",

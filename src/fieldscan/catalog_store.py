@@ -181,6 +181,7 @@ FORBIDDEN_EXECUTABLE_EXTS = {
 ALLOWED_ARTIFACT_ROLES = {
     "manual_pdf",
     "manual_index",
+    "document_index",
     "manual_page_image",
     "manual_markdown",
     "twin_glb",
@@ -202,6 +203,7 @@ ALLOWED_TWIN_ACTION_KINDS = {
 ROLE_MIME_TYPES: dict[str, str] = {
     "manual_pdf": "application/pdf",
     "manual_index": "application/json; charset=utf-8",
+    "document_index": "application/json; charset=utf-8",
     "manual_page_image": "image/png",
     "manual_markdown": "text/markdown; charset=utf-8",
     "twin_glb": "model/gltf-binary",
@@ -807,8 +809,9 @@ class FieldScanPackageStore:
                 doc_id = str(pdf_art.get("document_id") or Path(pdf_art["path"]).stem)
                 doc_page_counts[doc_id] = pcount
 
-        if "manual_index" in artifacts_by_role:
-            idx_path = stage_pkg_dir / artifacts_by_role["manual_index"][0]["path"]
+        idx_role_arts = artifacts_by_role.get("manual_index") or artifacts_by_role.get("document_index") or []
+        if idx_role_arts:
+            idx_path = stage_pkg_dir / idx_role_arts[0]["path"]
             idx_obj = _parse_json_strict_no_duplicate_keys(idx_path.read_bytes())
             if not isinstance(idx_obj, dict):
                 raise CatalogDomainError("SEMANTIC_REFERENCE_BROKEN", "manual_index must be a JSON object")
@@ -998,7 +1001,10 @@ class FieldScanPackageStore:
                     raise RuntimeError("SIMULATED_CRASH_AFTER_MOVE_BEFORE_DB_COMMIT")
 
                 now_utc = utc_now_iso()
-                revocations = manifest.get("revoked_instructions") or []
+                revocations = list(manifest.get("revoked_instructions") or [])
+                for wp_id in manifest.get("withdrawn_procedures") or []:
+                    if str(wp_id).strip():
+                        revocations.append({"instruction_id": str(wp_id).strip(), "reason": "Withdrawn by catalog publication"})
                 with self._connect() as conn:
                     conn.execute(
                         """
@@ -1384,7 +1390,7 @@ class FieldScanPackageStore:
         arts = pkg["artifacts"]
 
         docs_out: list[dict[str, Any]] = []
-        idx_art = next((a for a in arts if a["role"] == "manual_index"), None)
+        idx_art = next((a for a in arts if a["role"] in ("manual_index", "document_index")), None)
         pdf_arts = {
             str(a.get("document_id") or Path(a["path"]).stem): a
             for a in arts

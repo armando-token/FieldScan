@@ -401,8 +401,9 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         }
         lock.unlock()
 
+        let cleanMfg = manufacturer?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let body: [String: Any] = [
-            "manufacturer": (manufacturer?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? manufacturer! : NSNull(),
+            "manufacturer": cleanMfg.isEmpty ? "UNKNOWN" : cleanMfg,
             "model": model.trimmingCharacters(in: .whitespacesAndNewlines),
             "variant": (variant?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? variant! : NSNull(),
             "hardware_revision": (hardwareRevision?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? hardwareRevision! : NSNull(),

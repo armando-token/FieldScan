@@ -6657,16 +6657,18 @@ function renderCloudResolveResult(data) {
     dom.catalogCloudResultBox.appendChild(pollBtn);
   }
 
-  const cands = Array.isArray(data.candidates)
+  const directPid = data.product_id || data.identity?.product_id || data.cached_publication?.product_id;
+  const directVid = data.variant_id || data.identity?.variant_id || data.cached_publication?.variant_id;
+  const cands = Array.isArray(data.candidates) && data.candidates.length > 0
     ? data.candidates
-    : data.product_id && data.variant_id
-      ? [data]
+    : directPid && directVid
+      ? [{ ...data, product_id: directPid, variant_id: directVid }]
       : [];
   cands.forEach((c) => {
     const row = document.createElement('div');
     row.className = 'catalog-pkg-head';
     const label = document.createElement('span');
-    label.textContent = `${c.title || `${c.product_id}/${c.variant_id}`} ${c.discriminant_hint ? `— ${c.discriminant_hint}` : ''}`;
+    label.textContent = `${c.title || c.display_name || `${c.product_id}/${c.variant_id}`} ${c.discriminant_hint ? `— ${c.discriminant_hint}` : ''}`;
     const dlBtn = document.createElement('button');
     dlBtn.type = 'button';
     dlBtn.className = 'chip-btn chip-btn-cv active';

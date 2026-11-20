@@ -221,7 +221,7 @@ public final class FieldScanPackageStore {
             docPageCounts[docId] = pCount
         }
 
-        if let idxArt = byRole["manual_index"]?.first,
+        if let idxArt = (byRole["manual_index"]?.first ?? byRole["document_index"]?.first),
            let rel = idxArt["path"] as? String {
             let idxData = try Data(contentsOf: stageDir.appendingPathComponent(rel))
             guard let idxObj = try FieldScanCatalogContract.parseJSONStrictNoDuplicateKeys(idxData) as? [String: Any] else {
@@ -445,7 +445,10 @@ public final class FieldScanPackageStore {
             let envStr = String(data: envelopeData, encoding: .utf8) ?? "{}"
             let manStr = String(data: (try? JSONSerialization.data(withJSONObject: manifest)) ?? Data("{}".utf8), encoding: .utf8) ?? "{}"
             let capsStr = String(data: (try? JSONSerialization.data(withJSONObject: manifest["capabilities"] ?? [:])) ?? Data("{}".utf8), encoding: .utf8) ?? "{}"
-            let revList = (manifest["revoked_instructions"] as? [[String: Any]]) ?? []
+            var revList = (manifest["revoked_instructions"] as? [[String: Any]]) ?? []
+            for wpId in ((manifest["withdrawn_procedures"] as? [String]) ?? []) where !wpId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                revList.append(["instruction_id": wpId.trimmingCharacters(in: .whitespacesAndNewlines), "reason": "Withdrawn by catalog publication"])
+            }
             let revStr = String(data: (try? JSONSerialization.data(withJSONObject: revList)) ?? Data("[]".utf8), encoding: .utf8) ?? "[]"
 
             if let db = db {
@@ -1063,7 +1066,7 @@ public final class FieldScanPackageStore {
                 pdfByDoc[did] = a
             } else if r == "manual_page_image", let p = a["path"] as? String {
                 imgByPath[p] = a
-            } else if r == "manual_index" {
+            } else if r == "manual_index" || r == "document_index" {
                 idxArt = a
             }
         }

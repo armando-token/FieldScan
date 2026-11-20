@@ -307,7 +307,7 @@ class FieldScanCatalogClient:
 
         # Strict minimal payload — NEVER include serial_number, photos, bench IPs, or notes!
         body = {
-            "manufacturer": (manufacturer or "").strip() or None,
+            "manufacturer": (manufacturer or "").strip() or "UNKNOWN",
             "model": model.strip(),
             "variant": (variant or "").strip() or None,
             "hardware_revision": (hardware_revision or "").strip() or None,

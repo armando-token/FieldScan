@@ -2334,10 +2334,11 @@ public final class FieldScanSessionEngine {
         }
 
         // Persist in durable general history when outside an open session
+        let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         if let db = db {
             var checkStmt: OpaquePointer?
             if sqlite3_prepare_v2(db, "SELECT payload_json FROM copilot_general_history WHERE turn_id = ?;", -1, &checkStmt, nil) == SQLITE_OK {
-                sqlite3_bind_text(checkStmt, 1, (turnId as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(checkStmt, 1, (turnId as NSString).utf8String, -1, sqliteTransient)
                 if sqlite3_step(checkStmt) == SQLITE_ROW {
                     let s = String(cString: sqlite3_column_text(checkStmt, 0))
                     sqlite3_finalize(checkStmt)
@@ -2356,14 +2357,14 @@ public final class FieldScanSessionEngine {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?);
             """
             if sqlite3_prepare_v2(db, insSql, -1, &insStmt, nil) == SQLITE_OK {
-                sqlite3_bind_text(insStmt, 1, (turnId as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(insStmt, 2, (nowUTC as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(insStmt, 3, (inputMode as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(insStmt, 4, (language as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(insStmt, 5, (provider as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(insStmt, 6, (userText as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(insStmt, 7, (assistantReply as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(insStmt, 8, (pStr as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(insStmt, 1, (turnId as NSString).utf8String, -1, sqliteTransient)
+                sqlite3_bind_text(insStmt, 2, (nowUTC as NSString).utf8String, -1, sqliteTransient)
+                sqlite3_bind_text(insStmt, 3, (inputMode as NSString).utf8String, -1, sqliteTransient)
+                sqlite3_bind_text(insStmt, 4, (language as NSString).utf8String, -1, sqliteTransient)
+                sqlite3_bind_text(insStmt, 5, (provider as NSString).utf8String, -1, sqliteTransient)
+                sqlite3_bind_text(insStmt, 6, (userText as NSString).utf8String, -1, sqliteTransient)
+                sqlite3_bind_text(insStmt, 7, (assistantReply as NSString).utf8String, -1, sqliteTransient)
+                sqlite3_bind_text(insStmt, 8, (pStr as NSString).utf8String, -1, sqliteTransient)
                 sqlite3_step(insStmt)
                 sqlite3_finalize(insStmt)
             }
@@ -2433,10 +2434,11 @@ public final class FieldScanSessionEngine {
             return ["ok": true, "deduplicated": false, "seq": nextSeq, "ack": ackDoc]
         }
 
+        let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         if let db = db {
             var stmt: OpaquePointer?
             if sqlite3_prepare_v2(db, "SELECT payload_json FROM copilot_general_history WHERE turn_id = ?;", -1, &stmt, nil) == SQLITE_OK {
-                sqlite3_bind_text(stmt, 1, (turnId as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 1, (turnId as NSString).utf8String, -1, sqliteTransient)
                 if sqlite3_step(stmt) == SQLITE_ROW {
                     let s = String(cString: sqlite3_column_text(stmt, 0))
                     sqlite3_finalize(stmt)
@@ -2446,8 +2448,8 @@ public final class FieldScanSessionEngine {
                            let uStr = String(data: uData, encoding: .utf8) {
                             var uStmt: OpaquePointer?
                             if sqlite3_prepare_v2(db, "UPDATE copilot_general_history SET payload_json = ? WHERE turn_id = ?;", -1, &uStmt, nil) == SQLITE_OK {
-                                sqlite3_bind_text(uStmt, 1, (uStr as NSString).utf8String, -1, nil)
-                                sqlite3_bind_text(uStmt, 2, (turnId as NSString).utf8String, -1, nil)
+                                sqlite3_bind_text(uStmt, 1, (uStr as NSString).utf8String, -1, sqliteTransient)
+                                sqlite3_bind_text(uStmt, 2, (turnId as NSString).utf8String, -1, sqliteTransient)
                                 sqlite3_step(uStmt)
                                 sqlite3_finalize(uStmt)
                             }

@@ -3556,6 +3556,7 @@ function applyCatalogDescriptor(descriptor, generation = null) {
 
   const nextGen = generation != null ? Number(generation) : state.sceneGeneration + 1;
   loadCatalogSceneFromDescriptor(descriptor, nextGen);
+  syncVoiceContextToBackend();
 }
 
 function rebuildManualQuickPillsForActiveDocument() {
@@ -4139,6 +4140,9 @@ function applyTelemetryPayload(data) {
     state.authorizedBusSlaveId = data.authorized_bus_slave_id;
   } else if (typeof mb.target_slave_id === 'number') {
     state.authorizedBusSlaveId = mb.target_slave_id;
+  }
+  if (typeof data.scene_generation === 'number' && data.scene_generation > Number(state.sceneGeneration) && !state.sceneLoadInProgress) {
+    state.sceneGeneration = data.scene_generation;
   }
   if (data.guidance && typeof data.guidance === 'object') {
     renderGuidanceBar(data.guidance);
@@ -5387,22 +5391,28 @@ function handleCopilotResponse(res, turnMeta = null) {
   if (!res || typeof res !== 'object') return;
   dom.nextStepBox?.classList.remove('thinking');
 
-  // Generation & Session Fence (`Finding 1 & Finding 4`): discard stale responses cleanly before mutating UI or TTS!
+  // Generation & Session Fence (`Finding 1 & Finding 4`): discard genuinely stale responses (`respGen < state.sceneGeneration`)
+  // before mutating UI or TTS; if the backend is monotonically ahead (e.g. WebView boot), sync cleanly instead of self-dropping!
   const respGen = res.scene_generation != null ? Number(res.scene_generation) : null;
-  if (respGen !== null && respGen !== Number(state.sceneGeneration) && !res.catalog_descriptor) {
-    if (res.turn_id) {
-      postCopilotActionAck({
-        turn_id: res.turn_id,
-        session_id: res.session_id || state.activeSessionId,
-        scene_generation: state.sceneGeneration,
-        input_mode: res.input_mode || turnMeta?.input_mode || 'text',
-        language: res.language || state.preferredLanguage,
-        stale: true,
-        receipts: [{ action_id: 'turn.fence', status: 'stale', reason: `scene_generation_${respGen}_vs_${state.sceneGeneration}` }],
-        speak_verified_outcome: false,
-      });
+  if (respGen !== null && !res.catalog_descriptor) {
+    if (respGen < Number(state.sceneGeneration)) {
+      if (res.turn_id) {
+        postCopilotActionAck({
+          turn_id: res.turn_id,
+          session_id: res.session_id || state.activeSessionId,
+          scene_generation: state.sceneGeneration,
+          input_mode: res.input_mode || turnMeta?.input_mode || 'text',
+          language: res.language || state.preferredLanguage,
+          stale: true,
+          receipts: [{ action_id: 'turn.fence', status: 'stale', reason: `scene_generation_${respGen}_vs_${state.sceneGeneration}` }],
+          speak_verified_outcome: false,
+        });
+      }
+      return;
     }
-    return;
+    if (respGen > Number(state.sceneGeneration) && !state.sceneLoadInProgress) {
+      state.sceneGeneration = respGen;
+    }
   }
 
   if (res.turn_id) state.lastTurnId = res.turn_id;
@@ -5456,7 +5466,7 @@ function handleCopilotResponse(res, turnMeta = null) {
 
   if (hasUnifiedPlan) {
     const tStart = turnMeta?.phrase_end_ms || performance.now();
-    executeCopilotActionPlan(res.copilot_action_plan, res, tStart);
+    executeCopilotActionPlan(res.copilot_action_plan, res, tStart).catch(() => {});
   } else {
     if (res.twin_action_v1 && typeof res.twin_action_v1 === 'object' && state.sceneOrigin === 'catalog_glb') {
       applyTwinActionV1(res.twin_action_v1, {
@@ -5925,6 +5935,9 @@ async function startNativeIosHandsFreeMode() {
       return false;
     }
 
+    if (typeof startData.scene_generation === 'number' && startData.scene_generation >= Number(state.sceneGeneration)) {
+      state.sceneGeneration = startData.scene_generation;
+    }
     state.handsFreeEnabled = true;
     state.usingNativeHandsFree = true;
     syncMicDeckIdleUi();

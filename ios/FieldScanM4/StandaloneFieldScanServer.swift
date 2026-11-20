@@ -1365,8 +1365,46 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
 
     // MARK: - HTTP Response Writers & MJPEG Streamer
 
+    private static func sanitizeJSONValue(_ value: Any) -> Any {
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional {
+            if let first = mirror.children.first {
+                return sanitizeJSONValue(first.value)
+            }
+            return NSNull()
+        }
+        if let dict = value as? [String: Any] {
+            var out: [String: Any] = [:]
+            out.reserveCapacity(dict.count)
+            for (k, v) in dict {
+                out[k] = sanitizeJSONValue(v)
+            }
+            return out
+        }
+        if let arr = value as? [Any] {
+            return arr.map { sanitizeJSONValue($0) }
+        }
+        if let d = value as? Double {
+            return d.isFinite ? d : 0.0
+        }
+        if let f = value as? Float {
+            return f.isFinite ? f : Float(0.0)
+        }
+        if value is String || value is Int || value is Bool || value is NSNumber || value is NSNull {
+            return value
+        }
+        return String(describing: value)
+    }
+
     private func sendJSONResponse(on connection: NWConnection, statusCode: Int, payload: [String: Any]) {
-        let jsonData = (try? JSONSerialization.data(withJSONObject: payload, options: [])) ?? Data("{}".utf8)
+        let safePayload = Self.sanitizeJSONValue(payload)
+        let jsonData: Data
+        if JSONSerialization.isValidJSONObject(safePayload),
+           let encoded = try? JSONSerialization.data(withJSONObject: safePayload, options: []) {
+            jsonData = encoded
+        } else {
+            jsonData = Data("{}".utf8)
+        }
         sendHTTPResponse(
             on: connection,
             statusCode: statusCode,
@@ -5110,7 +5148,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             out["assistant_message"] = msg
             out["authorized_bus_slave_id"] = authBusSidInitial
             out["bus_target_mutated"] = false
-            out["audio_wav_b64"] = synthesizeSpeechB64(msg, speakOnDevice: !deferTts, language: langOut)
+            out["audio_wav_b64"] = synthesizeSpeechB64(msg, speakOnDevice: true, language: langOut)
             return out
         }
 
@@ -5189,6 +5227,19 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                     pendingDeferredVoiceTurns[turnId] = (text: replyText, language: planLang)
                 }
                 stateLock.unlock()
+
+                // Failsafe fallback: if the WebView UI ack is missed or delayed > 1.6s and scene did not change,
+                // speak the verified reply instead of leaving the iPad silent.
+                voiceDiagnosisQueue.asyncAfter(deadline: .now() + 1.6) { [weak self] in
+                    guard let self = self else { return }
+                    self.stateLock.lock()
+                    let stillSameScene = (self.activeSceneGeneration == sceneGen)
+                    let fallback = self.pendingDeferredVoiceTurns.removeValue(forKey: turnId)
+                    self.stateLock.unlock()
+                    if stillSameScene, let fb = fallback, !fb.text.isEmpty {
+                        _ = self.synthesizeSpeechB64(fb.text, speakOnDevice: true, language: fb.language)
+                    }
+                }
             }
             let audioB64 = synthesizeSpeechB64(replyText, speakOnDevice: !shouldDefer, language: planLang)
 
@@ -5438,7 +5489,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let andonNow = mbHealthy ? "GREEN" : (explodePcb ? "YELLOW" : "RED")
         stateLock.unlock()
 
-        let audioB64 = synthesizeSpeechB64(diagnosisText, speakOnDevice: !deferTts, language: detLang)
+        // Conversational / vision / LLM replies have no deferred UI action_ack step — speak immediately on-device!
+        let audioB64 = synthesizeSpeechB64(diagnosisText, speakOnDevice: true, language: detLang)
         let shouldHighlightZone = (intentStr == "sensor_diagnostics") && (!mbHealthy || pcbOpen) && (targetZoneOpt != nil && !(targetZoneOpt!.isEmpty))
         let focusDipOut = explodePcb || ((twinActionOpt?["open_dip_pip"] as? Bool) == true)
 
@@ -6654,10 +6706,11 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             ? "es"
             : (((payload["language"] as? String)?.lowercased() == "en") ? "en" : preferredVoiceLanguage)
         preferredVoiceLanguage = reqLang
+        let currentSceneGenNow = activeSceneGeneration
         activeHandsFreeContext = [
             "session_id": (payload["session_id"] as? String) ?? FieldScanSessionEngine.shared.currentActiveSessionId ?? "",
             "manifest_sha256": (payload["manifest_sha256"] as? String) ?? "",
-            "scene_generation": intFromAny(payload["scene_generation"]) ?? activeSceneGeneration,
+            "scene_generation": currentSceneGenNow,
             "active_document_id": (payload["active_document_id"] as? String) ?? "",
             "language": reqLang,
             "dip_address": simulatedVisualDipAddress,
@@ -6735,6 +6788,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "permission_state": perm,
             "native_mic": true,
             "language": reqLang,
+            "scene_generation": currentSceneGenNow,
             "authorized_bus_slave_id": authSidNow,
             "bus_target_mutated": false,
         ]
@@ -6814,9 +6868,11 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let lastChange = lastTranscriptChangeTime
         let dipAddr = simulatedVisualDipAddress
         let capturedHfCtx = activeHandsFreeContext
-        let capturedSceneGen = intFromAny(capturedHfCtx["scene_generation"]) ?? activeSceneGeneration
-        let capturedSessionId = ((capturedHfCtx["session_id"] as? String)?.isEmpty == false ? (capturedHfCtx["session_id"] as? String) : nil)
-            ?? FieldScanSessionEngine.shared.currentActiveSessionId
+        // Always capture the live authoritative scene generation at the moment THIS turn begins,
+        // so `stillSameScene` fences real mid-turn scene switches without dropping turns due to prior loads.
+        let capturedSceneGen = activeSceneGeneration
+        let capturedSessionId = FieldScanSessionEngine.shared.currentActiveSessionId
+            ?? ((capturedHfCtx["session_id"] as? String)?.isEmpty == false ? (capturedHfCtx["session_id"] as? String) : nil)
         let capturedManifestSha = ((capturedHfCtx["manifest_sha256"] as? String)?.isEmpty == false ? (capturedHfCtx["manifest_sha256"] as? String) : nil)
         let capturedLang = (capturedHfCtx["language"] as? String) ?? preferredVoiceLanguage
         let turnId = "turn-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10)).lowercased()

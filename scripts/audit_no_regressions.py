@@ -291,6 +291,14 @@ def audit_swift_voice_bargein_twin_and_xcode(errors: list[str]) -> None:
     if hf_match and re.search(r"\btargetSlaveId\s*=", hf_match.group(0)):
         _fail(errors, "[SWIFT-BUS] Regression: `startHandsFreeVoiceMode` mutated `targetSlaveId`!")
 
+    # Live voice non-silence permanent guard: conversational/LLM path must NEVER pass `speakOnDevice: !deferTts`
+    if "synthesizeSpeechB64(diagnosisText, speakOnDevice: !deferTts" in srv_swift:
+        _fail(errors, "[SWIFT-VOICE] Regression: non-action-plan reply silenced by `deferTts` without UI ack!")
+    if "let capturedSceneGen = activeSceneGeneration" not in srv_swift:
+        _fail(errors, "[SWIFT-VOICE] Regression: hands-free turn must capture live `activeSceneGeneration` at turn start!")
+    if "private static func sanitizeJSONValue" not in srv_swift:
+        _fail(errors, "[SWIFT-JSON] Missing JSON sanitizer in `sendJSONResponse`!")
+
     if "es-MX" in srv_swift or "es-ES" in srv_swift:
         _fail(errors, "[SWIFT-EN] Residual Spanish recognizer/TTS locale found in StandaloneFieldScanServer.swift")
 

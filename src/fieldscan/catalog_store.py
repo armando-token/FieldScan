@@ -1376,9 +1376,65 @@ class FieldScanPackageStore:
             },
         }
 
+    def build_empty_workspace_context(self) -> dict[str, Any]:
+        """Return canonical empty workspace context when cleared for fresh sensor onboarding."""
+        return {
+            "product_id": "unassigned",
+            "variant_id": "none",
+            "title": "No Sensor Loaded",
+            "publication_seq": 0,
+            "manifest_sha256": "empty-workspace",
+            "local_profile_id": None,
+            "content_origin": "empty_workspace",
+            "bench_modbus_homologated": False,
+            "capabilities": {
+                "documentation": False,
+                "interactive_twin": False,
+                "procedures": False,
+            },
+        }
+
+    def reset_workspace_to_clean_slate(self, *, clear_installed_cloud_packages: bool = True) -> dict[str, Any]:
+        """Clear active sensor context to empty_workspace and optionally remove cached cloud packages."""
+        with self._lock:
+            removed_count = 0
+            if clear_installed_cloud_packages:
+                with self._connect() as conn:
+                    row = conn.execute("SELECT COUNT(*) AS c FROM installations").fetchone()
+                    removed_count = int(row["c"]) if row else 0
+                    conn.execute("DELETE FROM installations")
+                    conn.execute("DELETE FROM active_variants")
+                    conn.execute("DELETE FROM revoked_instructions")
+                if self.packages_dir.is_dir():
+                    for child in list(self.packages_dir.iterdir()):
+                        if child.is_dir():
+                            shutil.rmtree(child, ignore_errors=True)
+                        else:
+                            child.unlink(missing_ok=True)
+            empty_ctx = self.build_empty_workspace_context()
+            self._active_selection = empty_ctx
+            desc = {
+                "context": dict(empty_ctx),
+                "scene_origin": "empty_workspace",
+                "cad_exports_supported": [],
+                "documents": [],
+                "twin": None,
+                "revoked_instructions": [],
+            }
+            return {
+                "ok": True,
+                "removed_packages_count": removed_count,
+                "selected_context": dict(empty_ctx),
+                "catalog_descriptor": desc,
+            }
+
     def select_context_for_next_session(self, manifest_sha256: str | None) -> dict[str, Any]:
         """Select a verified catalog package (or None / 'bundle' for bundled THT-02) for upcoming sessions."""
         with self._lock:
+            if manifest_sha256 in ("empty_workspace", "empty-workspace"):
+                empty_ctx = self.build_empty_workspace_context()
+                self._active_selection = empty_ctx
+                return dict(empty_ctx)
             if not manifest_sha256 or manifest_sha256 == "bundle":
                 self._active_selection = None
                 return self.build_bundle_default_context()
@@ -1401,6 +1457,8 @@ class FieldScanPackageStore:
     def get_selected_context(self) -> dict[str, Any]:
         with self._lock:
             if self._active_selection is not None:
+                if self._active_selection.get("content_origin") == "empty_workspace":
+                    return dict(self._active_selection)
                 msha = str(self._active_selection["manifest_sha256"])
                 try:
                     _ = self.get_installed_package(msha)
@@ -1412,6 +1470,15 @@ class FieldScanPackageStore:
     def build_scene_and_manual_descriptor(self, context_ref: dict[str, Any] | None = None) -> dict[str, Any]:
         """Load the full resolved manual documents, 3D GLB/parametric scene descriptor, and actions for a context."""
         ctx = context_ref or self.get_selected_context()
+        if ctx.get("content_origin") == "empty_workspace":
+            return {
+                "context": ctx,
+                "scene_origin": "empty_workspace",
+                "cad_exports_supported": [],
+                "documents": [],
+                "twin": None,
+                "revoked_instructions": [],
+            }
         if ctx.get("content_origin") != "catalog":
             return {
                 "context": ctx,

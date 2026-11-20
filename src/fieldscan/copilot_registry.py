@@ -397,6 +397,19 @@ def build_action_registry(project_root: Path = PROJECT_ROOT) -> list[dict[str, A
             "verifiable_outcome": "calibrationPlannedModal.hidden === false",
         },
         {
+            "id": "config.open_escalation",
+            "category": "config",
+            "intent_mode": "show",
+            "description": "Open the Manufacturer Engineering Escalation & Outbox modal.",
+            "params_schema": {},
+            "aliases_en": ["open escalation", "email manufacturer", "open outbox", "contact manufacturer"],
+            "target_surface": "escalationModal",
+            "permissions": ["local_ui_read"],
+            "availability": "always",
+            "handler": "executeConfigOpenEscalation",
+            "verifiable_outcome": "escalationModal.hidden === false",
+        },
+        {
             "id": "config.open_sensor_spec",
             "category": "config",
             "intent_mode": "show",
@@ -461,6 +474,19 @@ def build_action_registry(project_root: Path = PROJECT_ROOT) -> list[dict[str, A
             "availability": "requires_3d_explode",
             "handler": "executeTwinSetExplode",
             "verifiable_outcome": "state.exploded === params.exploded",
+        },
+        {
+            "id": "twin.rotate_view",
+            "category": "twin",
+            "intent_mode": "apply",
+            "description": "Orbit, rotate, or zoom the active 3D Digital Twin camera to any requested angle (left, right, front, back, top, bottom, zoom_in, zoom_out, spin).",
+            "params_schema": {"direction": "enum(left,right,front,back,top,bottom,zoom_in,zoom_out,spin)"},
+            "aliases_en": ["rotate twin", "turn around", "zoom in", "zoom out", "show back", "show top", "spin model"],
+            "target_surface": "canvasStage",
+            "permissions": ["local_ui_write"],
+            "availability": "requires_3d_scene",
+            "handler": "executeTwinRotateView",
+            "verifiable_outcome": "camera_view_adjusted",
         },
         {
             "id": "twin.focus_part",
@@ -660,6 +686,45 @@ def build_action_registry(project_root: Path = PROJECT_ROOT) -> list[dict[str, A
             "handler": "executeSessionPrepareStockDraft",
             "verifiable_outcome": "local_stock_draft_saved || unverified_blocked",
         },
+        {
+            "id": "catalog.clear_sensor",
+            "category": "config",
+            "intent_mode": "apply",
+            "description": "Clear active sensor profile and cached cloud packages to a clean empty workspace without modifying PUSR gateway settings.",
+            "params_schema": {"clear_installed_packages": "bool?"},
+            "aliases_en": ["clear sensor", "reset sensor", "wipe sensor", "clear sensor workspace"],
+            "target_surface": "catalogModal",
+            "permissions": ["local_catalog_write"],
+            "availability": "always",
+            "handler": "executeCatalogClearSensor",
+            "verifiable_outcome": "scene_origin === 'empty_workspace' && pusr_preserved === true",
+        },
+        {
+            "id": "catalog.identify_new_sensor",
+            "category": "config",
+            "intent_mode": "show",
+            "description": "Capture a live camera snapshot and prompt the operator for the new sensor's manufacturer and model.",
+            "params_schema": {"capture_photo": "bool?"},
+            "aliases_en": ["new sensor", "identify new sensor", "identify this sensor", "scan new sensor"],
+            "target_surface": "sensorOnboardModal",
+            "permissions": ["local_ui_read"],
+            "availability": "always",
+            "handler": "executeCatalogIdentifyNewSensor",
+            "verifiable_outcome": "sensorOnboardModal.hidden === false",
+        },
+        {
+            "id": "catalog.onboard_sensor",
+            "category": "config",
+            "intent_mode": "apply",
+            "description": "Populate or submit a new sensor onboarding request to FieldScan Cloud with live progress and automatic hot-load.",
+            "params_schema": {"manufacturer": "string?", "model": "string?", "variant": "string?", "auto_submit": "bool?", "force_refresh": "bool?"},
+            "aliases_en": ["this is a", "this sensor is", "onboard sensor", "process in cloud", "download manual for"],
+            "target_surface": "sensorOnboardModal",
+            "permissions": ["catalog_cloud_authorized"],
+            "availability": "always",
+            "handler": "executeCatalogOnboardSensor",
+            "verifiable_outcome": "cloud_onboarding_dispatched_or_ready",
+        },
         # --- Family 6: Help ---
         {
             "id": "help.list_actions",
@@ -710,6 +775,19 @@ def compute_scene_capabilities(descriptor: dict[str, Any] | None) -> dict[str, A
             "document_count": max(1, len(docs)),
         }
 
+    if origin == "empty_workspace":
+        return {
+            "scene_origin": origin,
+            "supports_3d": False,
+            "supports_xray": False,
+            "supports_explode": False,
+            "supports_dip_pins": False,
+            "supports_documentation": False,
+            "bench_modbus_homologated": False,
+            "part_ids": [],
+            "view_ids": [],
+            "document_count": 0,
+        }
     if origin == "docs_only_no_3d":
         return {
             "scene_origin": origin,
@@ -734,7 +812,7 @@ def compute_scene_capabilities(descriptor: dict[str, Any] | None) -> dict[str, A
     ) or any(
         isinstance(v.get("exploded_offsets_m"), dict) and len(v.get("exploded_offsets_m")) > 0 for v in views
     )
-    has_dip_pins = any("dip" in pid.lower() for pid in part_ids) and homologated
+    has_dip_pins = any("dip" in pid.lower() for pid in part_ids)
     return {
         "scene_origin": origin,
         "supports_3d": bool(twin.get("glb_url")),
@@ -1367,6 +1445,58 @@ def resolve_copilot_action_plan(
             out.update(extra)
         return out
 
+    # 0a. Clear Sensor Workspace (preserves fixed PUSR gateway 100%)
+    if re.search(r"\b(clear|reset|wipe|unload|remove)\b.*\b(sensor|workspace|twin|profile|device)\b", norm) and not re.search(r"\b(3d|view|camera|pusr|gateway)\b", norm):
+        return _plan(
+            [{"id": "catalog.clear_sensor", "params": {"clear_installed_packages": True}}],
+            intent_mode="apply",
+            reply=(
+                "Sensor workspace cleared. No sensor profile is loaded on this iPad. "
+                "Your PUSR RS-485 gateway connection remains active. Point the camera at a sensor "
+                "and say 'Identify this sensor' or tell me its manufacturer and model."
+            ),
+        )
+
+    # 0b. Identify New Sensor (live camera snapshot + prompt for manufacturer & model)
+    if re.search(r"\b(identify|scan|add|onboard|register|detect)\b.*\b(new|this|unknown|different)?\s*(sensor|device|equipment)\b", norm) or re.match(
+        r"^(new sensor|i have a new sensor|different sensor|unknown sensor)$", norm
+    ):
+        return _plan(
+            [{"id": "catalog.identify_new_sensor", "params": {"capture_photo": True}}],
+            intent_mode="show",
+            reply="Photo captured from the live camera. No matching sensor profile is loaded yet. What manufacturer and model is this sensor?",
+        )
+
+    # 0c. Spoken Brand & Model Identification or Cloud Onboarding Confirmation (100% English)
+    parsed_sensor = _parse_spoken_sensor_identity(raw)
+    if parsed_sensor is not None:
+        mfg, mod, variant, auto_sub = parsed_sensor
+        act_params: dict[str, Any] = {
+            "manufacturer": mfg,
+            "model": mod,
+            "auto_submit": auto_sub,
+            "force_refresh": True,
+        }
+        if variant:
+            act_params["variant"] = variant
+        spoken_name = mod if mfg == "UNKNOWN" else f"{mfg} {mod}"
+        reply = (
+            f"Got it — {spoken_name}. Submitting your request to FieldScan Cloud now to fetch the latest official datasheet and build the 3D Digital Twin."
+            if auto_sub
+            else f"Captured {spoken_name} with the live camera photo. Say 'Process in cloud' or tap Request from FieldScan Cloud to fetch the official manual and 3D Digital Twin."
+        )
+        return _plan(
+            [{"id": "catalog.onboard_sensor", "params": act_params}],
+            intent_mode="apply",
+            reply=reply,
+        )
+    if re.search(r"\b(process in cloud|send to cloud|download from cloud|fetch from cloud|yes download|yes process|download the manual and twin)\b", norm):
+        return _plan(
+            [{"id": "catalog.onboard_sensor", "params": {"confirm_pending": True, "auto_submit": True, "force_refresh": True}}],
+            intent_mode="apply",
+            reply="Confirmed. Submitting the sensor request to FieldScan Cloud now.",
+        )
+
     # 0. Explicit help / list available actions from the registry
     if re.search(r"\b(list actions|available actions|what actions|help me|ayuda|lista de acciones|acciones disponibles)\b", norm) or norm in ("help", "commands", "ayuda"):
         reg = build_action_registry(project_root)
@@ -1536,6 +1666,8 @@ def resolve_copilot_action_plan(
         return _plan([{"id": "config.close_chat", "params": {}}], intent_mode="apply", reply="Closed AI Engineer Chat panel.")
     if re.search(r"\b(open|abre|abrir|show|muestr\w*)\b.*\b(calibration roadmap|calibracion|hoja de ruta)\b", norm) and not re.search(r"\b(manual|datasheet|page|pagina)\b", norm):
         return _plan([{"id": "config.open_calibration", "params": {}}], intent_mode="show", reply="Opened Calibration & Verified Adjustment planned roadmap (read-only).")
+    if re.search(r"\b(open|show|abre|abrir|muestr\w*)\b.*\b(escalation|outbox|email\s+manufacturer|contact\s+manufacturer)\b", norm) and not re.search(r"\b(draft|borrador|prepare|preparar)\b", norm):
+        return _plan([{"id": "config.open_escalation", "params": {}}], intent_mode="show", reply="Opened the Manufacturer Engineering Escalation & Outbox panel.")
 
     # 7. Local Drafts (Manufacturer & Stock — strictly local, zero external send)
     if re.search(r"\b(stock|repuestos|reorder|reponer)\b", norm) and re.search(r"\b(draft|borrador|order|pedido|preparar|prepare)\b", norm):
@@ -1638,12 +1770,15 @@ def resolve_copilot_action_plan(
         )
         return _plan([{"id": "camera.show_dip_macro", "params": {"visible": True}}], intent_mode="show", reply=reply)
 
-    # 10. 3D Twin Explicit Modes (X-Ray, Solid, Explode, Collapse, Reset — EN + ES, works on BOTH bundled & GLB!)
-    wants_xray = bool(re.search(r"\b(x-?ray|wireframe|rayos\s*x|ver por dentro|translucent)\b", norm))
-    wants_solid = bool(re.search(r"\b(solid mode|solid view|vista solida|modo solido)\b", norm))
-    wants_explode = bool(re.search(r"\b(explode|exploded view|explotar|vista explotada|desarmar gemelo)\b", norm)) or _matches_localized_alias("twin.set_explode")
-    wants_collapse = bool(re.search(r"\b(collapse|colapsar|close housing|close the housing|reassemble)\b", norm))
-    wants_reset = bool(re.search(r"\b(reset view|reset 3d|restablecer vista|reiniciar vista|centrar gemelo|centra el gemelo|default overview|full view)\b", norm)) or _matches_localized_alias("twin.reset_view")
+    # 10. 3D Twin Explicit Modes & Free-Form Camera Manipulation (X-Ray, Solid, Explode, Rotate, Zoom, Reset — bundled & GLB!)
+    wants_xray = bool(re.search(r"\b(x-?ray|wireframe|rayos\s*x|see inside|look inside|ver por dentro|translucent|transparent)\b", norm))
+    wants_solid = bool(re.search(r"\b(solid mode|solid view|normal view|vista solida|modo solido)\b", norm))
+    wants_explode = bool(re.search(r"\b(explode|exploded view|open the sensor|open sensor|open housing|open the housing|disassemble|take apart|split apart|explotar|vista explotada|desarmar gemelo)\b", norm)) or _matches_localized_alias("twin.set_explode")
+    wants_collapse = bool(re.search(r"\b(collapse|colapsar|close housing|close the housing|close the sensor|reassemble|put back together)\b", norm))
+    wants_reset = bool(re.search(r"\b(reset view|reset 3d|reset camera|center twin|center the twin|restablecer vista|reiniciar vista|centrar gemelo|centra el gemelo|default overview|full view)\b", norm)) or _matches_localized_alias("twin.reset_view")
+    wants_rotate_or_zoom = bool(
+        re.search(r"\b(rotate|turn|spin|flip|orbit|zoom in|zoom out|closer|farther|back side|rear view|top view|bottom view|side view|front view)\b", norm)
+    ) and not re.search(r"\b(manual|datasheet|pdf|page)\b", norm)
 
     if wants_xray or wants_solid:
         target_mode = "wireframe" if wants_xray else "solid"
@@ -1664,7 +1799,30 @@ def resolve_copilot_action_plan(
         )
         return _plan([{"id": "twin.set_render_mode", "params": {"mode": target_mode}}], intent_mode="apply", reply=reply)
 
-    if wants_explode:
+    if wants_rotate_or_zoom and not wants_explode and not wants_reset and not wants_collapse:
+        if not caps["supports_3d"]:
+            return _plan([{"id": "twin.rotate_view", "params": {"direction": "right"}, "status_hint": "unavailable"}], intent_mode="explain", reply="No 3D Digital Twin is currently loaded to rotate or zoom.")
+        if "zoom in" in norm or "closer" in norm:
+            rot_dir = "zoom_in"
+        elif "zoom out" in norm or "farther" in norm:
+            rot_dir = "zoom_out"
+        elif any(k in norm for k in ("back", "rear", "around", "flip")):
+            rot_dir = "back"
+        elif "front" in norm:
+            rot_dir = "front"
+        elif any(k in norm for k in ("top", "up", "above")):
+            rot_dir = "top"
+        elif any(k in norm for k in ("bottom", "under", "down")):
+            rot_dir = "bottom"
+        elif "left" in norm:
+            rot_dir = "left"
+        elif "spin" in norm:
+            rot_dir = "spin"
+        else:
+            rot_dir = "right"
+        return _plan([{"id": "twin.rotate_view", "params": {"direction": rot_dir}}], intent_mode="apply", reply=f"Adjusted the 3D Digital Twin view ({rot_dir.replace('_', ' ')}).")
+
+    if wants_explode and not re.search(r"\b(dip|pin|pins|switch|switches|address|slave)\b", norm):
         if not caps["supports_explode"]:
             reply = format_voice_template(
                 "twin_capability_unavailable",
@@ -1700,12 +1858,82 @@ def resolve_copilot_action_plan(
         )
         return _plan([{"id": "twin.reset_view", "params": {}}], intent_mode="apply", reply=reply)
 
-    # 11. DIP Configuration Guided Trio (Twin + Manual Page 5 + Live DIP Macro — EN + ES, NEVER mutates authorized bus target!)
+    # 11a. Explicit PDF / Manual / Datasheet Viewer (ANY phrasing: "show me the pdf", "open the manual", "show me the pdf where the pins are")
+    asks_pdf_or_manual = bool(re.search(r"\b(pdf|manual|datasheet|spec\s*sheet|document|documentation|pinout|wiring\s*diagram|schematic)\b", norm))
+    wants_action_on_pdf = asks_pdf_or_manual and bool(
+        re.search(r"\b(show|open|view|display|pull\s*up|bring\s*up|go\s*to|where|page|pagina|section|seccion|see|look|read|abre|abrir|muestr\w*|ver|donde)\b", norm)
+    )
+    has_dip_twin_focus = bool(re.search(r"\b(digital\s*twin|3d|twin|model|explode)\b", norm))
+    if wants_action_on_pdf and not has_dip_twin_focus and not re.search(r"\b(?:page|pagina|pag\.?)\s*#?\s*(\d{1,3})\b", norm):
+        desc_to_use = descriptor or {"scene_origin": "bundled_parametric", "documents": [{"document_id": "tht02_manual_v1_1", "title": "TZ THT-02 User's Manual V1.1", "revision": "V1.1", "page_count": 9}]}
+        if re.search(r"\b(dip|pin|pins|switch|switches|address|slave|open|unscrew)\b", norm):
+            topic_q, inf_p = "dip", 5
+        elif re.search(r"\b(wire|wires|wiring|cable|gland|color|power|ground|gnd|connect)\b", norm):
+            topic_q, inf_p = "wiring", 4
+        elif re.search(r"\b(calibr\w*|spec|specs|accuracy|range|sht30)\b", norm):
+            topic_q, inf_p = "calibration", 3
+        elif re.search(r"\b(crc|frame|example|command|0x03)\b", norm):
+            topic_q, inf_p = "crc", 7
+        elif re.search(r"\b(register|registers|modbus|7fff|baud|0x00)\b", norm):
+            topic_q, inf_p = "registers", 6
+        elif re.search(r"\b(dimension|size|length|diameter|mount|flange|drawing)\b", norm):
+            topic_q, inf_p = "dimensions", 9
+        else:
+            topic_q, inf_p = "overview", 1
+        hit = lookup_manual_in_descriptor("open page 1" if topic_q == "overview" else f"where in the manual is {topic_q}", desc_to_use)
+        pg = int(hit.get("manual_page") or inf_p)
+        doc_id = str(hit.get("document_id") or "tht02_manual_v1_1")
+        doc_title = str(hit.get("document_title") or "TZ THT-02 User's Manual V1.1")
+        doc_rev = str(hit.get("document_revision") or "V1.1")
+        printed = str(hit.get("printed_page") or pg)
+        reply = format_voice_template(
+            "manual_opened",
+            language=lang,
+            en_default="Opened {doc_title} ({doc_rev}), page {page} (printed {printed_page}).",
+            params={"doc_title": doc_title, "doc_rev": doc_rev, "page": pg, "printed_page": printed},
+            project_root=project_root,
+        )
+        return _plan(
+            [{"id": "manual.open_section", "params": {"topic": topic_q, "page": pg, "document_id": doc_id, "printed_page": printed, "open_lightbox": True}}],
+            intent_mode="show",
+            reply=reply,
+            extra={
+                "manual_page": pg,
+                "printed_page": printed,
+                "document_id": doc_id,
+                "document_revision": doc_rev,
+                "open_manual": True,
+                "open_manual_lightbox": True,
+                "manual_section": hit.get("manual_section"),
+                "citations": hit.get("citations") or [{"page": pg, "label": f"Page {pg}"}],
+            },
+        )
+
+    # 11b. DIP / Pins Configuration Guided Trio (Twin + Manual Page 5 + Live DIP Macro — NEVER mutates authorized bus target!)
     wants_dip_config = (
-        bool(re.search(r"\b(dip|sw1|interruptor\w*|rocker\w*)\b", norm))
-        and bool(re.search(r"\b(configure|set|setup|guide|how|address|slave|modbus|configur\w*|direccion|como)\b", norm))
+        bool(re.search(r"\b(dip|sw1|pin|pins|switch|switches|interruptor\w*|rocker\w*)\b", norm))
+        and bool(re.search(r"\b(configure|set|setup|guide|how|show|open|move|zoom|look|see|view|address|slave|modbus|twin|3d|configur\w*|direccion|como|muestr\w*)\b", norm))
     ) or _matches_localized_alias("twin.show_dip")
     if wants_dip_config:
+        # Preserve ambiguity guard (`M4-VOICE-03`): e.g. "Show me pin one" on a GLB with both dip.pin_1 & rear.pin_1 must clarify first!
+        if descriptor and str(descriptor.get("scene_origin") or "") == "catalog_glb":
+            ambig_check = prepare_visual_action(
+                raw,
+                descriptor=descriptor,
+                current_dip_address=current_dip_address,
+                scene_generation=scene_generation,
+                turn_id=tid,
+            )
+            if ambig_check.get("ambiguous"):
+                c_prompt = str(ambig_check.get("clarification_prompt") or "Please specify which pin or component.")
+                return _plan(
+                    [],
+                    intent_mode="explain",
+                    ambiguous=True,
+                    clarification_prompt=c_prompt,
+                    reply=c_prompt,
+                    extra={"candidate_part_ids": ambig_check.get("candidate_part_ids") or [], "twin_action": None, "twin_action_v1": None},
+                )
         # Support Spanish numeric target as well as English "address 1" / "slave 1"
         es_addr_m = re.search(r"\b(?:direccion|nodo|unidad)\s*#?\s*(\d{1,3})\b", norm)
         any_num_m = re.search(r"\b(\d{1,3})\b", norm)
@@ -1850,8 +2078,8 @@ def resolve_copilot_action_plan(
                 },
             )
 
-    # 13. Spanish / English part focus on bundled or GLB twin
-    if re.search(r"\b(enfoc\w*|focus|muestr\w*)\b", norm):
+    # 13. English / Spanish part focus on bundled or GLB twin
+    if re.search(r"\b(show|focus|zoom|inspect|highlight|point|move|look\s+at|see|open|enfoc\w*|muestr\w*)\b", norm):
         prep = prepare_visual_action(
             raw,
             descriptor=descriptor,
@@ -1901,4 +2129,78 @@ def resolve_copilot_action_plan(
                 extra={"twin_action": ta, "twin_action_v1": v1},
             )
 
+    if caps.get("scene_origin") == "empty_workspace":
+        return _plan(
+            [{"id": "catalog.identify_new_sensor", "params": {"capture_photo": False}}],
+            intent_mode="explain",
+            reply=(
+                "No sensor is loaded on this iPad right now. Point the camera at your sensor and tell me its "
+                "manufacturer and model — for example, 'This is a TZONE TZ THT-02' — to fetch its official manual "
+                "and 3D Digital Twin from FieldScan Cloud."
+            ),
+        )
+
     return None
+
+
+def _parse_spoken_sensor_identity(raw: str) -> tuple[str, str, str | None, bool] | None:
+    """Parse spoken English sensor identification (e.g., 'This is a TZONE TZ THT-02' or 'Download manual for Siemens SITRANS')."""
+    trimmed = (raw or "").strip()
+    if not trimmed:
+        return None
+    norm = normalize_ascii_lower(trimmed)
+    auto_triggers = (
+        "download manual for ",
+        "fetch manual for ",
+        "get manual for ",
+        "onboard ",
+        "process sensor ",
+        "load from cloud ",
+        "search cloud for ",
+    )
+    auto_sub = False
+    tail = ""
+    for pfx in auto_triggers:
+        idx = norm.find(pfx)
+        if idx != -1:
+            tail = norm[idx + len(pfx) :].strip()
+            auto_sub = True
+            break
+    if not tail:
+        m_bm = re.search(r"\b(?:brand|manufacturer)\s+([a-z0-9\-\s]{2,40})\s+model\s+([a-z0-9\-\s]{2,40})$", norm)
+        if m_bm:
+            tail = f"{m_bm.group(1)} {m_bm.group(2)}".strip()
+        else:
+            m_id = re.search(
+                r"\b(?:this sensor is|this is|it is|it's|sensor is|model is|the sensor is|the model is)\s+(?:a\s+|an\s+|the\s+)?(.+)$",
+                norm,
+            )
+            if m_id:
+                tail = m_id.group(1).strip()
+    if (
+        not tail
+        and len(norm) <= 48
+        and re.search(r"\b(tzone|t-zone|tht[\s\-]?0?0?2|tht[\s\-]?0?3r?)\b", norm)
+        and not re.search(r"\b(dip|pusr|page|wiring|cable|register|baud|explode|xray|x-ray|what|how|where|why)\b", norm)
+    ):
+        tail = norm
+    if not tail:
+        return None
+
+    tail = re.sub(r"\b(sensor|transmitter|probe|please|now|in cloud|from cloud)\b", "", tail)
+    tail = re.sub(r"[.,!?;:]+$", "", tail)
+    tail = re.sub(r"\s+", " ", tail).strip()
+    if len(tail) < 3:
+        return None
+
+    if re.search(r"\b(tht[\s\-]?0?0?2|tht\s*zero\s*two|tht\s*two)\b", tail):
+        return ("TZONE", "TZ THT-02", "v1_1_rs485", auto_sub)
+    if re.search(r"\b(tht[\s\-]?0?3r)\b", tail):
+        return ("TZONE", "TZ THT-03R", None, auto_sub)
+
+    tokens = tail.split()
+    if len(tokens) < 2:
+        return ("UNKNOWN", tail.upper(), None, auto_sub)
+    mfg = tokens[0].replace("t-zone", "TZONE").upper()
+    mod = " ".join(tokens[1:]).upper()
+    return (mfg, mod, None, auto_sub)

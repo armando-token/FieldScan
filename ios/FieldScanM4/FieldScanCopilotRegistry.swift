@@ -200,11 +200,13 @@ public final class FieldScanCopilotRegistry {
             ("config.open_chat", "config", "show", "chatPage", "always", ["open chat"]),
             ("config.close_chat", "config", "apply", "chatPage", "always", ["close chat"]),
             ("config.open_calibration", "config", "show", "calibrationPlannedModal", "always", ["open calibration"]),
+            ("config.open_escalation", "config", "show", "escalationModal", "always", ["open escalation", "email manufacturer", "open outbox", "contact manufacturer"]),
             ("config.open_sensor_spec", "config", "show", "manualModal", "requires_documentation", ["open sensor spec"]),
             ("config.open_app_settings", "config", "apply", "native://app_settings", "ipad_native_only", ["open app settings", "open ipad permissions"]),
             ("twin.reset_view", "twin", "apply", "canvasStage", "requires_3d_scene", ["reset view", "close housing", "center twin"]),
             ("twin.set_render_mode", "twin", "apply", "canvasStage", "requires_3d_scene", ["x-ray", "xray", "wireframe", "solid mode"]),
             ("twin.set_explode", "twin", "apply", "canvasStage", "requires_3d_explode", ["explode", "exploded view"]),
+            ("twin.rotate_view", "twin", "apply", "canvasStage", "requires_3d_scene", ["rotate twin", "turn around", "zoom in", "zoom out", "show back", "show top", "spin model"]),
             ("twin.focus_part", "twin", "apply", "canvasStage", "requires_3d_scene", ["focus part", "show strainer", "show rear cable"]),
             ("twin.show_dip", "twin", "propose", "canvasStage#upper_barrel_dip", "requires_dip_profile", ["show dip switches", "configure dip", "dip for address"]),
             ("manual.open_page", "manual", "show", "manualModal", "requires_documentation", ["open page", "go to page"]),
@@ -220,6 +222,9 @@ public final class FieldScanCopilotRegistry {
             ("session.prepare_dossier", "bench_session", "propose", "btnExportSessionDossier", "always", ["prepare dossier", "export dossier"]),
             ("session.prepare_manufacturer_draft", "bench_session", "propose", "escalationModal", "always", ["manufacturer draft", "prepare escalation"]),
             ("session.prepare_stock_draft", "bench_session", "propose", "toolsPage#sessionEventLog", "requires_verified_stock_data", ["stock draft", "reorder stock"]),
+            ("catalog.clear_sensor", "config", "apply", "catalogModal", "always", ["clear sensor", "reset sensor", "wipe sensor", "clear sensor workspace"]),
+            ("catalog.identify_new_sensor", "config", "show", "sensorOnboardModal", "always", ["new sensor", "identify new sensor", "identify this sensor", "scan new sensor"]),
+            ("catalog.onboard_sensor", "config", "apply", "sensorOnboardModal", "always", ["this is a", "this sensor is", "onboard sensor", "process in cloud", "download manual for"]),
             ("help.list_actions", "help", "explain", "chatPage", "always", ["help", "what can you do", "list actions"]),
         ]
         return defs.map { d in
@@ -256,6 +261,20 @@ public final class FieldScanCopilotRegistry {
                 "document_count": max(1, docs.count),
             ]
         }
+        if origin == "empty_workspace" {
+            return [
+                "scene_origin": origin,
+                "supports_3d": false,
+                "supports_xray": false,
+                "supports_explode": false,
+                "supports_dip_pins": false,
+                "supports_documentation": false,
+                "bench_modbus_homologated": false,
+                "part_ids": [],
+                "view_ids": [],
+                "document_count": 0,
+            ]
+        }
         if origin == "docs_only_no_3d" {
             return [
                 "scene_origin": origin,
@@ -278,7 +297,8 @@ public final class FieldScanCopilotRegistry {
         let hasGlb = !((twin["glb_url"] as? String) ?? "").isEmpty
         let hasExplode = parts.contains(where: { (($0["explode_offset_m"] as? [Any])?.count ?? 0) == 3 })
             || views.contains(where: { !(($0["exploded_offsets_m"] as? [String: Any])?.isEmpty ?? true) })
-        let hasDipPins = partIds.contains(where: { $0.lowercased().contains("dip") }) && homologated
+        // Visual DIP pin display is a 3D geometry capability (separate from Modbus bus homologation)
+        let hasDipPins = partIds.contains(where: { $0.lowercased().contains("dip") })
         return [
             "scene_origin": origin,
             "supports_3d": hasGlb,
@@ -839,6 +859,56 @@ public final class FieldScanCopilotRegistry {
             return out
         }
 
+        // 0a. Clear Sensor Workspace (preserves fixed PUSR gateway 100%)
+        if norm.range(of: "\\b(clear|reset|wipe|unload|remove)\\b.*\\b(sensor|workspace|twin|profile|device)\\b", options: .regularExpression) != nil
+            && norm.range(of: "\\b(3d|view|camera|pusr|gateway)\\b", options: .regularExpression) == nil {
+            return makePlan(
+                actions: [["id": "catalog.clear_sensor", "params": ["clear_installed_packages": true]]],
+                intentMode: "apply",
+                reply: "Sensor workspace cleared. No sensor profile is loaded on this iPad. Your PUSR RS-485 gateway connection remains active. Point the camera at a sensor and say 'Identify this sensor' or tell me its manufacturer and model."
+            )
+        }
+
+        // 0b. Identify New Sensor (live camera snapshot + ask for brand & model)
+        if norm.range(of: "\\b(identify|scan|add|onboard|register|detect)\\b.*\\b(new|this|unknown|different)?\\s*(sensor|device|equipment)\\b", options: .regularExpression) != nil
+            || norm.range(of: "^(new sensor|i have a new sensor|different sensor|unknown sensor)$", options: .regularExpression) != nil {
+            return makePlan(
+                actions: [["id": "catalog.identify_new_sensor", "params": ["capture_photo": true]]],
+                intentMode: "show",
+                reply: "Photo captured from the live camera. No matching sensor profile is loaded yet. What manufacturer and model is this sensor?"
+            )
+        }
+
+        // 0c. Spoken Brand & Model Identification or Cloud Onboarding Confirmation (100% English, any sensor)
+        if let parsedSensor = Self.parseSpokenSensorIdentity(raw) {
+            let mfg = parsedSensor.manufacturer
+            let mod = parsedSensor.model
+            let variant = parsedSensor.variant
+            var actParams: [String: Any] = [
+                "manufacturer": mfg,
+                "model": mod,
+                "auto_submit": parsedSensor.autoSubmit,
+                "force_refresh": true,
+            ]
+            if let v = variant, !v.isEmpty { actParams["variant"] = v }
+            let spokenName = mfg == "UNKNOWN" ? mod : "\(mfg) \(mod)"
+            let reply = parsedSensor.autoSubmit
+                ? "Got it — \(spokenName). Submitting your request to FieldScan Cloud now to fetch the latest official datasheet and build the 3D Digital Twin."
+                : "Captured \(spokenName) with the live camera photo. Say 'Process in cloud' or tap Request from FieldScan Cloud to fetch the official manual and 3D Digital Twin."
+            return makePlan(
+                actions: [["id": "catalog.onboard_sensor", "params": actParams]],
+                intentMode: "apply",
+                reply: reply
+            )
+        }
+        if norm.range(of: "\\b(process in cloud|send to cloud|download from cloud|fetch from cloud|yes download|yes process|download the manual and twin)\\b", options: .regularExpression) != nil {
+            return makePlan(
+                actions: [["id": "catalog.onboard_sensor", "params": ["confirm_pending": true, "auto_submit": true, "force_refresh": true]]],
+                intentMode: "apply",
+                reply: "Confirmed. Submitting the sensor request to FieldScan Cloud now."
+            )
+        }
+
         // 0. Help / list actions from registry
         if norm.range(of: "\\b(list actions|available actions|what actions|help me|ayuda|lista de acciones|acciones disponibles)\\b", options: .regularExpression) != nil
             || ["help", "commands", "ayuda"].contains(norm) {
@@ -968,9 +1038,12 @@ public final class FieldScanCopilotRegistry {
         if norm.range(of: "\\b(close|cierra|cerrar)\\b.*\\b(chat)\\b", options: .regularExpression) != nil {
             return makePlan(actions: [["id": "config.close_chat", "params": [:]]], intentMode: "apply", reply: "Closed AI Engineer Chat panel.")
         }
-        if norm.range(of: "\\b(open|abre|abrir|show|muestr\\w*)\\b.*\\b(calibration roadmap|calibracion|hoja de ruta)\\b", options: .regularExpression) != nil
-            && norm.range(of: "\\b(manual|datasheet|page|pagina)\\b", options: .regularExpression) == nil {
-            return makePlan(actions: [["id": "config.open_calibration", "params": [:]]], intentMode: "show", reply: "Opened Calibration & Verified Adjustment planned roadmap (read-only).")
+        if norm.range(of: "\\b(open|abre|abrir|show|muestr\\w*|go to|pull up)\\b.*\\b(calibration roadmap|calibration|calibracion|hoja de ruta)\\b", options: .regularExpression) != nil
+            && norm.range(of: "\\b(manual|datasheet|pdf|page|pagina)\\b", options: .regularExpression) == nil {
+            return makePlan(actions: [["id": "config.open_calibration", "params": [:]]], intentMode: "show", reply: "Opened the Calibration & Verified Adjustment panel (read-only).")
+        }
+        if norm.range(of: "\\b(open|show|go to|pull up)\\b.*\\b(escalation|email manufacturer|manufacturer email|outbox|contact manufacturer|report modal)\\b", options: .regularExpression) != nil {
+            return makePlan(actions: [["id": "config.open_escalation", "params": [:]]], intentMode: "show", reply: "Opened the Manufacturer Escalation & Outbox panel.")
         }
 
         // 7. Local Drafts (Stock & Manufacturer)
@@ -1042,12 +1115,14 @@ public final class FieldScanCopilotRegistry {
             return makePlan(actions: [["id": "camera.show_dip_macro", "params": ["visible": true]]], intentMode: "show", reply: reply)
         }
 
-        // 10. 3D Twin Modes (X-Ray, Solid, Explode, Collapse, Reset — Bundled + GLB parity!)
-        let wantsXray = norm.range(of: "\\b(x-?ray|wireframe|rayos\\s*x|ver por dentro|translucent)\\b", options: .regularExpression) != nil
-        let wantsSolid = norm.range(of: "\\b(solid mode|solid view|vista solida|modo solido)\\b", options: .regularExpression) != nil
-        let wantsExplode = norm.range(of: "\\b(explode|exploded view|explotar|vista explotada|desarmar gemelo)\\b", options: .regularExpression) != nil || matchesLocalizedAlias("twin.set_explode")
-        let wantsCollapse = norm.range(of: "\\b(collapse|colapsar|close housing|close the housing|reassemble)\\b", options: .regularExpression) != nil
-        let wantsReset = norm.range(of: "\\b(reset view|reset 3d|restablecer vista|reiniciar vista|centrar gemelo|centra el gemelo|default overview|full view)\\b", options: .regularExpression) != nil || matchesLocalizedAlias("twin.reset_view")
+        // 10. 3D Twin Modes & Free-Form Camera Manipulation (X-Ray, Solid, Explode, Rotate, Zoom, Reset — Bundled + GLB!)
+        let wantsXray = norm.range(of: "\\b(x-?ray|wireframe|rayos\\s*x|see inside|look inside|ver por dentro|translucent|transparent)\\b", options: .regularExpression) != nil
+        let wantsSolid = norm.range(of: "\\b(solid mode|solid view|normal view|vista solida|modo solido)\\b", options: .regularExpression) != nil
+        let wantsExplode = norm.range(of: "\\b(explode|exploded view|open the sensor|open sensor|open housing|open the housing|disassemble|take apart|split apart|explotar|vista explotada|desarmar gemelo)\\b", options: .regularExpression) != nil || matchesLocalizedAlias("twin.set_explode")
+        let wantsCollapse = norm.range(of: "\\b(collapse|colapsar|close housing|close the housing|close the sensor|reassemble|put back together)\\b", options: .regularExpression) != nil
+        let wantsReset = norm.range(of: "\\b(reset view|reset 3d|reset camera|center twin|center the twin|restablecer vista|reiniciar vista|centrar gemelo|centra el gemelo|default overview|full view)\\b", options: .regularExpression) != nil || matchesLocalizedAlias("twin.reset_view")
+        let wantsRotateOrZoom = norm.range(of: "\\b(rotate|turn|spin|flip|orbit|zoom in|zoom out|closer|farther|back side|rear view|top view|bottom view|side view|front view)\\b", options: .regularExpression) != nil
+            && norm.range(of: "\\b(manual|datasheet|pdf|page)\\b", options: .regularExpression) == nil
 
         if wantsXray || wantsSolid {
             let targetMode = wantsXray ? "wireframe" : "solid"
@@ -1058,7 +1133,27 @@ public final class FieldScanCopilotRegistry {
             let reply = formatTemplate(key: wantsXray ? "twin_xray_applied" : "twin_solid_applied", language: lang, enDefault: wantsXray ? "Switched 3D Digital Twin to X-Ray wireframe view." : "Switched 3D Digital Twin to solid view.", rootOverride: rootOverride)
             return makePlan(actions: [["id": "twin.set_render_mode", "params": ["mode": targetMode]]], intentMode: "apply", reply: reply)
         }
-        if wantsExplode {
+        if wantsRotateOrZoom && !wantsExplode && !wantsReset && !wantsCollapse {
+            if (caps["supports_3d"] as? Bool) != true {
+                return makePlan(actions: [["id": "twin.rotate_view", "params": ["direction": "right"], "status_hint": "unavailable"]], intentMode: "explain", reply: "No 3D Digital Twin is currently loaded to rotate or zoom.")
+            }
+            let dir: String
+            if norm.contains("zoom in") || norm.contains("closer") { dir = "zoom_in" }
+            else if norm.contains("zoom out") || norm.contains("farther") { dir = "zoom_out" }
+            else if norm.contains("back") || norm.contains("rear") || norm.contains("around") || norm.contains("flip") { dir = "back" }
+            else if norm.contains("front") { dir = "front" }
+            else if norm.contains("top") || norm.contains("up") || norm.contains("above") { dir = "top" }
+            else if norm.contains("bottom") || norm.contains("under") || norm.contains("down") { dir = "bottom" }
+            else if norm.contains("left") { dir = "left" }
+            else if norm.contains("spin") { dir = "spin" }
+            else { dir = "right" }
+            return makePlan(
+                actions: [["id": "twin.rotate_view", "params": ["direction": dir]]],
+                intentMode: "apply",
+                reply: "Adjusted the 3D Digital Twin view (\(dir.replacingOccurrences(of: "_", with: " ")))."
+            )
+        }
+        if wantsExplode && norm.range(of: "\\b(dip|pin|pins|switch|switches|address|slave)\\b", options: .regularExpression) == nil {
             if (caps["supports_explode"] as? Bool) != true {
                 let reply = formatTemplate(key: "twin_capability_unavailable", language: lang, enDefault: "This 3D action ({capability}) is unavailable for the active model ({scene_origin}). Current view was not altered.", params: ["capability": "explode", "scene_origin": (caps["scene_origin"] as? String) ?? "unknown"], rootOverride: rootOverride)
                 return makePlan(actions: [["id": "twin.set_explode", "params": ["exploded": true], "status_hint": "unavailable"]], intentMode: "explain", reply: reply)
@@ -1075,11 +1170,78 @@ public final class FieldScanCopilotRegistry {
             return makePlan(actions: [["id": "twin.reset_view", "params": [:]]], intentMode: "apply", reply: reply)
         }
 
-        // 11. DIP Configuration Trio (Twin + Manual Page 5 + Live DIP Macro — never mutates bus target)
-        let wantsDipConfig = (norm.range(of: "\\b(dip|sw1|interruptor\\w*|rocker\\w*)\\b", options: .regularExpression) != nil
-            && norm.range(of: "\\b(configure|set|setup|guide|how|address|slave|modbus|configur\\w*|direccion|como)\\b", options: .regularExpression) != nil)
+        // 11. Explicit PDF / Manual / Datasheet Viewer (ANY phrasing: "show me the pdf", "open the manual", "show me the pdf on the pins page")
+        let asksForPdfOrManual = norm.range(of: "\\b(pdf|manual|datasheet|spec\\s*sheet|document|documentation|pinout|wiring\\s*diagram|schematic)\\b", options: .regularExpression) != nil
+        let wantsActionOnPdf = asksForPdfOrManual && norm.range(of: "\\b(show|open|view|display|pull\\s*up|bring\\s*up|go\\s*to|where|page|pagina|section|seccion|see|look|read|abre|abrir|muestr\\w*|ver|donde)\\b", options: .regularExpression) != nil
+        let hasDipTwinFocus = norm.range(of: "\\b(digital\\s*twin|3d|twin|model|explode)\\b", options: .regularExpression) != nil
+        if wantsActionOnPdf && !hasDipTwinFocus && norm.range(of: "\\b(?:page|pagina|pag\\.?)\\s*#?\\s*(\\d{1,3})\\b", options: .regularExpression) == nil {
+            let descToUse = descriptor ?? ["scene_origin": "bundled_parametric", "documents": [["document_id": "tht02_manual_v1_1", "title": "TZ THT-02 User's Manual V1.1", "revision": "V1.1", "page_count": 9]]]
+            let topicQuery: String
+            let inferredPage: Int
+            if norm.range(of: "\\b(dip|pin|pins|switch|switches|address|slave|open|unscrew)\\b", options: .regularExpression) != nil {
+                topicQuery = "dip"; inferredPage = 5
+            } else if norm.range(of: "\\b(wire|wires|wiring|cable|gland|color|power|ground|gnd|connect)\\b", options: .regularExpression) != nil {
+                topicQuery = "wiring"; inferredPage = 4
+            } else if norm.range(of: "\\b(calibr\\w*|spec|specs|accuracy|range|sht30)\\b", options: .regularExpression) != nil {
+                topicQuery = "calibration"; inferredPage = 3
+            } else if norm.range(of: "\\b(crc|frame|example|command|0x03)\\b", options: .regularExpression) != nil {
+                topicQuery = "crc"; inferredPage = 7
+            } else if norm.range(of: "\\b(register|registers|modbus|7fff|baud|0x00)\\b", options: .regularExpression) != nil {
+                topicQuery = "registers"; inferredPage = 6
+            } else if norm.range(of: "\\b(dimension|size|length|diameter|mount|flange|drawing)\\b", options: .regularExpression) != nil {
+                topicQuery = "dimensions"; inferredPage = 9
+            } else {
+                topicQuery = "overview"; inferredPage = 1
+            }
+            let hit = FieldScanManualNavigator.lookupManualInDescriptor(query: topicQuery == "overview" ? "open page 1" : "where in the manual is \(topicQuery)", descriptor: descToUse)
+            let pg = (hit["manual_page"] as? Int) ?? inferredPage
+            let docId = (hit["document_id"] as? String) ?? "tht02_manual_v1_1"
+            let docTitle = (hit["document_title"] as? String) ?? "TZ THT-02 User's Manual V1.1"
+            let docRev = (hit["document_revision"] as? String) ?? "V1.1"
+            let printed = (hit["printed_page"] as? String) ?? "\(pg)"
+            let reply = formatTemplate(key: "manual_opened", language: lang, enDefault: "Opened {doc_title} ({doc_rev}), page {page} (printed {printed_page}).", params: ["doc_title": docTitle, "doc_rev": docRev, "page": "\(pg)", "printed_page": printed], rootOverride: rootOverride)
+            return makePlan(
+                actions: [["id": "manual.open_section", "params": ["topic": topicQuery, "page": pg, "document_id": docId, "printed_page": printed, "open_lightbox": true]]],
+                intentMode: "show",
+                reply: reply,
+                extra: [
+                    "manual_page": pg,
+                    "printed_page": printed,
+                    "document_id": docId,
+                    "document_revision": docRev,
+                    "open_manual": true,
+                    "open_manual_lightbox": true,
+                    "manual_section": hit["manual_section"] ?? NSNull(),
+                    "citations": hit["citations"] ?? [["page": pg, "label": "Page \(pg)"]],
+                ]
+            )
+        }
+
+        // 11b. DIP / Pins Configuration & 3D Digital Twin Access (Twin + Manual Page 5 + Live DIP Macro — never mutates bus target)
+        let wantsDipConfig = (norm.range(of: "\\b(dip|sw1|pin|pins|switch|switches|interruptor\\w*|rocker\\w*)\\b", options: .regularExpression) != nil
+            && norm.range(of: "\\b(configure|set|setup|guide|how|show|open|move|zoom|look|see|view|address|slave|modbus|twin|3d|configur\\w*|direccion|como|muestr\\w*)\\b", options: .regularExpression) != nil)
             || matchesLocalizedAlias("twin.show_dip")
         if wantsDipConfig {
+            if let desc = descriptor, (desc["scene_origin"] as? String) == "catalog_glb" {
+                let ambigCheck = FieldScanTwinController.prepareVisualAction(
+                    query: raw,
+                    descriptor: desc,
+                    currentDipAddress: currentDipAddress,
+                    sceneGeneration: sceneGeneration,
+                    turnId: tid
+                )
+                if (ambigCheck["ambiguous"] as? Bool) == true {
+                    let cPrompt = (ambigCheck["clarification_prompt"] as? String) ?? "Please specify which pin or component."
+                    return makePlan(
+                        actions: [],
+                        intentMode: "explain",
+                        reply: cPrompt,
+                        ambiguous: true,
+                        clarificationPrompt: cPrompt,
+                        extra: ["candidate_part_ids": ambigCheck["candidate_part_ids"] ?? [], "twin_action": NSNull(), "twin_action_v1": NSNull()]
+                    )
+                }
+            }
             var targetAddr = currentDipAddress
             if let rx = try? NSRegularExpression(pattern: "\\b(?:direccion|nodo|unidad)\\s*#?\\s*(\\d{1,3})\\b"),
                let m = rx.firstMatch(in: norm, range: NSRange(norm.startIndex..., in: norm)),
@@ -1109,17 +1271,18 @@ public final class FieldScanCopilotRegistry {
                 turnId: tid
             )
             let dipLookup = FieldScanManualNavigator.lookupManual(for: "DIP switch addressing page 5", language: "en")
+            let openManualLb = asksForPdfOrManual
             let reply = formatTemplate(
                 key: "dip_guide_applied",
                 language: lang,
-                enDefault: "Proposed visual DIP-8 pattern for Slave #{target_addr}: {instruction_summary}. Opened the exploded 3D twin, Manual Page 5 (Section 5.1), and live DIP macro inset. Authorized Modbus bus polling target remains unchanged at Slave #{authorized_slave}.",
+                enDefault: "Opened the 3D Digital Twin to the internal SW1 DIP-8 pins for Slave #{target_addr} ({instruction_summary}), loaded Manual Page 5, and opened the DIP macro view. Authorized Modbus polling target remains Slave #{authorized_slave}.",
                 params: ["target_addr": "\(targetAddr)", "instruction_summary": instr, "authorized_slave": "\(authorizedBusSlaveId)"],
                 rootOverride: rootOverride
             )
             return makePlan(
                 actions: [
                     ["id": "twin.show_dip", "params": ["slave_id": targetAddr, "dip_bits": bits, "explode": true]],
-                    ["id": "manual.open_section", "params": ["topic": "dip_switch_opening", "page": 5, "open_lightbox": false]],
+                    ["id": "manual.open_section", "params": ["topic": "dip_switch_opening", "page": 5, "open_lightbox": openManualLb]],
                     ["id": "camera.show_dip_macro", "params": ["visible": true]],
                 ],
                 intentMode: "propose",
@@ -1135,7 +1298,7 @@ public final class FieldScanCopilotRegistry {
                     "focus_dip": true,
                     "manual_page": 5,
                     "open_manual": true,
-                    "open_manual_lightbox": false,
+                    "open_manual_lightbox": openManualLb,
                     "manual_section": dipLookup.sectionDict ?? NSNull(),
                     "citations": [["page": 5, "label": "Page 5 · 2-Step Opening & DIP-8 Switch (Ex. 176)"]],
                 ]
@@ -1206,8 +1369,8 @@ public final class FieldScanCopilotRegistry {
             }
         }
 
-        // 13. Part Focus on Bundled or GLB Twin
-        if norm.range(of: "\\b(enfoc\\w*|focus|muestr\\w*)\\b", options: .regularExpression) != nil {
+        // 13. Part Focus on Bundled or GLB Twin (natural English verbs: show, focus, zoom, inspect, highlight, point to, move to)
+        if norm.range(of: "\\b(show|focus|zoom|inspect|highlight|point|move|look\\s+at|see|open|enfoc\\w*|muestr\\w*)\\b", options: .regularExpression) != nil {
             let prep = FieldScanTwinController.prepareVisualAction(
                 query: raw,
                 descriptor: descriptor,
@@ -1231,6 +1394,154 @@ public final class FieldScanCopilotRegistry {
             }
         }
 
+        // If workspace was explicitly cleared to empty_workspace, stay honest rather than inventing sensor data
+        if (caps["scene_origin"] as? String) == "empty_workspace" {
+            return makePlan(
+                actions: [["id": "catalog.identify_new_sensor", "params": ["capture_photo": false]]],
+                intentMode: "explain",
+                reply: "No sensor is loaded on this iPad right now. Point the camera at your sensor and tell me its manufacturer and model — for example, 'This is a TZONE TZ THT-02' — to fetch its official manual and 3D Digital Twin from FieldScan Cloud."
+            )
+        }
+
         return nil
+    }
+
+    /// Parses spoken sensor identification phrases like "This is a TZONE TZ THT-02" or "Download manual for TZONE THT-002".
+    private static func parseSpokenSensorIdentity(_ raw: String) -> (manufacturer: String, model: String, variant: String?, autoSubmit: Bool)? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let norm = normalizeASCIILower(trimmed)
+
+        let autoTriggers = [
+            "download manual for ", "fetch manual for ", "get manual for ",
+            "onboard ", "process sensor ", "load from cloud ", "search cloud for ",
+        ]
+        var autoSubmit = false
+        var tail = ""
+        for pfx in autoTriggers {
+            if let r = norm.range(of: pfx) {
+                tail = String(norm[r.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                autoSubmit = true
+                break
+            }
+        }
+        if tail.isEmpty {
+            let idPatterns = [
+                "\\b(?:this sensor is|this is|it is|it's|sensor is|model is|the sensor is|the model is)\\s+(?:a\\s+|an\\s+|the\\s+)?(.+)$",
+                "\\b(?:brand|manufacturer)\\s+([a-z0-9\\-\\s]{2,40})\\s+(?:model)\\s+([a-z0-9\\-\\s]{2,40})$",
+            ]
+            for pat in idPatterns {
+                if let rx = try? NSRegularExpression(pattern: pat, options: [.caseInsensitive]),
+                   let m = rx.firstMatch(in: norm, range: NSRange(norm.startIndex..., in: norm)) {
+                    if m.numberOfRanges >= 3,
+                       let r1 = Range(m.range(at: 1), in: norm),
+                       let r2 = Range(m.range(at: 2), in: norm) {
+                        tail = "\(norm[r1]) \(norm[r2])"
+                    } else if let r1 = Range(m.range(at: 1), in: norm) {
+                        tail = String(norm[r1]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                    break
+                }
+            }
+        }
+        // Also recognize direct spoken THT-02 / THT-002 / THT-03R identification phrases when short
+        if tail.isEmpty && norm.range(of: "\\b(tzone|t-zone|tht[\\s\\-]?0?0?2|tht[\\s\\-]?0?3r?)\\b", options: .regularExpression) != nil
+            && norm.range(of: "\\b(dip|pusr|page|wiring|cable|register|baud|explode|xray|x-ray|what|how|where|why)\\b", options: .regularExpression) == nil
+            && norm.count <= 48 {
+            tail = norm
+        }
+        guard !tail.isEmpty else { return nil }
+
+        // Strip trailing conversational filler words
+        tail = tail.replacingOccurrences(of: "\\b(sensor|transmitter|probe|please|now|in cloud|from cloud)\\b", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "[.,!?;:]+$", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard tail.count >= 3 else { return nil }
+
+        // Normalize common spoken ASR variants for TZONE THT-02 cleanly while remaining 100% generic for all other brands/models
+        if tail.range(of: "\\b(tht[\\s\\-]?0?0?2|tht\\s*zero\\s*two|tht\\s*two)\\b", options: .regularExpression) != nil {
+            return (manufacturer: "TZONE", model: "TZ THT-02", variant: "v1_1_rs485", autoSubmit: autoSubmit)
+        }
+        if tail.range(of: "\\b(tht[\\s\\-]?0?3r)\\b", options: .regularExpression) != nil {
+            return (manufacturer: "TZONE", model: "TZ THT-03R", variant: nil, autoSubmit: autoSubmit)
+        }
+
+        // Generic split: first token = manufacturer, remaining tokens = model
+        let tokens = tail.split(separator: " ").map(String.init)
+        guard tokens.count >= 2 else {
+            return (manufacturer: "UNKNOWN", model: tail.uppercased(), variant: nil, autoSubmit: autoSubmit)
+        }
+        let mfg = tokens[0].replacingOccurrences(of: "t-zone", with: "TZONE").uppercased()
+        let mod = tokens.dropFirst().joined(separator: " ").uppercased()
+        return (manufacturer: mfg, model: mod, variant: nil, autoSubmit: autoSubmit)
+    }
+
+    // MARK: - Live LLM Tool-Calling Bridge (`[[ACTION:action_id|{json}]]`)
+
+    /// Builds a compact live tool manifest injected into the local LLM system prompt so the model
+    /// can trigger ANY registered UI screen, PDF page, or 3D Digital Twin movement for ANY phrasing.
+    public func buildLLMToolPromptBlock(descriptor: [String: Any]?) -> String {
+        let caps = Self.computeSceneCapabilities(descriptor: descriptor)
+        let partIds = (caps["part_ids"] as? [String]) ?? ["strainer_head", "upper_seal_ring", "upper_barrel_dip", "mounting_flange", "lower_barrel_rs485", "waterproof_gland_leads"]
+        let maxPages = ((descriptor?["documents"] as? [[String: Any]])?.compactMap { $0["page_count"] as? Int }.max()) ?? 9
+        return """
+        DIRECT UI, PDF & 3D DIGITAL TWIN CONTROL:
+        You directly control the FieldScan iPad interface, 3D Digital Twin, live camera, and OEM PDF manual.
+        NEVER tell the user "I cannot open screens", "I cannot show the PDF", or "I cannot move the 3D model".
+        Whenever the user asks to show, open, view, move, zoom, rotate, explode, X-ray, inspect a part, open the PDF/manual, or navigate to any screen, put one or more directives at the START of your reply:
+        [[ACTION:<action_id>|<json_params>]]
+        Allowed actions:
+        - manual.open_page {"page":1..\(maxPages),"open_lightbox":true} (P1 overview, P3 specs/cal, P4 wiring, P5 DIP-8 pins, P6 Modbus regs, P7 CRC/0x03, P9 dimensions)
+        - manual.close {}
+        - twin.show_dip {"slave_id":1} (opens 3D housing and zooms into DIP-8 pins)
+        - twin.focus_part {"part_id":"<one of: \(partIds.joined(separator: ", "))>"}
+        - twin.set_explode {"exploded":true|false}
+        - twin.set_render_mode {"mode":"wireframe"|"solid"}
+        - twin.rotate_view {"direction":"left"|"right"|"front"|"back"|"top"|"bottom"|"zoom_in"|"zoom_out"|"spin"}
+        - twin.reset_view {}
+        - config.open_pusr {} | config.show_pusr_field {"field":"host"|"port"|"address"}
+        - config.open_catalog {} | config.show_cloud_settings {} | config.open_tools {} | config.open_chat {}
+        - config.open_calibration {} | config.open_escalation {} | config.open_app_settings {}
+        - camera.show_live {} | camera.show_dip_macro {"visible":true} | camera.capture_evidence {}
+        - session.open_history {} | session.prepare_dossier {}
+        - catalog.identify_new_sensor {"capture_photo":true} | catalog.clear_sensor {}
+        After the [[ACTION:...]] tag(s), write 1 to 2 concise natural English sentences confirming what you did.
+        """
+    }
+
+    /// Parses and validates `[[ACTION:action_id|{...}]]` directives emitted by the local LLM.
+    /// Rejects any unregistered action ID and returns clean spoken/displayed text + validated actions.
+    public func parseLLMActionDirectives(from rawReply: String) -> (cleanText: String, actions: [[String: Any]]) {
+        let allowedIds = Set(buildActionRegistry().compactMap { $0["id"] as? String })
+        let pattern = "\\[\\[ACTION:([a-z0-9_\\.]+)(?:\\|(\\{[^\\]]*\\}))?\\]\\]"
+        guard let rx = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return (rawReply.trimmingCharacters(in: .whitespacesAndNewlines), [])
+        }
+        let nsRange = NSRange(rawReply.startIndex..., in: rawReply)
+        let matches = rx.matches(in: rawReply, range: nsRange)
+        var actions: [[String: Any]] = []
+        for m in matches {
+            guard let idRange = Range(m.range(at: 1), in: rawReply) else { continue }
+            let aid = String(rawReply[idRange]).lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard allowedIds.contains(aid) else { continue }
+            var params: [String: Any] = [:]
+            if m.range(at: 2).location != NSNotFound,
+               let pRange = Range(m.range(at: 2), in: rawReply) {
+                let pStr = String(rawReply[pRange])
+                if let pData = pStr.data(using: .utf8),
+                   let pObj = (try? JSONSerialization.jsonObject(with: pData)) as? [String: Any] {
+                    params = pObj
+                }
+            }
+            if aid == "manual.open_page" || aid == "manual.open_section" {
+                params["open_lightbox"] = true
+            }
+            actions.append(["id": aid, "params": params])
+        }
+        let stripped = rx.stringByReplacingMatches(in: rawReply, range: nsRange, withTemplate: "")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (stripped.isEmpty ? "Done — updated the display." : stripped, actions)
     }
 }

@@ -1203,6 +1203,16 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             return
         }
 
+        if req.method == "POST" && path == "/api/voice/speak_status" {
+            let bodyJSON = parseJSONBody(req.body)
+            let msg = ((bodyJSON["text"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !msg.isEmpty {
+                _ = synthesizeSpeechB64(msg, speakOnDevice: true, language: "en")
+            }
+            sendJSONResponse(on: connection, statusCode: 200, payload: ["ok": true, "spoken": !msg.isEmpty])
+            return
+        }
+
         if req.method == "GET" && path == "/api/voice/handsfree_poll" {
             let res = pollHandsFreeVoiceMode()
             sendJSONResponse(on: connection, statusCode: 200, payload: res)
@@ -5449,6 +5459,11 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             stateLock.unlock()
         }
 
+        // Parse any validated [[ACTION:action_id|{json}]] directives emitted by the local M4 LLM so ANY natural phrasing can control UI/PDF/3D!
+        let parsedLLM = FieldScanCopilotRegistry.shared.parseLLMActionDirectives(from: diagnosisText)
+        diagnosisText = parsedLLM.cleanText
+        let llmValidatedActions = parsedLLM.actions
+
         // Apply deterministic grounding filter (`IA-04`, `M4-DOC-01`) with dynamic page ceiling
         let maxDocPages = ((catDescriptor?["documents"] as? [[String: Any]])?.compactMap { $0["page_count"] as? Int }.max()) ?? 9
         let activeProf = FieldScanSessionEngine.shared.resolveDeviceProfile((payload["profile_id"] as? String) ?? effCtx.localProfileId ?? "tzone_tht02")
@@ -5478,6 +5493,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "manual_page": primaryPageOpt ?? NSNull(),
             "manifest_sha256": effCtx.manifestSha256,
             "scene_generation": sceneGen,
+            "planned_actions": llmValidatedActions,
         ])
 
         let elapsedMs = max(8.0, ((ProcessInfo.processInfo.systemUptime - t0) * 1000.0 * 10).rounded() / 10)
@@ -5489,12 +5505,12 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         let andonNow = mbHealthy ? "GREEN" : (explodePcb ? "YELLOW" : "RED")
         stateLock.unlock()
 
-        // Conversational / vision / LLM replies have no deferred UI action_ack step — speak immediately on-device!
+        // Always speak conversational / vision / LLM replies immediately on-device!
         let audioB64 = synthesizeSpeechB64(diagnosisText, speakOnDevice: true, language: detLang)
         let shouldHighlightZone = (intentStr == "sensor_diagnostics") && (!mbHealthy || pcbOpen) && (targetZoneOpt != nil && !(targetZoneOpt!.isEmpty))
         let focusDipOut = explodePcb || ((twinActionOpt?["open_dip_pip"] as? Bool) == true)
 
-        return [
+        var llmResp: [String: Any] = [
             "diagnosis": diagnosisText,
             "assistant_message": diagnosisText,
             "intent": intentStr,
@@ -5536,6 +5552,26 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
             "model": modelUsed,
             "audio_wav_b64": audioB64,
         ]
+        if !llmValidatedActions.isEmpty {
+            let llmPlan: [String: Any] = [
+                "schema": "copilot_action_plan_v1",
+                "turn_id": turnId,
+                "session_id": resolvedSessionId != nil ? resolvedSessionId! : NSNull(),
+                "scene_generation": sceneGen,
+                "manifest_sha256": effCtx.manifestSha256,
+                "language": detLang,
+                "intent_mode": "apply",
+                "actions": llmValidatedActions,
+                "reply_text": diagnosisText,
+                "authorized_bus_slave_id": authBusSidNow,
+                "bus_target_mutated": false,
+                "source": "local_llm_tool_directive",
+            ]
+            llmResp["actions"] = llmValidatedActions
+            llmResp["copilot_action_plan"] = llmPlan
+            llmResp["deferred_tts_pending_ack"] = false
+        }
+        return llmResp
     }
 
     private func isTechnicalSensorQuery(qLower: String, zoneHint: String?) -> Bool {
@@ -7457,21 +7493,61 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 return
             }
 
+            if req.method == "POST" && path == "/api/catalog/reset_workspace" {
+                let bodyJSON = parseJSONBody(req.body)
+                let clearPackages = boolFromAny(bodyJSON["clear_installed_packages"], defaultValue: true)
+                // Close any active session cleanly so old manifest does not stay pinned
+                if let activeSid = FieldScanSessionEngine.shared.currentActiveSessionId, !activeSid.isEmpty {
+                    _ = try? FieldScanSessionEngine.shared.applyAction(sessionId: activeSid, payload: ["action": "close_session", "force_partial": true])
+                }
+                FieldScanCatalogClient.shared.clearCacheForCleanOnboarding()
+                var out = FieldScanPackageStore.shared.resetWorkspaceToCleanSlate(clearInstalledCloudPackages: clearPackages)
+                stateLock.lock()
+                activeSceneGeneration += 1
+                let nextGen = activeSceneGeneration
+                focusDipActive = false
+                activeHandsFreeContext["session_id"] = ""
+                activeHandsFreeContext["manifest_sha256"] = "empty-workspace"
+                activeHandsFreeContext["scene_generation"] = nextGen
+                let authSidNow = targetSlaveId
+                stateLock.unlock()
+                let cfg = FieldScanRuntimeConfig.shared
+                out["scene_generation"] = nextGen
+                out["pusr_preserved"] = true
+                out["pusr_gateway"] = ["host": cfg.pusrGatewayHost, "port": cfg.pusrGatewayPort, "topology": cfg.pusrGatewayTopology]
+                out["authorized_bus_slave_id"] = authSidNow
+                sendJSONResponse(on: connection, statusCode: 200, payload: out)
+                return
+            }
+
             if req.method == "POST" && path == "/api/catalog/resolve" {
                 let bodyJSON = parseJSONBody(req.body)
                 let model = ((bodyJSON["model"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !model.isEmpty else {
                     throw FieldScanCatalogError(code: "INVALID_ENVELOPE", message: "model is required")
                 }
-                try FieldScanCatalogClient.shared.ensureAutoEnrolledIfNeeded(
-                    defaultBaseURL: FieldScanRuntimeConfig.shared.cloudCatalogBaseURL
-                )
-                let res = try FieldScanCatalogClient.shared.resolveCatalog(
-                    manufacturer: bodyJSON["manufacturer"] as? String,
-                    model: model,
-                    variant: bodyJSON["variant"] as? String,
-                    hardwareRevision: bodyJSON["hardware_revision"] as? String
-                )
+                let forceRefresh = boolFromAny(bodyJSON["force_refresh"], defaultValue: false)
+                let defaultCloudBase = FieldScanRuntimeConfig.shared.cloudCatalogBaseURL
+                try FieldScanCatalogClient.shared.ensureAutoEnrolledIfNeeded(defaultBaseURL: defaultCloudBase)
+                let res: [String: Any]
+                do {
+                    res = try FieldScanCatalogClient.shared.resolveCatalog(
+                        manufacturer: bodyJSON["manufacturer"] as? String,
+                        model: model,
+                        variant: bodyJSON["variant"] as? String,
+                        hardwareRevision: bodyJSON["hardware_revision"] as? String,
+                        forceRefresh: forceRefresh
+                    )
+                } catch let cerr as FieldScanCatalogError where cerr.code == "HTTP_UNAUTHORIZED" {
+                    try FieldScanCatalogClient.shared.ensureAutoEnrolledIfNeeded(defaultBaseURL: defaultCloudBase, forceReenroll: true)
+                    res = try FieldScanCatalogClient.shared.resolveCatalog(
+                        manufacturer: bodyJSON["manufacturer"] as? String,
+                        model: model,
+                        variant: bodyJSON["variant"] as? String,
+                        hardwareRevision: bodyJSON["hardware_revision"] as? String,
+                        forceRefresh: forceRefresh
+                    )
+                }
                 sendJSONResponse(on: connection, statusCode: 200, payload: res)
                 return
             }
@@ -7490,8 +7566,32 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 guard !pid.isEmpty && !vid.isEmpty else {
                     throw FieldScanCatalogError(code: "INVALID_ENVELOPE", message: "product_id and variant_id are required")
                 }
-                let channel = (bodyJSON["channel"] as? String) ?? "default"
-                let res = try FieldScanCatalogClient.shared.fetchAndInstallVariant(productId: pid, variantId: vid, channel: channel)
+                let channel = (bodyJSON["channel"] as? String) ?? "pilot"
+                let selectAfter = boolFromAny(bodyJSON["select_after_install"], defaultValue: false)
+                let defaultCloudBase = FieldScanRuntimeConfig.shared.cloudCatalogBaseURL
+                try FieldScanCatalogClient.shared.ensureAutoEnrolledIfNeeded(defaultBaseURL: defaultCloudBase)
+                var res: [String: Any]
+                do {
+                    res = try FieldScanCatalogClient.shared.fetchAndInstallVariant(productId: pid, variantId: vid, channel: channel)
+                } catch let cerr as FieldScanCatalogError where cerr.code == "HTTP_UNAUTHORIZED" {
+                    try FieldScanCatalogClient.shared.ensureAutoEnrolledIfNeeded(defaultBaseURL: defaultCloudBase, forceReenroll: true)
+                    res = try FieldScanCatalogClient.shared.fetchAndInstallVariant(productId: pid, variantId: vid, channel: channel)
+                }
+                if selectAfter,
+                   let pkg = res["package"] as? [String: Any],
+                   let mSha = pkg["manifest_sha256"] as? String, !mSha.isEmpty {
+                    let ctx = try FieldScanPackageStore.shared.selectContextForNextSession(manifestSha256: mSha)
+                    let desc = try FieldScanPackageStore.shared.buildSceneAndManualDescriptor(context: ctx)
+                    stateLock.lock()
+                    activeSceneGeneration += 1
+                    let nextGen = activeSceneGeneration
+                    activeHandsFreeContext["manifest_sha256"] = mSha
+                    activeHandsFreeContext["scene_generation"] = nextGen
+                    stateLock.unlock()
+                    res["selected_context"] = ctx.toDictionary()
+                    res["catalog_descriptor"] = desc
+                    res["scene_generation"] = nextGen
+                }
                 sendJSONResponse(on: connection, statusCode: 200, payload: res)
                 return
             }

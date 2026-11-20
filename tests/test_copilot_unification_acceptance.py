@@ -552,3 +552,131 @@ def test_reg01_deterministic_latency_metrics_and_offline_roundtrip(client: TestC
     st_off2 = client.get("/api/offline/verify").json()
     assert st_off2["offline_verified"] is True
     assert st_off2["catalog_sync"]["https_requests_emitted"] == 0
+
+
+def test_clean_slate_reset_and_live_cloud_sensor_onboarding(client: TestClient) -> None:
+    """Verify clean-slate workspace reset preserves fixed PUSR settings and English voice onboarding parses any sensor."""
+    try:
+        # Configure a fixed PUSR gateway first to prove reset NEVER alters it
+        gw_set = client.post(
+            "/api/modbus/gateway",
+            json={"host": "10.10.100.254", "port": 502, "topology": "ap_direct", "activate": False},
+        )
+        assert gw_set.status_code == 200
+
+        # 1. Clear sensor via voice plan & API reset_workspace
+        r_clear = client.post("/api/diagnose", json={"query": "Clear the sensor on the iPad"}).json()
+        assert r_clear["copilot_action_plan"]["actions"][0]["id"] == "catalog.clear_sensor"
+
+        rst = client.post("/api/catalog/reset_workspace", json={"clear_installed_packages": True}).json()
+        assert rst["ok"] is True
+        assert rst["pusr_preserved"] is True
+        assert rst["selected_context"]["content_origin"] == "empty_workspace"
+        assert rst["catalog_descriptor"]["scene_origin"] == "empty_workspace"
+        assert rst["catalog_descriptor"]["documents"] == []
+        assert rst["catalog_descriptor"]["twin"] is None
+        assert rst["pusr_gateway"]["host"] == "10.10.100.254"
+        assert rst["pusr_gateway"]["port"] == 502
+
+        # 2. Asking a generic question on an empty workspace stays honest instead of inventing sensor data
+        r_empty = client.post("/api/diagnose", json={"query": "Tell me about the probe"}).json()
+        assert "No sensor is loaded" in r_empty["assistant_message"]
+
+        # 3. Identify new sensor (photo prompt) & spoken brand/model parsing (both THT-02 and generic sensors)
+        r_id = client.post("/api/diagnose", json={"query": "Identify this sensor"}).json()
+        assert r_id["copilot_action_plan"]["actions"][0]["id"] == "catalog.identify_new_sensor"
+
+        r_tht = client.post("/api/diagnose", json={"query": "This is a TZONE THT-002"}).json()
+        act_tht = r_tht["copilot_action_plan"]["actions"][0]
+        assert act_tht["id"] == "catalog.onboard_sensor"
+        assert act_tht["params"]["manufacturer"] == "TZONE"
+        assert act_tht["params"]["model"] == "TZ THT-02"
+        assert act_tht["params"]["force_refresh"] is True
+
+        r_gen = client.post("/api/diagnose", json={"query": "Download manual for Siemens SITRANS TH320"}).json()
+        act_gen = r_gen["copilot_action_plan"]["actions"][0]
+        assert act_gen["id"] == "catalog.onboard_sensor"
+        assert act_gen["params"]["manufacturer"] == "SIEMENS"
+        assert act_gen["params"]["model"] == "SITRANS TH320"
+        assert act_gen["params"]["auto_submit"] is True
+
+        # 4. Speak status endpoint works cleanly
+        sp = client.post("/api/voice/speak_status", json={"text": "Downloading manual now."}).json()
+        assert sp["ok"] is True and sp["spoken"] is True
+    finally:
+        client.post("/api/catalog/select", json={"manifest_sha256": "bundle"})
+        client.post("/api/modbus/gateway", json={"host": "", "port": 502, "topology": "ap_direct", "activate": False})
+
+
+def test_pdf_pins_twin_rotate_escalation_and_glb_dip_capabilities() -> None:
+    """Verify open-ended PDF, Digital Twin pins/rotation, Escalation UI, and Cloud GLB DIP visual capabilities."""
+    # 1. "Show me the PDF" & "Show me the PDF where the pins are" open fullscreen lightbox on exact page
+    pdf_overview = resolve_copilot_action_plan("Show me the PDF")
+    assert pdf_overview is not None
+    assert pdf_overview["actions"][0]["id"] == "manual.open_section"
+    assert pdf_overview["actions"][0]["params"]["open_lightbox"] is True
+    assert pdf_overview["manual_page"] == 1
+
+    pdf_pins = resolve_copilot_action_plan("Show me the PDF where the pins are")
+    assert pdf_pins is not None
+    assert pdf_pins["actions"][0]["id"] == "manual.open_section"
+    assert pdf_pins["actions"][0]["params"]["open_lightbox"] is True
+    assert pdf_pins["manual_page"] == 5
+
+    # 2. "Show me the pins on the digital twin" explodes twin + DIP macro without covering 3D with PDF lightbox
+    twin_pins = resolve_copilot_action_plan("Show me the pins on the digital twin")
+    assert twin_pins is not None
+    assert twin_pins["actions"][0]["id"] == "twin.show_dip"
+    assert twin_pins["explode_pcb"] is True
+    assert twin_pins["open_manual_lightbox"] is False
+
+    # 3. Free-form 3D camera rotation/zoom & escalation screen
+    rot_back = resolve_copilot_action_plan("Rotate the digital twin to the back")
+    assert rot_back is not None
+    assert rot_back["actions"][0]["id"] == "twin.rotate_view"
+    assert rot_back["actions"][0]["params"]["direction"] == "back"
+
+    zoom_in = resolve_copilot_action_plan("Zoom in on the sensor")
+    assert zoom_in is not None
+    assert zoom_in["actions"][0]["id"] == "twin.rotate_view"
+    assert zoom_in["actions"][0]["params"]["direction"] == "zoom_in"
+
+    esc = resolve_copilot_action_plan("Open escalation")
+    assert esc is not None
+    assert esc["actions"][0]["id"] == "config.open_escalation"
+
+    # 4. Cloud GLB with dip.bank supports visual DIP pins even when bench_modbus_homologated is False
+    cloud_glb_with_dip = {
+        "scene_origin": "catalog_glb",
+        "context": {"bench_modbus_homologated": False},
+        "twin": {
+            "glb_url": "/api/catalog/blob/abc.glb",
+            "parts": [
+                {"part_id": "housing.upper", "node_id": "upper_barrel"},
+                {"part_id": "dip.bank", "node_id": "dip_bank", "legacy_zone_id": "upper_barrel_dip"},
+            ],
+            "views": [{"view_id": "open_dip", "exploded_offsets_m": {"upper_barrel": [0, 0, 0.035]}}],
+        },
+        "documents": [{"document_id": "doc_cloud", "title": "THT-02 Cloud PDF", "page_count": 9}],
+    }
+    caps_dip = compute_scene_capabilities(cloud_glb_with_dip)
+    assert caps_dip["supports_3d"] is True
+    assert caps_dip["supports_explode"] is True
+    assert caps_dip["supports_dip_pins"] is True
+
+    glb_dip_plan = resolve_copilot_action_plan("Show me the pins on the digital twin", descriptor=cloud_glb_with_dip)
+    assert glb_dip_plan is not None
+    assert glb_dip_plan["actions"][0]["id"] == "twin.show_dip"
+    assert glb_dip_plan["actions"][0].get("status_hint") != "unavailable"
+
+    cloud_glb_no_dip = {
+        "scene_origin": "catalog_glb",
+        "context": {"bench_modbus_homologated": False},
+        "twin": {
+            "glb_url": "/api/catalog/blob/nodip.glb",
+            "parts": [{"part_id": "probe.head", "node_id": "probe_head"}],
+            "views": [],
+        },
+        "documents": [],
+    }
+    assert compute_scene_capabilities(cloud_glb_no_dip)["supports_dip_pins"] is False

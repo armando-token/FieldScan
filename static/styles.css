@@ -2561,3 +2561,209 @@ code {
     border-radius: 2px;
   }
 }
+
+/* ============ CLEAN-SLATE WORKSPACE & CLOUD ONBOARDING UI ============ */
+.empty-workspace-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: radial-gradient(circle at center, rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.92));
+  backdrop-filter: blur(6px);
+}
+.empty-workspace-overlay[hidden] {
+  display: none !important;
+}
+.empty-workspace-card {
+  max-width: 360px;
+  text-align: center;
+  padding: 20px 22px;
+  border-radius: var(--r-lg, 14px);
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.empty-workspace-card strong {
+  font-size: 16px;
+  color: var(--text-1);
+}
+.empty-workspace-card p {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-2);
+  margin: 0 0 6px;
+}
+
+.catalog-reset-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--divider);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.catalog-reset-hint {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.catalog-reset-btn {
+  font-size: 10.5px !important;
+  opacity: 0.78;
+}
+.catalog-reset-btn:hover {
+  opacity: 1;
+}
+
+.onboard-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.onboard-top-grid {
+  display: grid;
+  grid-template-columns: minmax(170px, 230px) 1fr;
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 640px) {
+  .onboard-top-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.onboard-photo-box {
+  position: relative;
+  border-radius: var(--r);
+  overflow: hidden;
+  border: 1px solid var(--divider);
+  background: #0b1220;
+  aspect-ratio: 4 / 3;
+}
+.onboard-photo-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.onboard-retake-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  font-size: 10.5px !important;
+  background: rgba(15, 23, 42, 0.85) !important;
+  color: #f8fafc !important;
+}
+.onboard-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.onboard-prompt-copy {
+  margin: 0 0 2px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+.onboard-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.onboard-field span {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+.onboard-actions {
+  margin-top: 4px;
+  display: flex;
+  gap: 8px;
+}
+.onboard-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 720px) {
+  .onboard-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.onboard-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: var(--r);
+  border: 1px solid var(--divider);
+  background: var(--bg-2, rgba(148, 163, 184, 0.08));
+  opacity: 0.6;
+  transition: opacity 0.2s, border-color 0.2s, background 0.2s;
+}
+.onboard-step.active {
+  opacity: 1;
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.onboard-step.done {
+  opacity: 1;
+  border-color: #16a34a;
+  background: rgba(22, 163, 74, 0.12);
+}
+.onboard-step.error {
+  opacity: 1;
+  border-color: var(--red, #ef4444);
+  background: rgba(239, 68, 68, 0.12);
+}
+.onboard-step-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 800;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  color: var(--text-2);
+}
+.onboard-step.active .onboard-step-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.onboard-step.done .onboard-step-dot {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #fff;
+}
+.onboard-step strong {
+  display: block;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--text-1);
+}
+.onboard-step span {
+  display: block;
+  font-size: 10px;
+  line-height: 1.25;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+.onboard-candidates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

@@ -711,6 +711,61 @@ func runSwiftContractSuite() throws {
     let stockOk = try engine.createLocalDraft(sessionId: histSid, kind: "stock", payload: ["sku": "SHT30", "verified_quantity": 1, "reorder_threshold": 4, "verified_by_operator": true])
     check(((stockOk["draft"] as? [String: Any])?["external_sent"] as? Bool) == false, "Swift stock draft must remain local-only")
 
+    // Section 12b: Clean-Slate Workspace Reset & Live Cloud Onboarding Resolver (100% English)
+    let regShared = FieldScanCopilotRegistry.shared
+    let resetPlan = regShared.resolveCopilotActionPlan(query: "Clear sensor workspace", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    check(((resetPlan?["actions"] as? [[String: Any]])?.first?["id"] as? String) == "catalog.clear_sensor", "Swift resolves catalog.clear_sensor")
+    let idPlan = regShared.resolveCopilotActionPlan(query: "Identify this sensor", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    check(((idPlan?["actions"] as? [[String: Any]])?.first?["id"] as? String) == "catalog.identify_new_sensor", "Swift resolves catalog.identify_new_sensor")
+    let onboardTht = regShared.resolveCopilotActionPlan(query: "This is a TZONE THT-002", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    let onboardAct = (onboardTht?["actions"] as? [[String: Any]])?.first
+    check((onboardAct?["id"] as? String) == "catalog.onboard_sensor", "Swift resolves catalog.onboard_sensor")
+    check(((onboardAct?["params"] as? [String: Any])?["manufacturer"] as? String) == "TZONE", "Swift normalizes TZONE manufacturer")
+    check(((onboardAct?["params"] as? [String: Any])?["model"] as? String) == "TZ THT-02", "Swift normalizes TZ THT-02 model")
+    let emptyReset = pkgStore.resetWorkspaceToCleanSlate(clearInstalledCloudPackages: true)
+    check(((emptyReset["catalog_descriptor"] as? [String: Any])?["scene_origin"] as? String) == "empty_workspace", "Swift PackageStore resets cleanly to empty_workspace")
+    _ = try pkgStore.selectContextForNextSession(manifestSha256: "bundle")
+
+    // Section 12c: Open-Ended PDF Viewer, 3D Digital Twin Pins/Rotation, Escalation & LLM Tool Directive Parser
+    let pdfPlan = regShared.resolveCopilotActionPlan(query: "Show me the PDF where the pins are", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    let pdfAct = (pdfPlan?["actions"] as? [[String: Any]])?.first
+    check((pdfAct?["id"] as? String) == "manual.open_section", "Swift resolves PDF pins request to manual.open_section")
+    check(((pdfAct?["params"] as? [String: Any])?["open_lightbox"] as? Bool) == true, "Swift opens fullscreen manual lightbox for PDF requests")
+    check((pdfPlan?["manual_page"] as? Int) == 5, "Swift resolves PDF pins request to page 5")
+
+    let twinPinsPlan = regShared.resolveCopilotActionPlan(query: "Show me the pins on the digital twin", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    check(((twinPinsPlan?["actions"] as? [[String: Any]])?.first?["id"] as? String) == "twin.show_dip", "Swift resolves Digital Twin pins to twin.show_dip")
+    check((twinPinsPlan?["open_manual_lightbox"] as? Bool) == false, "Swift keeps 3D Digital Twin unobstructed during twin.show_dip")
+
+    let rotPlan = regShared.resolveCopilotActionPlan(query: "Rotate the digital twin to the back", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    let rotAct = (rotPlan?["actions"] as? [[String: Any]])?.first
+    check((rotAct?["id"] as? String) == "twin.rotate_view" && ((rotAct?["params"] as? [String: Any])?["direction"] as? String) == "back", "Swift resolves twin.rotate_view back")
+
+    let escPlan = regShared.resolveCopilotActionPlan(query: "Open escalation", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    check(((escPlan?["actions"] as? [[String: Any]])?.first?["id"] as? String) == "config.open_escalation", "Swift resolves config.open_escalation")
+
+    let cloudGlbDesc: [String: Any] = [
+        "scene_origin": "catalog_glb",
+        "context": ["bench_modbus_homologated": false],
+        "twin": [
+            "glb_url": "/api/catalog/blob/tht02.glb",
+            "parts": [["part_id": "dip.bank", "node_id": "dip_bank"]],
+            "views": [["view_id": "open_dip", "exploded_offsets_m": ["upper": [0, 0, 0.035]]]],
+        ],
+        "documents": [["document_id": "doc1", "title": "Manual", "page_count": 9]],
+    ]
+    let cloudGlbCaps = FieldScanCopilotRegistry.computeSceneCapabilities(descriptor: cloudGlbDesc)
+    check((cloudGlbCaps["supports_dip_pins"] as? Bool) == true, "Swift enables visual DIP pins on Cloud GLB containing dip.bank")
+
+    let llmParsed = regShared.parseLLMActionDirectives(
+        from: "Opening page 5 and turning the model around. [[ACTION:manual.open_page|{\"page\":5}]] [[ACTION:twin.rotate_view|{\"direction\":\"back\"}]] [[ACTION:bogus.unknown|{}]]"
+    )
+    check(llmParsed.cleanText == "Opening page 5 and turning the model around.", "Swift strips [[ACTION:...]] tags from spoken/displayed text")
+    check(llmParsed.actions.count == 2, "Swift validates LLM directives against registered action whitelist")
+    let firstActId = llmParsed.actions.first?["id"] as? String
+    let lastActId = llmParsed.actions.last?["id"] as? String
+    check(firstActId == "manual.open_page" && lastActId == "twin.rotate_view", "Swift preserves valid LLM tool calls in order")
+
     let summary: [String: Any] = [
         "swift_contract_suite": "PASS",
         "contract_version": FieldScanSessionEngine.contractVersion,

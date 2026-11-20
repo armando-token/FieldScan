@@ -179,6 +179,14 @@
           <p id="twinNo3dBody">Documentation active. 3D geometry is not included in this package.</p>
         </div>
       </div>
+      <div class="empty-workspace-overlay" id="emptyWorkspaceOverlay" hidden>
+        <div class="empty-workspace-card">
+          <span class="modal-kicker">NO SENSOR PROFILE LOADED</span>
+          <strong>Awaiting New Equipment</strong>
+          <p>Point the iPad camera at your sensor and say <em>"Identify this sensor"</em> or state its manufacturer and model. Your PUSR RS-485 gateway remains connected.</p>
+          <button type="button" class="chip-btn chip-btn-cv active" id="btnEmptyIdentifySensor">Identify New Sensor</button>
+        </div>
+      </div>
     </section>
   </main>
 
@@ -387,7 +395,7 @@
       <div class="section-lbl">Voice &amp; Local AI Engine</div>
       <div class="tools-grid">
         <button type="button" class="tool-card" id="btnAutoSpeak"><i data-lucide="volume-2"></i><span class="tool-name" id="autoSpeakText">Voice: ON</span><span class="tool-desc">Offline TTS</span></button>
-        <button type="button" class="tool-card" id="btnVoiceLangToggle"><i data-lucide="languages"></i><span class="tool-name" id="voiceLangText">Voice Lang: EN</span><span class="tool-desc" id="voiceLangSub">EN / ES Local</span></button>
+        <button type="button" class="tool-card" id="btnIdentifyNewSensor"><i data-lucide="scan-search"></i><span class="tool-name">New Sensor</span><span class="tool-desc">Photo + Cloud</span></button>
         <div class="tool-card"><i data-lucide="cpu"></i><span class="tool-name" id="pillModelText">Local AI</span><span class="tool-desc" id="pillRamText">M4 12 GB</span></div>
       </div>
     </div>
@@ -532,6 +540,10 @@
           <input type="password" id="inputBoatPortToken" class="catalog-input catalog-input-sm" placeholder="Private gate cookie (optional)" autocomplete="off" />
           <button type="button" class="chip-btn" id="btnSaveSyncConfig">Save</button>
         </div>
+        <div class="catalog-reset-row">
+          <span class="catalog-reset-hint">Clear local sensor profile &amp; cached cloud packages without touching PUSR settings:</span>
+          <button type="button" class="chip-btn catalog-reset-btn" id="btnResetCleanWorkspace">Reset Sensor Workspace</button>
+        </div>
       </details>
 
       <div class="section-lbl" style="margin-top:4px;">2. Verified Local Packages (Application Support)</div>
@@ -596,8 +608,59 @@
   </div>
 </div>
 
+<!-- ===== MODAL 6: NEW SENSOR IDENTIFICATION & LIVE CLOUD ONBOARDING ===== -->
+<div class="modal-bg" id="sensorOnboardModal" hidden>
+  <div class="modal-box modal-box-wide" role="dialog" aria-modal="true" aria-label="New Sensor Onboarding">
+    <div class="modal-head">
+      <div>
+        <span class="modal-kicker">LIVE CAMERA CAPTURE · FIELDSCAN CLOUD PROVISIONING</span>
+        <h2>Identify New Sensor &amp; Fetch Digital Twin</h2>
+      </div>
+      <button type="button" class="btn-x" id="onboardCloseBtn" aria-label="Close onboarding modal">✕</button>
+    </div>
+    <div class="cat-body onboard-layout">
+      <div class="onboard-top-grid">
+        <div class="onboard-photo-box">
+          <img id="onboardPhotoPreview" src="/api/video/frame" alt="Captured sensor frame" />
+          <button type="button" class="chip-btn onboard-retake-btn" id="btnOnboardRetakePhoto">Retake Photo</button>
+        </div>
+        <form id="sensorOnboardForm" class="onboard-form">
+          <p class="onboard-prompt-copy">Speak the manufacturer and model in LIVE Mode (e.g. <em>"This is a TZONE TZ THT-02"</em>) or edit below, then request the official datasheet and 3D Digital Twin from FieldScan Cloud.</p>
+          <label class="onboard-field">
+            <span>Manufacturer</span>
+            <input type="text" id="inputOnboardMfg" class="catalog-input" placeholder="e.g. TZONE" autocomplete="off" />
+          </label>
+          <label class="onboard-field">
+            <span>Model</span>
+            <input type="text" id="inputOnboardModel" class="catalog-input" placeholder="e.g. TZ THT-02" autocomplete="off" required />
+          </label>
+          <label class="onboard-field">
+            <span>Variant (optional)</span>
+            <input type="text" id="inputOnboardVariant" class="catalog-input" placeholder="e.g. v1_1_rs485" autocomplete="off" />
+          </label>
+          <div class="onboard-actions">
+            <button type="submit" class="chip-btn chip-btn-cv active" id="btnOnboardSubmitCloud">Request from FieldScan Cloud</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="onboard-steps" id="onboardPipelineSteps">
+        <div class="onboard-step" data-stage="submit"><span class="onboard-step-dot">1</span><div><strong>Submit to FieldScan Cloud</strong><span>Enroll device &amp; queue resolution job</span></div></div>
+        <div class="onboard-step" data-stage="docs"><span class="onboard-step-dot">2</span><div><strong>Locate &amp; Extract Official Manual</strong><span>Retrieve OEM datasheet PDF &amp; index</span></div></div>
+        <div class="onboard-step" data-stage="twin"><span class="onboard-step-dot">3</span><div><strong>Build 3D Digital Twin &amp; Sign</strong><span>Compile .glb geometry &amp; Ed25519 signature</span></div></div>
+        <div class="onboard-step" data-stage="install"><span class="onboard-step-dot">4</span><div><strong>Download &amp; Load on iPad</strong><span>Verify SHA-256 blobs &amp; activate offline</span></div></div>
+      </div>
+
+      <div class="catalog-status-box" id="onboardStatusText">
+        Photo captured. Speak the manufacturer and model or enter them above to fetch the official manual and 3D Digital Twin from FieldScan Cloud.
+      </div>
+      <div class="onboard-candidates" id="onboardCandidatesRow" hidden></div>
+    </div>
+  </div>
+</div>
+
 <script src="/static/vendor/lucide.min.js"></script>
 <script src="/static/vendor/uPlot.iife.min.js"></script>
-<script type="module" src="/static/app.js?v=20261120v10"></script>
+<script type="module" src="/static/app.js?v=20261120v13"></script>
 </body>
 </html>

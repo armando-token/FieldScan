@@ -691,7 +691,7 @@ class _MBAPStubHandler(socketserver.BaseRequestHandler):
     def handle(self) -> None:
         cfg = self.server.behavior  # type: ignore[attr-defined]
         parser = ModbusTCPStreamParser(expect_requests=True)
-        self.request.settimeout(1.0)
+        self.request.settimeout(2.5)
         try:
             while True:
                 data = self.request.recv(256)

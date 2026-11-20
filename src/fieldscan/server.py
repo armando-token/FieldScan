@@ -1898,6 +1898,12 @@ async def api_voice_language(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@app.post("/api/voice/speak_status")
+async def api_voice_speak_status(payload: dict[str, Any]) -> dict[str, Any]:
+    msg = str(payload.get("text") or "").strip()
+    return {"ok": True, "spoken": bool(msg), "text": msg}
+
+
 @app.get("/api/guidance/state")
 async def api_guidance_state() -> dict[str, Any]:
     auth_sid = int(_MODBUS.get_telemetry().get("target_slave_id") or 1)
@@ -2159,19 +2165,70 @@ async def api_catalog_healthz() -> dict[str, Any]:
     return await asyncio.to_thread(_CATALOG_CLIENT.check_health)
 
 
+@app.post("/api/catalog/reset_workspace")
+async def api_catalog_reset_workspace(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    global _ACTIVE_SCENE_GENERATION
+    body = payload or {}
+    clear_pkgs = bool(body.get("clear_installed_packages", True))
+    if _SESSIONS._active_session_id:
+        try:
+            await asyncio.to_thread(
+                _SESSIONS.apply_action,
+                _SESSIONS._active_session_id,
+                {"action": "close_session", "force_partial": True},
+            )
+        except Exception:
+            pass
+    _CATALOG_CLIENT.clear_cache_for_clean_onboarding()
+    out = await asyncio.to_thread(
+        _CATALOG_STORE.reset_workspace_to_clean_slate,
+        clear_installed_cloud_packages=clear_pkgs,
+    )
+    _ACTIVE_SCENE_GENERATION += 1
+    _ACTIVE_VOICE_CONTEXT["session_id"] = ""
+    _ACTIVE_VOICE_CONTEXT["manifest_sha256"] = "empty-workspace"
+    _ACTIVE_VOICE_CONTEXT["scene_generation"] = _ACTIVE_SCENE_GENERATION
+    gw_raw = _MODBUS.get_gateway_config() if hasattr(_MODBUS, "get_gateway_config") else {}
+    gw = {
+        "host": gw_raw.get("pusr_host") or gw_raw.get("host") or "",
+        "port": int(gw_raw.get("pusr_port") or gw_raw.get("port") or 502),
+        "topology": gw_raw.get("topology") or gw_raw.get("pusr_topology") or "ap_direct",
+    }
+    out["scene_generation"] = _ACTIVE_SCENE_GENERATION
+    out["pusr_preserved"] = True
+    out["pusr_gateway"] = gw
+    out["authorized_bus_slave_id"] = int(_MODBUS.get_telemetry().get("target_slave_id") or 1)
+    return out
+
+
 @app.post("/api/catalog/resolve")
 async def api_catalog_resolve(payload: dict[str, Any]) -> dict[str, Any]:
     model = str(payload.get("model") or "").strip()
     if not model:
         raise CatalogDomainError("INVALID_ENVELOPE", "model is required")
+    force_refresh = bool(payload.get("force_refresh", False))
     await asyncio.to_thread(_CATALOG_CLIENT.ensure_auto_enrolled_if_needed)
-    return await asyncio.to_thread(
-        _CATALOG_CLIENT.resolve_catalog,
-        manufacturer=payload.get("manufacturer"),
-        model=model,
-        variant=payload.get("variant"),
-        hardware_revision=payload.get("hardware_revision"),
-    )
+    try:
+        return await asyncio.to_thread(
+            _CATALOG_CLIENT.resolve_catalog,
+            manufacturer=payload.get("manufacturer"),
+            model=model,
+            variant=payload.get("variant"),
+            hardware_revision=payload.get("hardware_revision"),
+            force_refresh=force_refresh,
+        )
+    except CatalogDomainError as err:
+        if err.code == "HTTP_UNAUTHORIZED":
+            await asyncio.to_thread(_CATALOG_CLIENT.ensure_auto_enrolled_if_needed, force_reenroll=True)
+            return await asyncio.to_thread(
+                _CATALOG_CLIENT.resolve_catalog,
+                manufacturer=payload.get("manufacturer"),
+                model=model,
+                variant=payload.get("variant"),
+                hardware_revision=payload.get("hardware_revision"),
+                force_refresh=force_refresh,
+            )
+        raise
 
 
 @app.get("/api/catalog/jobs/{job_id}")
@@ -2181,12 +2238,35 @@ async def api_catalog_poll_job(job_id: str) -> dict[str, Any]:
 
 @app.post("/api/catalog/install")
 async def api_catalog_install(payload: dict[str, Any]) -> dict[str, Any]:
+    global _ACTIVE_SCENE_GENERATION
     pid = str(payload.get("product_id") or "").strip()
     vid = str(payload.get("variant_id") or "").strip()
     if not pid or not vid:
         raise CatalogDomainError("INVALID_ENVELOPE", "product_id and variant_id are required")
-    channel = str(payload.get("channel") or "default")
-    return await asyncio.to_thread(_CATALOG_CLIENT.fetch_and_install_variant, pid, vid, channel=channel)
+    channel = str(payload.get("channel") or "pilot")
+    select_after = bool(payload.get("select_after_install", False))
+    await asyncio.to_thread(_CATALOG_CLIENT.ensure_auto_enrolled_if_needed)
+    try:
+        res = await asyncio.to_thread(_CATALOG_CLIENT.fetch_and_install_variant, pid, vid, channel=channel)
+    except CatalogDomainError as err:
+        if err.code == "HTTP_UNAUTHORIZED":
+            await asyncio.to_thread(_CATALOG_CLIENT.ensure_auto_enrolled_if_needed, force_reenroll=True)
+            res = await asyncio.to_thread(_CATALOG_CLIENT.fetch_and_install_variant, pid, vid, channel=channel)
+        else:
+            raise
+    if select_after and isinstance(res, dict):
+        pkg = res.get("package")
+        if isinstance(pkg, dict) and pkg.get("manifest_sha256"):
+            m_sha = str(pkg["manifest_sha256"])
+            ctx = await asyncio.to_thread(_CATALOG_STORE.select_context_for_next_session, m_sha)
+            desc = await asyncio.to_thread(_CATALOG_STORE.build_scene_and_manual_descriptor, ctx)
+            _ACTIVE_SCENE_GENERATION += 1
+            _ACTIVE_VOICE_CONTEXT["manifest_sha256"] = m_sha
+            _ACTIVE_VOICE_CONTEXT["scene_generation"] = _ACTIVE_SCENE_GENERATION
+            res["selected_context"] = ctx
+            res["catalog_descriptor"] = desc
+            res["scene_generation"] = _ACTIVE_SCENE_GENERATION
+    return res
 
 
 @app.post("/api/catalog/scene_ready")

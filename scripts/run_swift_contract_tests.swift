@@ -766,6 +766,25 @@ func runSwiftContractSuite() throws {
     let lastActId = llmParsed.actions.last?["id"] as? String
     check(firstActId == "manual.open_page" && lastActId == "twin.rotate_view", "Swift preserves valid LLM tool calls in order")
 
+    // Verify Apple FoundationModels angle-bracket variants + ASR "data sheet" + conversational "it's clean" non-hijack + stuck audioState auto-recovery
+    let appleVariant = regShared.parseLLMActionDirectives(
+        from: "[[ACTION:<twin.show_dip {\"slave_id\":1}>]] [[ACTION:<camera.show_live>]] Zooming into DIP-8 pins."
+    )
+    check(appleVariant.cleanText == "Zooming into DIP-8 pins.", "Swift strips Apple FM angle-bracket [[ACTION:<...>]] tags cleanly")
+    check(appleVariant.actions.count == 2 && (appleVariant.actions.first?["id"] as? String) == "twin.show_dip", "Swift parses Apple FM angle-bracket tool directives")
+
+    let dataSheetTwoWords = regShared.resolveCopilotActionPlan(query: "What is the pin I don't see the pin in the data sheet", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    let dsAct = (dataSheetTwoWords?["actions"] as? [[String: Any]])?.first
+    check((dsAct?["id"] as? String) == "manual.open_section" && ((dsAct?["params"] as? [String: Any])?["open_lightbox"] as? Bool) == true && (dataSheetTwoWords?["manual_page"] as? Int) == 5, "Swift matches two-word ASR 'data sheet' pins to fullscreen page 5")
+
+    let convClean = regShared.resolveCopilotActionPlan(query: "I see the sensor you say it's clean but I see the sensor here", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    check(((convClean?["actions"] as? [[String: Any]])?.first?["id"] as? String) != "catalog.onboard_sensor", "Swift does not falsely trigger onboarding on conversational 'it's clean'")
+
+    engine.registerTTSPlayback("Short test reply", estimatedDurationS: 0.01)
+    Thread.sleep(forTimeInterval: 0.42)
+    let (stuckEcho, _) = engine.isTTSEchoOrDuplicate(utterance: "Did you see the sensor")
+    check(stuckEcho == false, "Swift auto-recovers audioState from speaking after estimated duration expires so LIVE mode never hangs silent")
+
     let summary: [String: Any] = [
         "swift_contract_suite": "PASS",
         "contract_version": FieldScanSessionEngine.contractVersion,

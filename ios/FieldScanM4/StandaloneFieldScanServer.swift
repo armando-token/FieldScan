@@ -248,6 +248,9 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
                 return true
             }
             ttsSpeakingFlag = false
+            DispatchQueue.global(qos: .utility).async {
+                FieldScanSessionEngine.shared.setAudioState("idle")
+            }
         }
         return false
     }
@@ -292,6 +295,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         lastTtsActiveUptime = 0
         bargeInConsecutiveFrames = 0
         stateLock.unlock()
+        FieldScanSessionEngine.shared.setAudioState("idle")
     }
 
     // MARK: - Lifecycle
@@ -6525,6 +6529,7 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         lastTtsActiveUptime = 0
         bargeInConsecutiveFrames = 0
         stateLock.unlock()
+        FieldScanSessionEngine.shared.setAudioState("idle")
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             if self.speechSynthesizer.isSpeaking {
@@ -6887,8 +6892,8 @@ public final class StandaloneFieldScanServer: NSObject, AVSpeechSynthesizerDeleg
         }
         stateLock.unlock()
 
-        // Resume listening immediately after a completed turn with a lightweight 0.35s throttle
-        if !tapCurrentlyInstalled {
+        // Resume listening immediately after a completed turn or iOS audio route interruption with a lightweight 0.35s throttle
+        if !tapCurrentlyInstalled || !liveAudioEngine.isRunning {
             if sinceLastStartAttempt >= 0.35 {
                 _ = startLiveAudioRecognitionPipelineOnAudioQueue(resetTranscript: true)
             }

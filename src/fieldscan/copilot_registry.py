@@ -1858,10 +1858,10 @@ def resolve_copilot_action_plan(
         )
         return _plan([{"id": "twin.reset_view", "params": {}}], intent_mode="apply", reply=reply)
 
-    # 11a. Explicit PDF / Manual / Datasheet Viewer (ANY phrasing: "show me the pdf", "open the manual", "show me the pdf where the pins are")
-    asks_pdf_or_manual = bool(re.search(r"\b(pdf|manual|datasheet|spec\s*sheet|document|documentation|pinout|wiring\s*diagram|schematic)\b", norm))
+    # 11a. Explicit PDF / Manual / Datasheet Viewer (ANY phrasing, including Apple ASR "data sheet" two-word split)
+    asks_pdf_or_manual = bool(re.search(r"\b(pdf|manual|data\s*sheet|spec\s*sheet|document|documentation|pinout|wiring\s*diagram|schematic)\b", norm))
     wants_action_on_pdf = asks_pdf_or_manual and bool(
-        re.search(r"\b(show|open|view|display|pull\s*up|bring\s*up|go\s*to|where|page|pagina|section|seccion|see|look|read|abre|abrir|muestr\w*|ver|donde)\b", norm)
+        re.search(r"\b(show|open|view|display|pull\s*up|bring\s*up|go\s*to|where|page|pagina|section|seccion|see|look|read|find|abre|abrir|muestr\w*|ver|donde)\b", norm)
     )
     has_dip_twin_focus = bool(re.search(r"\b(digital\s*twin|3d|twin|model|explode)\b", norm))
     if wants_action_on_pdf and not has_dip_twin_focus and not re.search(r"\b(?:page|pagina|pag\.?)\s*#?\s*(\d{1,3})\b", norm):
@@ -2199,8 +2199,25 @@ def _parse_spoken_sensor_identity(raw: str) -> tuple[str, str, str | None, bool]
         return ("TZONE", "TZ THT-03R", None, auto_sub)
 
     tokens = tail.split()
+    has_digit = bool(re.search(r"[0-9]", tail))
+    known_oems = {
+        "tzone", "t-zone", "siemens", "honeywell", "endress", "fluke", "rosemount",
+        "yokogawa", "vaisala", "omega", "testo", "wika", "abb", "emerson", "schneider",
+        "omron", "keyence", "sick", "banner", "ifm", "pepperl", "vega", "krohne", "senseca",
+    }
+    has_known_oem = any(tok.lower() in known_oems for tok in tokens)
+    conv_noise = {
+        "but", "because", "clean", "dirty", "working", "broken", "connected", "offline",
+        "online", "here", "there", "nothing", "still", "same", "saying", "said",
+        "not", "no", "yes", "see", "saw", "show", "open", "closed", "empty", "full",
+    }
+    if not auto_sub:
+        if len(tokens) > 5 or any(tok.lower() in conv_noise for tok in tokens):
+            return None
+        if not has_digit and not has_known_oem:
+            return None
     if len(tokens) < 2:
-        return ("UNKNOWN", tail.upper(), None, auto_sub)
+        return ("UNKNOWN", tail.upper(), None, auto_sub) if (has_digit or auto_sub) else None
     mfg = tokens[0].replace("t-zone", "TZONE").upper()
     mod = " ".join(tokens[1:]).upper()
     return (mfg, mod, None, auto_sub)

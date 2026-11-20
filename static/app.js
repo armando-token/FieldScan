@@ -451,6 +451,8 @@ const dom = {
   dipGuidanceAuthorized: document.getElementById('dipGuidanceAuthorized'),
   btnConfirmDipStep: document.getElementById('btnConfirmDipStep'),
   btnIdentifyNewSensor: document.getElementById('btnIdentifyNewSensor'),
+  btnToolsNewSensor: document.getElementById('btnToolsNewSensor'),
+  btnToolsResetSensor: document.getElementById('btnToolsResetSensor'),
   emptyWorkspaceOverlay: document.getElementById('emptyWorkspaceOverlay'),
   btnEmptyIdentifySensor: document.getElementById('btnEmptyIdentifySensor'),
   btnResetCleanWorkspace: document.getElementById('btnResetCleanWorkspace'),
@@ -9229,22 +9231,27 @@ function initV4ShellControls() {
     } catch (_e) {}
   });
 
-  // Wire Identify New Sensor buttons (Tools panel + Empty Workspace overlay + Onboarding Modal)
-  dom.btnIdentifyNewSensor?.addEventListener('click', () => {
+  // Wire Identify New Sensor & Reset Sensor buttons (Top of Tools + Bottom of Tools + Catalog Advanced + Empty Workspace + Native Pill)
+  const triggerIdentifyNewSensor = () => {
     dom.toolsPage?.classList.remove('open');
+    dom.chatPage?.classList.remove('open');
     openSensorOnboardingModal({ capturePhoto: true });
     speakOnboardingStatus('Photo captured. What manufacturer and model is this sensor?');
-  });
-  dom.btnEmptyIdentifySensor?.addEventListener('click', () => {
-    openSensorOnboardingModal({ capturePhoto: true });
-    speakOnboardingStatus('Photo captured. What manufacturer and model is this sensor?');
-  });
-  dom.btnResetCleanWorkspace?.addEventListener('click', async () => {
+  };
+  const triggerResetSensorCleanSlate = async () => {
     const ok = await resetSensorWorkspaceCleanSlate({ clearInstalledPackages: true, silent: false });
     if (ok && dom.catalogModal) {
       dom.catalogModal.hidden = true;
     }
-  });
+  };
+  window.__fieldscanIdentifyNewSensor = triggerIdentifyNewSensor;
+  window.__fieldscanResetSensorWorkspace = triggerResetSensorCleanSlate;
+
+  dom.btnIdentifyNewSensor?.addEventListener('click', triggerIdentifyNewSensor);
+  dom.btnToolsNewSensor?.addEventListener('click', triggerIdentifyNewSensor);
+  dom.btnEmptyIdentifySensor?.addEventListener('click', triggerIdentifyNewSensor);
+  dom.btnResetCleanWorkspace?.addEventListener('click', triggerResetSensorCleanSlate);
+  dom.btnToolsResetSensor?.addEventListener('click', triggerResetSensorCleanSlate);
   dom.onboardCloseBtn?.addEventListener('click', () => {
     if (dom.sensorOnboardModal) dom.sensorOnboardModal.hidden = true;
   });

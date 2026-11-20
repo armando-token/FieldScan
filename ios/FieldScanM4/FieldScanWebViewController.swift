@@ -503,6 +503,14 @@ public final class FieldScanWebViewController: UIViewController, WKUIDelegate, W
             preferredStyle: .actionSheet
         )
 
+        sheet.addAction(UIAlertAction(title: "Identify New Sensor (Photo + Cloud)", style: .default) { [weak self] _ in
+            self?.webView?.evaluateJavaScript("window.__fieldscanIdentifyNewSensor && window.__fieldscanIdentifyNewSensor();", completionHandler: nil)
+        })
+
+        sheet.addAction(UIAlertAction(title: "Reset Sensor Workspace (Clear · Keep PUSR)", style: .destructive) { [weak self] _ in
+            self?.webView?.evaluateJavaScript("window.__fieldscanResetSensorWorkspace && window.__fieldscanResetSensorWorkspace();", completionHandler: nil)
+        })
+
         sheet.addAction(UIAlertAction(title: "iPad Autonomous Mode (127.0.0.1:8088 · No Mac)", style: .default) { [weak self] _ in
             self?.switchEndpoint(to: cfg.localBackendURL, mode: .embeddedLocal)
         })

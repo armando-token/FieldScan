@@ -392,6 +392,10 @@ public final class FieldScanSessionEngine {
         }
 
         let nowUp = ProcessInfo.processInfo.systemUptime
+        // Auto-recover stuck `audioState == "speaking"` if AVSpeechSynthesizer was cancelled or missed `didFinish`
+        if audioState == "speaking" && nowUp > (lastTTSEndedUptime + 0.35) {
+            audioState = "idle"
+        }
         let normU = Self.normalizeASCIILower(utterance)
         if audioState == "speaking" || (nowUp - lastTTSEndedUptime) < 0.65 {
             if normU.isEmpty { return (true, "EMPTY_DURING_TTS") }
@@ -402,11 +406,11 @@ public final class FieldScanSessionEngine {
                     return (true, "TTS_ACOUSTIC_ECHO_REJECTED")
                 }
             }
-            if audioState == "speaking" {
+            if audioState == "speaking" && nowUp <= lastTTSEndedUptime {
                 return (true, "MIC_GATED_WHILE_SPEAKING")
             }
         }
-        if !lastTTSTextNorm.isEmpty && normU.count >= 14 && lastTTSTextNorm.contains(normU) {
+        if !lastTTSTextNorm.isEmpty && (nowUp - lastTTSEndedUptime) < 2.2 && normU.count >= 14 && lastTTSTextNorm.contains(normU) {
             return (true, "TTS_VERBATIM_ECHO_REJECTED")
         }
         return (false, nil)

@@ -1170,9 +1170,9 @@ public final class FieldScanCopilotRegistry {
             return makePlan(actions: [["id": "twin.reset_view", "params": [:]]], intentMode: "apply", reply: reply)
         }
 
-        // 11. Explicit PDF / Manual / Datasheet Viewer (ANY phrasing: "show me the pdf", "open the manual", "show me the pdf on the pins page")
-        let asksForPdfOrManual = norm.range(of: "\\b(pdf|manual|datasheet|spec\\s*sheet|document|documentation|pinout|wiring\\s*diagram|schematic)\\b", options: .regularExpression) != nil
-        let wantsActionOnPdf = asksForPdfOrManual && norm.range(of: "\\b(show|open|view|display|pull\\s*up|bring\\s*up|go\\s*to|where|page|pagina|section|seccion|see|look|read|abre|abrir|muestr\\w*|ver|donde)\\b", options: .regularExpression) != nil
+        // 11. Explicit PDF / Manual / Datasheet Viewer (ANY phrasing, including Apple ASR "data sheet" two-word split)
+        let asksForPdfOrManual = norm.range(of: "\\b(pdf|manual|data\\s*sheet|spec\\s*sheet|document|documentation|pinout|wiring\\s*diagram|schematic)\\b", options: .regularExpression) != nil
+        let wantsActionOnPdf = asksForPdfOrManual && norm.range(of: "\\b(show|open|view|display|pull\\s*up|bring\\s*up|go\\s*to|where|page|pagina|section|seccion|see|look|read|find|abre|abrir|muestr\\w*|ver|donde)\\b", options: .regularExpression) != nil
         let hasDipTwinFocus = norm.range(of: "\\b(digital\\s*twin|3d|twin|model|explode)\\b", options: .regularExpression) != nil
         if wantsActionOnPdf && !hasDipTwinFocus && norm.range(of: "\\b(?:page|pagina|pag\\.?)\\s*#?\\s*(\\d{1,3})\\b", options: .regularExpression) == nil {
             let descToUse = descriptor ?? ["scene_origin": "bundled_parametric", "documents": [["document_id": "tht02_manual_v1_1", "title": "TZ THT-02 User's Manual V1.1", "revision": "V1.1", "page_count": 9]]]
@@ -1468,9 +1468,30 @@ public final class FieldScanCopilotRegistry {
         }
 
         // Generic split: first token = manufacturer, remaining tokens = model
+        // Guard against conversational "it's clean / it is not working" sentences masquerading as sensor models unless explicitly requested
         let tokens = tail.split(separator: " ").map(String.init)
+        let hasModelDigitOrDash = tail.range(of: "[0-9]", options: .regularExpression) != nil
+        let knownOems: Set<String> = [
+            "tzone", "t-zone", "siemens", "honeywell", "endress", "fluke", "rosemount",
+            "yokogawa", "vaisala", "omega", "testo", "wika", "abb", "emerson", "schneider",
+            "omron", "keyence", "sick", "banner", "ifm", "pepperl", "vega", "krohne", "senseca",
+        ]
+        let hasKnownOem = tokens.contains(where: { knownOems.contains($0.lowercased()) })
+        let conversationalNoise: Set<String> = [
+            "but", "because", "clean", "dirty", "working", "broken", "connected", "offline",
+            "online", "here", "there", "nothing", "still", "same", "working", "saying", "said",
+            "not", "no", "yes", "see", "saw", "show", "open", "closed", "empty", "full",
+        ]
+        if !autoSubmit {
+            if tokens.count > 5 || tokens.contains(where: { conversationalNoise.contains($0.lowercased()) }) {
+                return nil
+            }
+            if !hasModelDigitOrDash && !hasKnownOem {
+                return nil
+            }
+        }
         guard tokens.count >= 2 else {
-            return (manufacturer: "UNKNOWN", model: tail.uppercased(), variant: nil, autoSubmit: autoSubmit)
+            return (hasModelDigitOrDash || autoSubmit) ? (manufacturer: "UNKNOWN", model: tail.uppercased(), variant: nil, autoSubmit: autoSubmit) : nil
         }
         let mfg = tokens[0].replacingOccurrences(of: "t-zone", with: "TZONE").uppercased()
         let mod = tokens.dropFirst().joined(separator: " ").uppercased()
@@ -1489,13 +1510,16 @@ public final class FieldScanCopilotRegistry {
         DIRECT UI, PDF & 3D DIGITAL TWIN CONTROL:
         You directly control the FieldScan iPad interface, 3D Digital Twin, live camera, and OEM PDF manual.
         NEVER tell the user "I cannot open screens", "I cannot show the PDF", or "I cannot move the 3D model".
-        Whenever the user asks to show, open, view, move, zoom, rotate, explode, X-ray, inspect a part, open the PDF/manual, or navigate to any screen, put one or more directives at the START of your reply:
-        [[ACTION:<action_id>|<json_params>]]
+        Whenever the user asks to show, open, view, move, zoom, rotate, explode, X-ray, inspect a part, open the PDF/manual, or navigate to any screen, emit exact action tags (NO angle brackets) at the START of your reply, for example:
+        [[ACTION:manual.open_page|{"page":5,"open_lightbox":true}]]
+        [[ACTION:twin.show_dip|{"slave_id":1}]]
+        [[ACTION:twin.focus_part|{"part_id":"waterproof_gland_leads"}]]
+        [[ACTION:twin.rotate_view|{"direction":"back"}]]
         Allowed actions:
         - manual.open_page {"page":1..\(maxPages),"open_lightbox":true} (P1 overview, P3 specs/cal, P4 wiring, P5 DIP-8 pins, P6 Modbus regs, P7 CRC/0x03, P9 dimensions)
         - manual.close {}
         - twin.show_dip {"slave_id":1} (opens 3D housing and zooms into DIP-8 pins)
-        - twin.focus_part {"part_id":"<one of: \(partIds.joined(separator: ", "))>"}
+        - twin.focus_part {"part_id":"one of: \(partIds.joined(separator: ", "))"}
         - twin.set_explode {"exploded":true|false}
         - twin.set_render_mode {"mode":"wireframe"|"solid"}
         - twin.rotate_view {"direction":"left"|"right"|"front"|"back"|"top"|"bottom"|"zoom_in"|"zoom_out"|"spin"}
@@ -1510,11 +1534,11 @@ public final class FieldScanCopilotRegistry {
         """
     }
 
-    /// Parses and validates `[[ACTION:action_id|{...}]]` directives emitted by the local LLM.
-    /// Rejects any unregistered action ID and returns clean spoken/displayed text + validated actions.
+    /// Parses and validates `[[ACTION:...]]` directives emitted by the local LLM (including `<action_id {...}>` variants).
+    /// Rejects any unregistered action ID and ALWAYS strips all `[[ACTION:...]]` markers from spoken/displayed text.
     public func parseLLMActionDirectives(from rawReply: String) -> (cleanText: String, actions: [[String: Any]]) {
         let allowedIds = Set(buildActionRegistry().compactMap { $0["id"] as? String })
-        let pattern = "\\[\\[ACTION:([a-z0-9_\\.]+)(?:\\|(\\{[^\\]]*\\}))?\\]\\]"
+        let pattern = "\\[\\[ACTION:<?\\s*([a-z0-9_\\.]+)(?:\\s*[|\\s]\\s*(\\{[^\\]]*?\\}))?\\s*>?\\]\\]"
         guard let rx = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
             return (rawReply.trimmingCharacters(in: .whitespacesAndNewlines), [])
         }
@@ -1528,7 +1552,7 @@ public final class FieldScanCopilotRegistry {
             var params: [String: Any] = [:]
             if m.range(at: 2).location != NSNotFound,
                let pRange = Range(m.range(at: 2), in: rawReply) {
-                let pStr = String(rawReply[pRange])
+                let pStr = String(rawReply[pRange]).trimmingCharacters(in: CharacterSet(charactersIn: " >\t\n\r"))
                 if let pData = pStr.data(using: .utf8),
                    let pObj = (try? JSONSerialization.jsonObject(with: pData)) as? [String: Any] {
                     params = pObj
@@ -1539,7 +1563,13 @@ public final class FieldScanCopilotRegistry {
             }
             actions.append(["id": aid, "params": params])
         }
-        let stripped = rx.stringByReplacingMatches(in: rawReply, range: nsRange, withTemplate: "")
+        // Strip both valid and malformed [[ACTION:...]] tags so TTS/UI never speaks raw syntax
+        var stripped = rx.stringByReplacingMatches(in: rawReply, range: nsRange, withTemplate: "")
+        if let anyTagRx = try? NSRegularExpression(pattern: "\\[\\[ACTION:[^\\]]*\\]\\]", options: [.caseInsensitive]) {
+            let r2 = NSRange(stripped.startIndex..., in: stripped)
+            stripped = anyTagRx.stringByReplacingMatches(in: stripped, range: r2, withTemplate: "")
+        }
+        stripped = stripped
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (stripped.isEmpty ? "Done — updated the display." : stripped, actions)

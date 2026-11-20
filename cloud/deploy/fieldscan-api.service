@@ -1,0 +1,26 @@
+[Unit]
+Description=FieldScan Cloud API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fieldscan
+Group=fieldscan
+WorkingDirectory=/opt/fieldscan/current/cloud
+EnvironmentFile=/etc/fieldscan/api.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/fieldscan/current/cloud/.venv/bin/python -m uvicorn fieldscan_cloud.api:app --host 0.0.0.0 --port 8080 --workers 1 --no-proxy-headers --no-access-log
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/fieldscan
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

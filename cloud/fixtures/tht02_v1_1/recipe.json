@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "product_id": "tzone_tht02",
+  "variant_id": "v1_1_rs485",
+  "hardware_revisions": ["V1.1", "rev_1_1"],
+  "recipe_version": "1.0.0",
+  "input_unit": "mm",
+  "output_unit": "m",
+  "scale_to_meters": 0.001,
+  "axis_convention": "gltf_y_up_probe_along_z",
+  "control_measurements_m": {
+    "total_length_z": 0.140,
+    "outer_diameter_xy": 0.016,
+    "bracket_width_x": 0.042,
+    "tolerance_m": 0.0025
+  },
+  "evidence_source": {
+    "document_id": "tht02_manual_v1_1",
+    "revision_label": "V1.1",
+    "origin": "test_fixture",
+    "reference_pages": [1, 4, 5, 9]
+  },
+  "parts": [
+    {
+      "part_id": "strainer.head",
+      "node_id": "StrainerHead",
+      "legacy_zone_id": "strainer_head",
+      "aliases": ["strainer", "probe head", "SHT30", "strainer_head"],
+      "kind": "cylinder",
+      "z_start_mm": 0.0,
+      "z_end_mm": 32.0,
+      "diameter_mm": 16.0,
+      "color_rgba": [184, 196, 208, 255],
+      "citation_id": "tht02_manual_v1_1:p1:section1",
+      "page": 1
+    },
+    {
+      "part_id": "seal.upper",
+      "node_id": "UpperSealRing",
+      "legacy_zone_id": "upper_seal_ring",
+      "aliases": ["seal ring", "upper seal", "upper_seal_ring"],
+      "kind": "cylinder",
+      "z_start_mm": 32.0,
+      "z_end_mm": 38.0,
+      "diameter_mm": 16.2,
+      "color_rgba": [31, 38, 46, 255],
+      "citation_id": "tht02_manual_v1_1:p1:section1",
+      "page": 1
+    },
+    {
+      "part_id": "housing.upper_barrel",
+      "node_id": "UpperBarrel",
+      "legacy_zone_id": "upper_barrel_dip",
+      "aliases": ["upper barrel", "housing cover", "upper_barrel_dip"],
+      "kind": "cylinder",
+      "z_start_mm": 38.0,
+      "z_end_mm": 68.0,
+      "diameter_mm": 16.0,
+      "color_rgba": [203, 212, 220, 255],
+      "citation_id": "tht02_manual_v1_1:p5:section1",
+      "page": 5
+    },
+    {
+      "part_id": "dip.bank",
+      "node_id": "DIPBank",
+      "legacy_zone_id": "upper_barrel_dip",
+      "aliases": ["DIP bank", "DIP switch", "switch block", "SW1", "address switch"],
+      "kind": "box",
+      "size_mm": [10.0, 5.2, 18.0],
+      "center_mm": [0.0, 0.0, 53.0],
+      "color_rgba": [196, 48, 48, 255],
+      "citation_id": "tht02_manual_v1_1:p5:section1",
+      "page": 5
+    },
+    {
+      "part_id": "housing.mounting_flange",
+      "node_id": "MountingFlange",
+      "legacy_zone_id": "mounting_flange",
+      "aliases": ["mounting flange", "bracket", "mounting ears", "mounting_flange"],
+      "kind": "box",
+      "size_mm": [42.0, 18.0, 20.0],
+      "center_mm": [0.0, 0.0, 78.0],
+      "color_rgba": [154, 166, 178, 255],
+      "citation_id": "tht02_manual_v1_1:p9:section1",
+      "page": 9
+    },
+    {
+      "part_id": "housing.lower_barrel",
+      "node_id": "LowerBarrel",
+      "legacy_zone_id": "lower_barrel_rs485",
+      "aliases": ["lower barrel", "RS-485 transceiver", "lower_barrel_rs485"],
+      "kind": "cylinder",
+      "z_start_mm": 88.0,
+      "z_end_mm": 122.0,
+      "diameter_mm": 16.0,
+      "color_rgba": [194, 204, 214, 255],
+      "citation_id": "tht02_manual_v1_1:p4:section1",
+      "page": 4
+    },
+    {
+      "part_id": "terminal.waterproof_gland",
+      "node_id": "WaterproofGland",
+      "legacy_zone_id": "waterproof_gland_leads",
+      "aliases": ["waterproof gland", "terminal nut", "cable gland", "waterproof_gland_leads"],
+      "kind": "cylinder",
+      "z_start_mm": 122.0,
+      "z_end_mm": 140.0,
+      "diameter_mm": 15.5,
+      "color_rgba": [123, 135, 148, 255],
+      "citation_id": "tht02_manual_v1_1:p5:section1",
+      "page": 5
+    }
+  ],
+  "views": [
+    {
+      "view_id": "default_overview",
+      "label": "Assembled Overview",
+      "camera_offset_m": [0.18, 0.08, 0.07],
+      "target_m": [0.0, 0.0, 0.07],
+      "exploded_offsets_m": {}
+    },
+    {
+      "view_id": "open_dip",
+      "label": "Two-Step Open DIP Access",
+      "camera_offset_m": [0.09, 0.05, 0.053],
+      "target_m": [0.0, 0.0, 0.053],
+      "exploded_offsets_m": {
+        "WaterproofGland": [0.0, 0.0, 0.025],
+        "UpperBarrel": [0.0, 0.032, 0.0]
+      }
+    }
+  ],
+  "actions": [
+    {
+      "kind": "focus_part",
+      "part_id": "dip.bank",
+      "view_id": "open_dip",
+      "citation_id": "tht02_manual_v1_1:p5:section1",
+      "page": 5
+    },
+    {
+      "kind": "focus_part",
+      "part_id": "strainer.head",
+      "view_id": "default_overview",
+      "citation_id": "tht02_manual_v1_1:p1:section1",
+      "page": 1
+    },
+    {
+      "kind": "focus_part",
+      "part_id": "terminal.waterproof_gland",
+      "view_id": "open_dip",
+      "citation_id": "tht02_manual_v1_1:p5:section1",
+      "page": 5
+    },
+    {
+      "kind": "show_view",
+      "part_id": "dip.bank",
+      "view_id": "open_dip",
+      "citation_id": "tht02_manual_v1_1:p5:section1",
+      "page": 5
+    },
+    {
+      "kind": "highlight_part",
+      "part_id": "housing.lower_barrel",
+      "view_id": "default_overview",
+      "citation_id": "tht02_manual_v1_1:p4:section1",
+      "page": 4
+    },
+    {
+      "kind": "reset_view",
+      "part_id": "strainer.head",
+      "view_id": "default_overview",
+      "citation_id": "tht02_manual_v1_1:p1:section1",
+      "page": 1
+    }
+  ]
+}

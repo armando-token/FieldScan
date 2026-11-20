@@ -1,0 +1,10 @@
+[Unit]
+Description=FieldScan Cloud periodic OEM source recheck timer
+
+[Timer]
+OnCalendar=*-*-* 00/6:00:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

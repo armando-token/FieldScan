@@ -1,0 +1,28 @@
+[Unit]
+Description=FieldScan Cloud package worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fieldscan
+Group=fieldscan
+WorkingDirectory=/opt/fieldscan/current/cloud
+EnvironmentFile=/etc/fieldscan/worker.env
+LoadCredential=signer.pem:/etc/fieldscan/signer-ed25519.pem
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=2
+ExecStart=/opt/fieldscan/current/cloud/.venv/bin/python -m fieldscan_cloud.worker
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/fieldscan
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

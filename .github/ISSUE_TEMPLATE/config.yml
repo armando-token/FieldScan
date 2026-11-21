@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security & Industrial Safety Reporting
+    url: https://github.com/armando-token/FieldScan/security/policy
+    about: Review our threat model and report security/safety issues privately.
+  - name: Architecture Reference
+    url: https://github.com/armando-token/FieldScan/blob/main/ARCHITECTURE.md
+    about: Inspect the Edge-to-Cloud system architecture, state machines, and contracts.

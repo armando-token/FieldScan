@@ -1,0 +1,41 @@
+name: Bug Report
+description: Report a defect in the iPad Air M4 app, workstation HMI, Modbus engine, or Cloud CAD pipeline.
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Subsystem
+      options:
+        - Native iPad Air M4 App (ios/FieldScanM4)
+        - UX v4 HMI & 3D Digital Twin (static/)
+        - Workstation Backend & Vision (src/fieldscan)
+        - Modbus-RTU / PUSR TCP SCADA
+        - Voice Copilot & Action Registry
+        - FieldScan Cloud CAD v2 Pipeline (cloud/)
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Concise description of the observed vs expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Open FieldScan on iPad Air M4 / Workstation
+        2. Trigger action or voice command '...'
+        3. Observe error
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Hardware & Runtime Environment
+      placeholder: "e.g., iPad Air 11-inch (M4), iPadOS 27.2, PUSR USR-DR164 V1.0.15 / macOS arm64 Python 3.12"
+    validations:
+      required: true

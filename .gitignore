@@ -42,3 +42,4 @@ data/
 # Clean source & git history delivery folder (untracked export)
 /fieldscan_source_delivery/
 /MEGAPLAN_FIELDSCAN_IPAD_M4_INTEGRACION_CLOUD.md
+/UX/

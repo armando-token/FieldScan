@@ -1,0 +1,26 @@
+name: Feature Request
+description: Propose a new sensor profile, 3D CAD primitive, copilot action, or field workflow capability.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Field Problem / Use Case
+      description: What real-world technician workflow does this improve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe the target architecture, API/contract impact, and offline safety considerations.
+    validations:
+      required: true
+  - type: checkboxes
+    id: invariants
+    attributes:
+      label: Safety & Offline Invariants
+      options:
+        - label: Preserves 100% offline Airplane Mode startup (`sync_enabled = false`)
+        - label: Preserves Read-Only Modbus pilot safety (`FC03` only, zero unconfirmed bus mutations)
+        - label: Maintains 100% English UI/code/docs standard

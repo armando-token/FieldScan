@@ -10,6 +10,9 @@ dependencies = [
   "cryptography",
   "numpy",
   "trimesh",
+  "pillow",
+  "shapely",
+  "mapbox-earcut",
 ]
 
 [project.optional-dependencies]

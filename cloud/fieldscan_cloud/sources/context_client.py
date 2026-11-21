@@ -25,6 +25,8 @@ class SearchCandidate:
     domain: str
     title: str
     snippet: str
+    markdown: str = ""
+    highlights: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,14 @@ def build_technical_query(manufacturer: str, model: str, variant: str | None = N
     if variant and variant.strip():
         parts.append(variant.strip())
     parts.append("datasheet manual")
+    return " ".join(parts)
+
+
+def build_photo_search_query(manufacturer: str, model: str, variant: str | None = None) -> str:
+    parts = [manufacturer.strip(), model.strip()]
+    if variant and variant.strip():
+        parts.append(variant.strip())
+    parts.append("product photo connector housing")
     return " ".join(parts)
 
 
@@ -145,12 +155,16 @@ class ContextSearchClient:
             if not url.startswith("https://"):
                 continue
             domain = (urlsplit(url).hostname or "").lower()
+            raw_hl = item.get("highlights")
+            hl_tuple = tuple(str(h).strip()[:300] for h in raw_hl[:5]) if isinstance(raw_hl, list) else ()
             candidates.append(
                 SearchCandidate(
                     url=url,
                     domain=domain,
                     title=str(item.get("title", "")).strip(),
                     snippet=str(item.get("description") or item.get("snippet") or item.get("text") or "").strip()[:400],
+                    markdown=str(item.get("markdown") or "").strip()[:16000],
+                    highlights=hl_tuple,
                 )
             )
         return ContextSearchResult(

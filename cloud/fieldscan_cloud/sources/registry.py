@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -11,8 +12,33 @@ from fieldscan_cloud.models import normalize_token
 from fieldscan_cloud.sources.context_client import SearchCandidate
 
 ALLOWED_OEM_DOMAINS: dict[str, set[str]] = {
-    "tzone": {"tzonedigital.com", "www.tzonedigital.com"},
+    "tzone": {"tzonedigital.com", "www.tzonedigital.com", "controlnautas.com", "www.controlnautas.com"},
+    "pusr": {"pusr.com", "www.pusr.com", "usriot.com", "www.usriot.com", "controlnautas.com", "www.controlnautas.com"},
+    "usriot": {"pusr.com", "www.pusr.com", "usriot.com", "www.usriot.com"},
+    "sensirion": {"sensirion.com", "www.sensirion.com"},
+    "autonics": {"autonics.com", "www.autonics.com"},
+    "omron": {"omron.com", "www.omron.com", "industrial.omron.com", "ia.omron.com"},
+    "siemens": {"siemens.com", "www.siemens.com", "support.industry.siemens.com", "cache.industry.siemens.com"},
+    "schneider": {"se.com", "www.se.com", "download.schneider-electric.com"},
+    "novus": {"novusautomation.com", "www.novusautomation.com"},
 }
+
+
+def get_allowed_oem_domains(manufacturer_norm: str) -> set[str]:
+    """Return built-in plus optional env-configured (`FS_EXTRA_OEM_DOMAINS`) allowlisted domains for an OEM."""
+    domains = set(ALLOWED_OEM_DOMAINS.get(manufacturer_norm, set()))
+    extra_raw = os.environ.get("FS_EXTRA_OEM_DOMAINS", "").strip()
+    if extra_raw:
+        for entry in extra_raw.split(";"):
+            if ":" not in entry:
+                continue
+            mfr_part, doms_part = entry.split(":", 1)
+            if normalize_token(mfr_part) == manufacturer_norm:
+                for dom in doms_part.split(","):
+                    cleaned = dom.strip().lower()
+                    if cleaned:
+                        domains.add(cleaned)
+    return domains
 
 SEED_TZONE_THT02_SOURCES: list[dict[str, str]] = [
     {
@@ -61,7 +87,7 @@ class ClassifiedCandidate:
 def classify_search_candidate(candidate: SearchCandidate, *, manufacturer_norm: str) -> ClassifiedCandidate:
     """Classify a Context.dev search result without treating search rank as applicability certification."""
     domain = candidate.domain.lower()
-    allowed_set = ALLOWED_OEM_DOMAINS.get(manufacturer_norm, set())
+    allowed_set = get_allowed_oem_domains(manufacturer_norm)
     is_oem = any(domain == d or domain.endswith(f".{d}") for d in allowed_set)
     path_lower = urlsplit(candidate.url).path.lower()
     text_lower = f"{candidate.title} {candidate.snippet}".lower()
@@ -109,14 +135,14 @@ def filter_artifacts_by_permission(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """
     Enforce source distribution rights (CL-SRC-06):
-    - redistributable: original PDF + derived index/markdown allowed
-    - derived_only: exclude raw `manual_pdf`, publish derived `document_index` / `manual_markdown`
-    - reference_only / restricted: emit no raw PDF and flag SOURCE_RIGHTS_RESTRICTED
+    - redistributable: original PDF + rasterized page PNGs + derived index/markdown allowed
+    - derived_only: exclude raw `manual_pdf` and `manual_page_image`, publish derived `document_index` / `manual_markdown`
+    - reference_only / restricted: emit no raw PDF/images and flag SOURCE_RIGHTS_RESTRICTED
     """
     if permission_policy == "redistributable":
         return list(artifacts), []
     if permission_policy == "derived_only":
-        filtered = [a for a in artifacts if a.get("role") != "manual_pdf"]
+        filtered = [a for a in artifacts if a.get("role") not in {"manual_pdf", "manual_page_image"}]
         return filtered, ["SOURCE_RIGHTS_DERIVED_ONLY"]
     filtered = [a for a in artifacts if a.get("role") == "document_index"]
     return filtered, ["SOURCE_RIGHTS_RESTRICTED"]

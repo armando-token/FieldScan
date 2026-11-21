@@ -91,14 +91,14 @@ def _validate_public_hostname(hostname: str, *, check_dns: bool = True) -> None:
             )
 
 
-def _validate_target_url(url: str, allowed_domains: set[str], *, check_dns: bool) -> str:
+def _validate_target_url(url: str, allowed_domains: set[str] | None, *, check_dns: bool) -> str:
     parsed = urlsplit(url)
     if parsed.scheme.lower() != "https":
         raise SourceDownloadError("SOURCE_SCHEME_REJECTED", "Only https:// URLs are permitted")
     if parsed.username or parsed.password:
         raise SourceDownloadError("SOURCE_EMBEDDED_CREDENTIALS", "Embedded URL credentials are forbidden")
     hostname = (parsed.hostname or "").lower()
-    if not _is_domain_allowed(hostname, allowed_domains):
+    if allowed_domains is not None and not _is_domain_allowed(hostname, allowed_domains):
         raise SourceDownloadError(
             "SOURCE_DOMAIN_NOT_ALLOWED", f"Host {hostname!r} is outside allowlisted OEM origins"
         )
@@ -109,7 +109,7 @@ def _validate_target_url(url: str, allowed_domains: set[str], *, check_dns: bool
 def download_allowlisted_source(
     url: str,
     *,
-    allowed_domains: set[str],
+    allowed_domains: set[str] | None,
     expected_kind: str = "pdf",
     max_bytes: int = MAX_DOWNLOAD_BYTES,
     timeout_sec: float = 25.0,
@@ -234,4 +234,24 @@ def _verify_content_kind(raw: bytes, content_type: str, expected_kind: str) -> N
             raise SourceDownloadError(
                 "SOURCE_MAGIC_MISMATCH",
                 "Downloaded payload is not a valid glTF binary (.glb)",
+            )
+    elif expected_kind == "image":
+        if is_html:
+            raise SourceDownloadError(
+                "SOURCE_HTML_PORTAL_REJECTED",
+                "Received HTML page instead of image binary",
+            )
+        is_png = raw.startswith(b"\x89PNG\r\n\x1a\n")
+        is_jpeg = raw.startswith(b"\xff\xd8\xff")
+        is_webp = len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP"
+        if not (is_png or is_jpeg or is_webp):
+            raise SourceDownloadError(
+                "SOURCE_IMAGE_MAGIC_MISMATCH",
+                f"Downloaded image is not JPEG/PNG/WebP (content-type={content_type!r})",
+            )
+    elif expected_kind == "html":
+        if not (is_html or content_type.startswith("text/")):
+            raise SourceDownloadError(
+                "SOURCE_NOT_HTML",
+                f"Expected HTML product page, got content-type={content_type!r}",
             )

@@ -60,6 +60,41 @@ def _parse_int(name: str, raw: str | None, default: int, *, min_value: int = 1) 
     return val
 
 
+_VALID_VLM_PROVIDERS = {"openai_compatible", "bedrock_mantle", "bedrock", "gemini", "anthropic"}
+_AWS_REGION_RE = re.compile(r"^[a-z]{2}(?:-[a-z]+)+-\d+$")
+
+
+def _default_provider_api_url(provider: str, *, bedrock_region: str) -> str:
+    if provider == "bedrock_mantle":
+        return f"https://bedrock-mantle.{bedrock_region}.api.aws/v1/chat/completions"
+    if provider == "bedrock":
+        return f"https://bedrock-runtime.{bedrock_region}.amazonaws.com/model/{{model}}/converse"
+    if provider == "gemini":
+        return "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    if provider == "anthropic":
+        return "https://api.anthropic.com/v1/messages"
+    return "https://api.openai.com/v1/chat/completions"
+
+
+def _parse_aws_region(raw: str | None, default: str = "us-east-1") -> str:
+    region = (raw or default).strip().lower() or default
+    if not _AWS_REGION_RE.match(region):
+        raise ConfigError(f"Invalid AWS region format: {region!r}")
+    return region
+
+
+def _parse_float(name: str, raw: str | None, default: float, *, min_value: float = 0.0) -> float:
+    if raw is None or not raw.strip():
+        return default
+    try:
+        val = float(raw.strip())
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a float") from exc
+    if val < min_value:
+        raise ConfigError(f"{name} must be >= {min_value}")
+    return val
+
+
 @dataclass(frozen=True)
 class BaseConfig:
     env: str
@@ -80,6 +115,14 @@ class ApiConfig(BaseConfig):
     allow_device_auto_enroll: bool = False
     max_enrolled_devices: int = 50
     signing_key_id: str = "pilot-1"
+    assistant_enabled: bool = False
+    assistant_provider: str = "bedrock_mantle"
+    assistant_api_url: str = "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions"
+    assistant_model: str = "moonshotai.kimi-k2.5"
+    assistant_api_key: str | None = None
+    assistant_timeout_sec: float = 30.0
+    assistant_max_body_bytes: int = 2_000_000
+    assistant_max_tokens: int = 512
 
 
 @dataclass(frozen=True)
@@ -95,6 +138,14 @@ class WorkerConfig(BaseConfig):
     max_job_attempts: int
     job_lease_sec: int
     poll_interval_sec: float
+    image_harvest_enabled: bool = True
+    vlm_enabled: bool = False
+    vlm_provider: str = "openai_compatible"
+    vlm_api_url: str = "https://api.openai.com/v1/chat/completions"
+    vlm_model: str = "gpt-4o"
+    vlm_api_key: str | None = None
+    vlm_visual_review: bool = False
+    vlm_min_visual_score: float = 0.70
 
 
 def _load_base(environ: dict[str, str]) -> BaseConfig:
@@ -141,6 +192,31 @@ def load_api_config(environ: dict[str, str] | None = None) -> ApiConfig:
     if not _HEX64_RE.match(token_sha):
         raise ConfigError("FS_API_TOKEN_SHA256 must be a 64-character lowercase hex SHA-256 digest")
 
+    bedrock_region = _parse_aws_region(env_map.get("FS_BEDROCK_REGION", env_map.get("AWS_REGION")), "us-east-1")
+    assistant_enabled = _parse_bool(env_map.get("FS_ASSISTANT_ENABLED"), False)
+    assistant_provider = env_map.get("FS_ASSISTANT_PROVIDER", "bedrock_mantle").strip().lower() or "bedrock_mantle"
+    if assistant_provider not in _VALID_VLM_PROVIDERS:
+        raise ConfigError(f"Unsupported FS_ASSISTANT_PROVIDER={assistant_provider!r}")
+
+    assistant_api_url = (
+        env_map.get("FS_ASSISTANT_API_URL", "").strip()
+        or _default_provider_api_url(assistant_provider, bedrock_region=bedrock_region)
+    )
+    if assistant_enabled and not assistant_api_url.startswith("https://"):
+        raise ConfigError("FS_ASSISTANT_API_URL must use https://")
+
+    assistant_model = env_map.get("FS_ASSISTANT_MODEL", "moonshotai.kimi-k2.5").strip() or "moonshotai.kimi-k2.5"
+    raw_assistant_key = (
+        env_map.get("FS_ASSISTANT_API_KEY", "").strip()
+        or env_map.get("AWS_BEARER_TOKEN_BEDROCK", "").strip()
+    )
+    if assistant_enabled:
+        assistant_api_key: str | None = _require_non_placeholder("FS_ASSISTANT_API_KEY", raw_assistant_key)
+    else:
+        if raw_assistant_key and _PLACEHOLDER_PREFIX in raw_assistant_key.upper():
+            raise ConfigError("FS_ASSISTANT_API_KEY must not contain placeholder text even when disabled")
+        assistant_api_key = raw_assistant_key or None
+
     return ApiConfig(
         env=base.env,
         channel=base.channel,
@@ -160,6 +236,18 @@ def load_api_config(environ: dict[str, str] | None = None) -> ApiConfig:
             "FS_MAX_ENROLLED_DEVICES", env_map.get("FS_MAX_ENROLLED_DEVICES"), 50, min_value=1
         ),
         signing_key_id=env_map.get("FS_SIGNING_KEY_ID", "pilot-1").strip() or "pilot-1",
+        assistant_enabled=assistant_enabled,
+        assistant_provider=assistant_provider,
+        assistant_api_url=assistant_api_url,
+        assistant_model=assistant_model,
+        assistant_api_key=assistant_api_key,
+        assistant_timeout_sec=_parse_float("FS_ASSISTANT_TIMEOUT_SEC", env_map.get("FS_ASSISTANT_TIMEOUT_SEC"), 30.0, min_value=2.0),
+        assistant_max_body_bytes=_parse_int(
+            "FS_ASSISTANT_MAX_BODY_BYTES", env_map.get("FS_ASSISTANT_MAX_BODY_BYTES"), 2_000_000, min_value=16384
+        ),
+        assistant_max_tokens=_parse_int(
+            "FS_ASSISTANT_MAX_TOKENS", env_map.get("FS_ASSISTANT_MAX_TOKENS"), 512, min_value=32
+        ),
     )
 
 
@@ -212,6 +300,38 @@ def load_worker_config(environ: dict[str, str] | None = None) -> WorkerConfig:
             raise ConfigError("CONTEXT_DEV_API_KEY must not contain placeholder text even when disabled")
         context_api_key = raw_ctx_key or None
 
+    bedrock_region = _parse_aws_region(env_map.get("FS_BEDROCK_REGION", env_map.get("AWS_REGION")), "us-east-1")
+    image_harvest_enabled = _parse_bool(env_map.get("FS_IMAGE_HARVEST_ENABLED"), context_enabled)
+    vlm_enabled = _parse_bool(env_map.get("FS_VLM_ENABLED"), False)
+    vlm_provider = env_map.get("FS_VLM_PROVIDER", "openai_compatible").strip().lower() or "openai_compatible"
+    if vlm_provider not in _VALID_VLM_PROVIDERS:
+        raise ConfigError(f"Unsupported FS_VLM_PROVIDER={vlm_provider!r}")
+
+    vlm_api_url = (
+        env_map.get("FS_VLM_API_URL", "").strip()
+        or _default_provider_api_url(vlm_provider, bedrock_region=bedrock_region)
+    )
+    if vlm_enabled and not vlm_api_url.startswith("https://"):
+        raise ConfigError("FS_VLM_API_URL must use https://")
+
+    vlm_model = env_map.get("FS_VLM_MODEL", "gpt-4o").strip() or "gpt-4o"
+    raw_vlm_key = (
+        env_map.get("FS_VLM_API_KEY", "").strip()
+        or env_map.get("AWS_BEARER_TOKEN_BEDROCK", "").strip()
+    )
+    if vlm_enabled:
+        vlm_api_key: str | None = _require_non_placeholder("FS_VLM_API_KEY", raw_vlm_key)
+    else:
+        if raw_vlm_key and _PLACEHOLDER_PREFIX in raw_vlm_key.upper():
+            raise ConfigError("FS_VLM_API_KEY must not contain placeholder text even when disabled")
+        vlm_api_key = raw_vlm_key or None
+
+    vlm_visual_review = _parse_bool(env_map.get("FS_VLM_VISUAL_REVIEW"), vlm_enabled)
+    try:
+        vlm_min_visual_score = float(env_map.get("FS_VLM_MIN_VISUAL_SCORE", "0.70"))
+    except ValueError as exc:
+        raise ConfigError("FS_VLM_MIN_VISUAL_SCORE must be a float") from exc
+
     return WorkerConfig(
         env=base.env,
         channel=base.channel,
@@ -231,4 +351,12 @@ def load_worker_config(environ: dict[str, str] | None = None) -> WorkerConfig:
         max_job_attempts=_parse_int("FS_MAX_JOB_ATTEMPTS", env_map.get("FS_MAX_JOB_ATTEMPTS"), 3, min_value=1),
         job_lease_sec=_parse_int("FS_JOB_LEASE_SEC", env_map.get("FS_JOB_LEASE_SEC"), 180, min_value=10),
         poll_interval_sec=float(env_map.get("FS_WORKER_POLL_SEC", "0.5")),
+        image_harvest_enabled=image_harvest_enabled,
+        vlm_enabled=vlm_enabled,
+        vlm_provider=vlm_provider,
+        vlm_api_url=vlm_api_url,
+        vlm_model=vlm_model,
+        vlm_api_key=vlm_api_key,
+        vlm_visual_review=vlm_visual_review,
+        vlm_min_visual_score=vlm_min_visual_score,
     )

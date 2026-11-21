@@ -11,15 +11,16 @@
 
 ## 1. Bench Topologies & Pre-Event Setup (Section 15.1)
 
-### Topology A — Autonomous iPad Air M4 + PUSR `USR-DR164` (No Mac)
+### Topology A — Autonomous iPad Air M4 + PUSR `USR-DR164` Direct AP (Primary Field Mode · No Router / No Mac)
 1. **Electrical & Bus Isolation**:
    - Isolate the bench from any plant operational bus.
    - Wire `TZ THT-02` leads per Manual V1.1 Page 4: **Red** = `DC 5-24V (+)`, **Black** = `Common GND`, **Yellow** = `RS-485 A+`, **Green** = `RS-485 B-`.
-   - Configure PUSR `USR-DR164` serial side to `9600 bps, 8N1` and network side to **Modbus TCP (`MBAP` <-> `Modbus RTU`)** on port `502` (never raw transparent serial on `:5502`).
-2. **iPad Configuration**:
+   - Configure PUSR `USR-DR164` Wi-Fi in **Pure AP Mode** (WPA2 password protected; avoid `AP+STA` dual mode in field operation so the single radio does not scan for missing routers), serial side to `9600 bps, 8N1`, and network side to **Modbus TCP (`MBAP` <-> `Modbus RTU`)** on port `502` (never raw transparent serial on `:5502`). Standard Direct AP gateway IP is `10.10.100.254` (alternate static AP `192.168.0.7`).
+2. **iPad Configuration (AP-First)**:
    - Disconnect Mac USB-C cable when demonstrating pure iPad autonomy (`IA-02`, `OFF-01`, `OFF-02`).
-   - Connect iPad Wi-Fi to the isolated bench AP/router (no WAN/Internet required).
-   - Launch **FieldScanM4** -> tap top-right pill (`M4 12GB · iPad Local · Share`) -> **Configure PUSR USR-DR164 Modbus TCP Gateway** -> enter gateway IP (e.g. `192.168.0.7`) and port `502`.
+   - Join the PUSR `USR-DR164` Direct AP Wi-Fi SSID in iPad Settings (no external router or WAN/Internet required).
+   - Launch **FieldScanM4** -> tap the network icon next to **Modbus: PUSR Direct AP / TCP (:502)** (or open the top-right pill `M4 12GB · iPad Local · Share` -> **PUSR Direct AP / Gateway Setup (:502)...**) -> tap **Auto-Detect Direct PUSR AP (:502)** (or 1-tap preset `10.10.100.254:502` / `192.168.0.7:502`).
+   - *Optional Secondary Lab Mode (STA)*: Use **Advanced: Custom IP / Lab Router (STA Mode)** only on an office bench when simultaneous Cloud Catalog downloads and Modbus polling are desired.
 
 ### Topology B — Assisted Mac Mini Bench (USB-C Tether + `FT2232HL`)
 1. Attach isolated `FT2232HL` USB-RS485 adapter to Mac Mini (`/dev/cu.usbserial*`) and connect iPad Air M4 via USB-C cable.

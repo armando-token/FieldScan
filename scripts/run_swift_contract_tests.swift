@@ -589,12 +589,212 @@ func runSwiftContractSuite() throws {
     }
     check(redirBlocked, "M4-WAN-04: Swift URLSessionTaskDelegate must block cross-origin redirect")
 
+    // 11. AP-First Direct PUSR Discovery & RFC1918 Guard Verification (Swift)
+    check(ModbusTCPClient.isPrivateRFC1918IPv4("10.10.100.254") == true, "AP-First Swift: 10.10.100.254 must be RFC1918")
+    check(ModbusTCPClient.isPrivateRFC1918IPv4("192.168.0.7") == true, "AP-First Swift: 192.168.0.7 must be RFC1918")
+    check(ModbusTCPClient.isPrivateRFC1918IPv4("8.8.8.8") == false, "AP-First Swift: public WAN IP 8.8.8.8 must be rejected")
+    let apCandidates = ModbusTCPClient.buildDirectAPCandidateHosts(wifiIP: "10.10.100.100", savedHost: "192.168.50.254")
+    let apHosts = apCandidates.map { $0.host }
+    check(apHosts.first == "10.10.100.254", "AP-First Swift: active PUSR subnet must rank 10.10.100.254 first")
+    check(!apHosts.contains("10.10.100.100"), "AP-First Swift: must exclude device's own Wi-Fi IP")
+    check(apHosts.contains("192.168.0.7"), "AP-First Swift: must include alternate PUSR AP preset 192.168.0.7")
+    let badPortProbe = ModbusTCPClient.probeTCPPort(host: "10.10.100.254", port: 5502)
+    check(!badPortProbe.reachable && badPortProbe.errorCode == "PROTOCOL_MISMATCH", "AP-First Swift: probe must block :5502")
+    let badWanProbe = ModbusTCPClient.probeTCPPort(host: "8.8.8.8", port: 502)
+    check(!badWanProbe.reachable && badWanProbe.errorCode == "WAN_HOST_BLOCKED", "AP-First Swift: probe must block public WAN IP")
+    let badUdpWan = ModbusTCPClient.sendPusrUDPCommand(host: "8.8.8.8", command: "www.usr.cn")
+    check(badUdpWan.reply == nil && badUdpWan.errorCode == "WAN_HOST_BLOCKED", "1-Tap PUSR Swift: UDP 48899 must block public WAN IP")
+    let badAuto5502 = ModbusTCPClient.autoProvisionPusrGateway(preferredHost: "10.10.100.254", baud: 9600, targetPort: 5502)
+    check((badAuto5502["ok"] as? Bool) == false && (badAuto5502["error_code"] as? String) == "PROTOCOL_MISMATCH", "1-Tap PUSR Swift: autoProvision must block :5502")
+    let badWebWan = ModbusTCPClient.ensurePusrWebModbusEnabled(host: "8.8.8.8")
+    check(badWebWan.checked == false && badWebWan.log.first?["reply"] == "WAN_HOST_BLOCKED", "1-Tap PUSR Swift: Web modbus helper must block public WAN IP")
+
+    // 12. Unified Copilot Action Registry, Bilingual ES Pack, 8-State Guidance & Durable History Parity (Swift)
+    let copilotReg = FieldScanCopilotRegistry()
+    let regActions = copilotReg.buildActionRegistry(rootOverride: repoRoot)
+    let regScreens = FieldScanCopilotRegistry.buildScreenInventory()
+    check(regActions.count >= 25, "Swift CopilotRegistry must expose >= 25 bounded actions")
+    check(regScreens.count >= 14, "Swift CopilotRegistry must expose complete screen inventory")
+    check(!copilotReg.spanishSpeechLocales(rootOverride: repoRoot).isEmpty, "Swift CopilotRegistry must load audited ES speech locales")
+
+    // UI-01 EN & ES PUSR field locator
+    let ui01En = copilotReg.resolveCopilotActionPlan(
+        query: "Open PUSR configuration and show me where to see the port",
+        descriptor: nil,
+        modbusTel: nil,
+        visionTel: nil,
+        gatewayHost: "",
+        gatewayPort: 502,
+        cloudSyncEnabled: false,
+        authorizedBusSlaveId: 1,
+        currentDipAddress: 1,
+        rootOverride: repoRoot
+    )
+    let ui01Acts = (ui01En?["actions"] as? [[String: Any]]) ?? []
+    check(ui01Acts.map { $0["id"] as? String } == ["config.open_pusr", "config.show_pusr_field"], "Swift UI-01 EN must open PUSR + highlight field")
+    check((ui01En?["bus_target_mutated"] as? Bool) == false, "Swift UI-01 must not mutate bus target")
+
+    let esPack = copilotReg.loadSpanishVoicePack(rootOverride: repoRoot)
+    let esAliases = (esPack["action_aliases"] as? [String: [String]]) ?? [:]
+    let esPusrQuery = (esAliases["config.open_pusr"]?.first ?? "open pusr") + " y " + (esAliases["config.show_pusr_field"]?.dropFirst().first ?? "port")
+    let ui01Es = copilotReg.resolveCopilotActionPlan(
+        query: esPusrQuery,
+        descriptor: nil,
+        modbusTel: nil,
+        visionTel: nil,
+        gatewayHost: "",
+        gatewayPort: 502,
+        cloudSyncEnabled: false,
+        authorizedBusSlaveId: 1,
+        currentDipAddress: 1,
+        rootOverride: repoRoot
+    )
+    check((ui01Es?["language"] as? String) == "es", "Swift UI-01 ES query must resolve in Spanish via audited resource pack")
+
+    // DIP-01..03 Guidance state machine & camera guards
+    let guidStart = copilotReg.startDipGuidance(targetSlaveId: 1, sessionId: "s-swift", profileId: "tzone_tht02", supportsDipPins: true, authorizedBusSlaveId: 1)
+    check((guidStart["state"] as? String) == "waiting_for_operator", "Swift DIP guidance starts at waiting_for_operator")
+    let guidSim = copilotReg.evaluateGuidanceCamera(visionTel: ["camera_source": "simulator:open_dip", "pcb_open_detected": true, "dip_confidence": 0.95], authorizedBusSlaveId: 1, rootOverride: repoRoot)
+    check((guidSim["state"] as? String) == "needs_review", "Swift DIP guidance rejects simulator frame for physical verification")
+    let guidOcc = copilotReg.evaluateGuidanceCamera(visionTel: ["camera_source": "ipad:avfoundation:back", "hand_detected": true, "frame_age_s": 0.1], authorizedBusSlaveId: 1, rootOverride: repoRoot)
+    check((guidOcc["state"] as? String) == "waiting_for_clear_frame", "Swift DIP guidance transitions to waiting_for_clear_frame on hand occlusion")
+    _ = copilotReg.evaluateGuidanceCamera(visionTel: ["camera_source": "ipad:avfoundation:back", "pcb_open_detected": true, "dip_confidence": 0.91, "observed_dip_bits": [0, 0, 0, 0, 0, 0, 0, 1], "frame_age_s": 0.1], authorizedBusSlaveId: 1, rootOverride: repoRoot)
+    let guidObs = copilotReg.evaluateGuidanceCamera(visionTel: ["camera_source": "ipad:avfoundation:back", "pcb_open_detected": true, "dip_confidence": 0.92, "observed_dip_bits": [0, 0, 0, 0, 0, 0, 0, 1], "frame_age_s": 0.1], authorizedBusSlaveId: 1, rootOverride: repoRoot)
+    check((guidObs["state"] as? String) == "observed", "Swift DIP guidance reaches observed after 2 clear live frames")
+    let guidDone = copilotReg.confirmGuidanceStep(manual: true, authorizedBusSlaveId: 1, complete: true)
+    check((guidDone["state"] as? String) == "complete" && (guidDone["confirmed_origin"] as? String) == "manual_operator_confirmation", "Swift DIP manual confirmation records provenance")
+
+    // BUS-01..02 Unified 6-state link diagnostics
+    let busFall = copilotReg.evaluateUnifiedLinkDiagnostic(
+        modbusTel: [
+            "online": true,
+            "healthy": true,
+            "fresh": true,
+            "simulation": false,
+            "temp_c": 21.5,
+            "humidity_rh": 49.0,
+            "history": [
+                ["ts": 100.0, "temp_c": 24.5, "humidity_rh": 49.0],
+                ["ts": 102.0, "temp_c": 21.5, "humidity_rh": 49.0],
+            ],
+        ],
+        gatewayHost: "10.10.100.254",
+        gatewayPort: 502,
+        rootOverride: repoRoot
+    )
+    check((busFall["state"] as? String) == "online_temp_falling" && (busFall["temperature_trend"] as? String) == "falling", "Swift BUS diagnostic detects falling temp trend only on >=2 valid readings")
+
+    // HIST-01..02 Durable turns, receipts, asset recall, stock draft guard & evidence photo budget
+    let histSess = try engine.createSession(payload: ["profile_id": "tzone_tht02", "serial_number": "SN-SW-77", "transport_mode": "auto"])
+    let histSid = histSess["session_id"] as! String
+    let turnRec = engine.recordConversationTurn(payload: [
+        "turn_id": "turn-swift-01",
+        "session_id": histSid,
+        "user_text": "Open PUSR settings",
+        "assistant_reply": "Opened PUSR settings",
+        "input_mode": "ptt",
+    ])
+    check((turnRec["ok"] as? Bool) == true && (turnRec["deduplicated"] as? Bool) == false, "Swift durable turn recording must persist to SQLite")
+    let turnDup = engine.recordConversationTurn(payload: ["turn_id": "turn-swift-01", "session_id": histSid, "user_text": "dup", "assistant_reply": "dup"])
+    check((turnDup["deduplicated"] as? Bool) == true, "Swift durable turn recording must deduplicate by turn_id")
+    let ackRec = try engine.recordActionAck(payload: ["turn_id": "turn-swift-01", "session_id": histSid, "receipts": [["action_id": "config.open_pusr", "status": "applied"]]])
+    check((ackRec["ok"] as? Bool) == true, "Swift durable action ack must attach to turn")
+    let recalled = engine.recallAssetHistory(profileId: "tzone_tht02", serialNumber: "SN-SW-77")
+    check(((recalled["episode_counts"] as? [String: Any])?["total_sessions"] as? Int) ?? 0 >= 1, "Swift asset recall must find confirmed sessions")
+    var stockRejected = false
+    do {
+        _ = try engine.createLocalDraft(sessionId: histSid, kind: "stock", payload: ["sku": "SHT30"])
+    } catch let de as FieldScanDomainError {
+        stockRejected = (de.code == "UNVERIFIED_STOCK_DATA")
+    }
+    check(stockRejected, "Swift stock draft must reject unverified inventory")
+    let stockOk = try engine.createLocalDraft(sessionId: histSid, kind: "stock", payload: ["sku": "SHT30", "verified_quantity": 1, "reorder_threshold": 4, "verified_by_operator": true])
+    check(((stockOk["draft"] as? [String: Any])?["external_sent"] as? Bool) == false, "Swift stock draft must remain local-only")
+
+    // Section 12b: Clean-Slate Workspace Reset & Live Cloud Onboarding Resolver (100% English)
+    let regShared = FieldScanCopilotRegistry.shared
+    let resetPlan = regShared.resolveCopilotActionPlan(query: "Clear sensor workspace", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    check(((resetPlan?["actions"] as? [[String: Any]])?.first?["id"] as? String) == "catalog.clear_sensor", "Swift resolves catalog.clear_sensor")
+    let idPlan = regShared.resolveCopilotActionPlan(query: "Identify this sensor", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    check(((idPlan?["actions"] as? [[String: Any]])?.first?["id"] as? String) == "catalog.identify_new_sensor", "Swift resolves catalog.identify_new_sensor")
+    let onboardTht = regShared.resolveCopilotActionPlan(query: "This is a TZONE THT-002", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    let onboardAct = (onboardTht?["actions"] as? [[String: Any]])?.first
+    check((onboardAct?["id"] as? String) == "catalog.onboard_sensor", "Swift resolves catalog.onboard_sensor")
+    check(((onboardAct?["params"] as? [String: Any])?["manufacturer"] as? String) == "TZONE", "Swift normalizes TZONE manufacturer")
+    check(((onboardAct?["params"] as? [String: Any])?["model"] as? String) == "TZ THT-02", "Swift normalizes TZ THT-02 model")
+    let emptyReset = pkgStore.resetWorkspaceToCleanSlate(clearInstalledCloudPackages: true)
+    check(((emptyReset["catalog_descriptor"] as? [String: Any])?["scene_origin"] as? String) == "empty_workspace", "Swift PackageStore resets cleanly to empty_workspace")
+    _ = try pkgStore.selectContextForNextSession(manifestSha256: "bundle")
+
+    // Section 12c: Open-Ended PDF Viewer, 3D Digital Twin Pins/Rotation, Escalation & LLM Tool Directive Parser
+    let pdfPlan = regShared.resolveCopilotActionPlan(query: "Show me the PDF where the pins are", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    let pdfAct = (pdfPlan?["actions"] as? [[String: Any]])?.first
+    check((pdfAct?["id"] as? String) == "manual.open_section", "Swift resolves PDF pins request to manual.open_section")
+    check(((pdfAct?["params"] as? [String: Any])?["open_lightbox"] as? Bool) == true, "Swift opens fullscreen manual lightbox for PDF requests")
+    check((pdfPlan?["manual_page"] as? Int) == 5, "Swift resolves PDF pins request to page 5")
+
+    let twinPinsPlan = regShared.resolveCopilotActionPlan(query: "Show me the pins on the digital twin", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    check(((twinPinsPlan?["actions"] as? [[String: Any]])?.first?["id"] as? String) == "twin.show_dip", "Swift resolves Digital Twin pins to twin.show_dip")
+    check((twinPinsPlan?["open_manual_lightbox"] as? Bool) == false, "Swift keeps 3D Digital Twin unobstructed during twin.show_dip")
+
+    let rotPlan = regShared.resolveCopilotActionPlan(query: "Rotate the digital twin to the back", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    let rotAct = (rotPlan?["actions"] as? [[String: Any]])?.first
+    check((rotAct?["id"] as? String) == "twin.rotate_view" && ((rotAct?["params"] as? [String: Any])?["direction"] as? String) == "back", "Swift resolves twin.rotate_view back")
+
+    let escPlan = regShared.resolveCopilotActionPlan(query: "Open escalation", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    check(((escPlan?["actions"] as? [[String: Any]])?.first?["id"] as? String) == "config.open_escalation", "Swift resolves config.open_escalation")
+
+    let cloudGlbDesc: [String: Any] = [
+        "scene_origin": "catalog_glb",
+        "context": ["bench_modbus_homologated": false],
+        "twin": [
+            "glb_url": "/api/catalog/blob/tht02.glb",
+            "parts": [["part_id": "dip.bank", "node_id": "dip_bank"]],
+            "views": [["view_id": "open_dip", "exploded_offsets_m": ["upper": [0, 0, 0.035]]]],
+        ],
+        "documents": [["document_id": "doc1", "title": "Manual", "page_count": 9]],
+    ]
+    let cloudGlbCaps = FieldScanCopilotRegistry.computeSceneCapabilities(descriptor: cloudGlbDesc)
+    check((cloudGlbCaps["supports_dip_pins"] as? Bool) == true, "Swift enables visual DIP pins on Cloud GLB containing dip.bank")
+
+    let llmParsed = regShared.parseLLMActionDirectives(
+        from: "Opening page 5 and turning the model around. [[ACTION:manual.open_page|{\"page\":5}]] [[ACTION:twin.rotate_view|{\"direction\":\"back\"}]] [[ACTION:bogus.unknown|{}]]"
+    )
+    check(llmParsed.cleanText == "Opening page 5 and turning the model around.", "Swift strips [[ACTION:...]] tags from spoken/displayed text")
+    check(llmParsed.actions.count == 2, "Swift validates LLM directives against registered action whitelist")
+    let firstActId = llmParsed.actions.first?["id"] as? String
+    let lastActId = llmParsed.actions.last?["id"] as? String
+    check(firstActId == "manual.open_page" && lastActId == "twin.rotate_view", "Swift preserves valid LLM tool calls in order")
+
+    // Verify Apple FoundationModels angle-bracket variants + ASR "data sheet" + conversational "it's clean" non-hijack + stuck audioState auto-recovery
+    let appleVariant = regShared.parseLLMActionDirectives(
+        from: "[[ACTION:<twin.show_dip {\"slave_id\":1}>]] [[ACTION:<camera.show_live>]] Zooming into DIP-8 pins."
+    )
+    check(appleVariant.cleanText == "Zooming into DIP-8 pins.", "Swift strips Apple FM angle-bracket [[ACTION:<...>]] tags cleanly")
+    check(appleVariant.actions.count == 2 && (appleVariant.actions.first?["id"] as? String) == "twin.show_dip", "Swift parses Apple FM angle-bracket tool directives")
+
+    let dataSheetTwoWords = regShared.resolveCopilotActionPlan(query: "What is the pin I don't see the pin in the data sheet", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    let dsAct = (dataSheetTwoWords?["actions"] as? [[String: Any]])?.first
+    check((dsAct?["id"] as? String) == "manual.open_section" && ((dsAct?["params"] as? [String: Any])?["open_lightbox"] as? Bool) == true && (dataSheetTwoWords?["manual_page"] as? Int) == 5, "Swift matches two-word ASR 'data sheet' pins to fullscreen page 5")
+
+    let convClean = regShared.resolveCopilotActionPlan(query: "I see the sensor you say it's clean but I see the sensor here", descriptor: nil, modbusTel: nil, visionTel: nil, rootOverride: repoRoot)
+    check(((convClean?["actions"] as? [[String: Any]])?.first?["id"] as? String) != "catalog.onboard_sensor", "Swift does not falsely trigger onboarding on conversational 'it's clean'")
+
+    engine.registerTTSPlayback("Short test reply", estimatedDurationS: 0.01)
+    Thread.sleep(forTimeInterval: 0.42)
+    let (stuckEcho, _) = engine.isTTSEchoOrDuplicate(utterance: "Did you see the sensor")
+    check(stuckEcho == false, "Swift auto-recovers audioState from speaking after estimated duration expires so LIVE mode never hangs silent")
+
     let summary: [String: Any] = [
         "swift_contract_suite": "PASS",
         "contract_version": FieldScanSessionEngine.contractVersion,
         "manifest_verified": true,
         "pilot_writes_blocked": true,
         "cloud_catalog_swift_parity": "PASS",
+        "ap_first_swift_parity": "PASS",
+        "copilot_unification_swift_parity": "PASS",
+        "copilot_registered_actions": regActions.count,
+        "copilot_registered_screens": regScreens.count,
         "golden_mbap_vectors_passed": mbapPassed,
         "golden_voice_en_passed": enPassed,
         "golden_voice_es_passed": esPassed,

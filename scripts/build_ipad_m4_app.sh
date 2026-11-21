@@ -65,6 +65,7 @@ SWIFT_FILES=(
     "${APP_SOURCE_DIR}/FieldScanSessionEngine.swift"
     "${APP_SOURCE_DIR}/FieldScanManualNavigator.swift"
     "${APP_SOURCE_DIR}/FieldScanTwinController.swift"
+    "${APP_SOURCE_DIR}/FieldScanCopilotRegistry.swift"
     "${APP_SOURCE_DIR}/FieldScanVisionDetector.swift"
     "${APP_SOURCE_DIR}/FieldScanConversationEngine.swift"
     "${APP_SOURCE_DIR}/LlamaServerBridge.swift"

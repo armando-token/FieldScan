@@ -1038,9 +1038,71 @@ public final class FieldScanPackageStore {
         )
     }
 
+    public func buildEmptyWorkspaceContext() -> SessionContentContext {
+        return SessionContentContext(
+            productId: "unassigned",
+            variantId: "none",
+            title: "No Sensor Loaded",
+            publicationSeq: 0,
+            manifestSha256: "empty-workspace",
+            localProfileId: nil,
+            contentOrigin: "empty_workspace",
+            benchModbusHomologated: false,
+            capabilities: ["documentation": false, "interactive_twin": false, "procedures": false]
+        )
+    }
+
+    /// Clears the active sensor workspace to a clean empty slate (`empty_workspace`) and optionally
+    /// wipes locally installed Cloud packages so the next onboarding fetches fresh signed artifacts.
+    /// Does NOT touch PUSR gateway settings or authorized Modbus bus target.
+    public func resetWorkspaceToCleanSlate(clearInstalledCloudPackages: Bool = true) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        var removedCount = 0
+        if clearInstalledCloudPackages {
+            if let db = db {
+                var cStmt: OpaquePointer?
+                if sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM installations;", -1, &cStmt, nil) == SQLITE_OK {
+                    if sqlite3_step(cStmt) == SQLITE_ROW {
+                        removedCount = Int(sqlite3_column_int(cStmt, 0))
+                    }
+                    sqlite3_finalize(cStmt)
+                }
+                sqlite3_exec(db, "DELETE FROM installations; DELETE FROM active_variants; DELETE FROM revoked_instructions;", nil, nil, nil)
+            }
+            let fm = FileManager.default
+            if let entries = try? fm.contentsOfDirectory(at: packagesDirURL, includingPropertiesForKeys: nil) {
+                for url in entries {
+                    try? fm.removeItem(at: url)
+                }
+            }
+        }
+        let emptyCtx = buildEmptyWorkspaceContext()
+        activeSelection = emptyCtx
+        let desc: [String: Any] = [
+            "context": emptyCtx.toDictionary(),
+            "scene_origin": "empty_workspace",
+            "cad_exports_supported": [],
+            "documents": [],
+            "twin": NSNull(),
+            "revoked_instructions": [],
+        ]
+        return [
+            "ok": true,
+            "removed_packages_count": removedCount,
+            "selected_context": emptyCtx.toDictionary(),
+            "catalog_descriptor": desc,
+        ]
+    }
+
     public func selectContextForNextSession(manifestSha256: String?) throws -> SessionContentContext {
         lock.lock()
         defer { lock.unlock() }
+        if manifestSha256 == "empty_workspace" || manifestSha256 == "empty-workspace" {
+            let emptyCtx = buildEmptyWorkspaceContext()
+            activeSelection = emptyCtx
+            return emptyCtx
+        }
         guard let sha = manifestSha256, !sha.isEmpty, sha != "bundle" else {
             activeSelection = nil
             return buildBundleDefaultContext()
@@ -1067,6 +1129,9 @@ public final class FieldScanPackageStore {
         lock.lock()
         defer { lock.unlock() }
         if let sel = activeSelection {
+            if sel.contentOrigin == "empty_workspace" {
+                return sel
+            }
             if (try? getInstalledPackage(manifestSha256: sel.manifestSha256)) != nil {
                 return sel
             }
@@ -1077,6 +1142,16 @@ public final class FieldScanPackageStore {
 
     public func buildSceneAndManualDescriptor(context: SessionContentContext? = nil) throws -> [String: Any] {
         let ctx = context ?? getSelectedContext()
+        if ctx.contentOrigin == "empty_workspace" {
+            return [
+                "context": ctx.toDictionary(),
+                "scene_origin": "empty_workspace",
+                "cad_exports_supported": [],
+                "documents": [],
+                "twin": NSNull(),
+                "revoked_instructions": [],
+            ]
+        }
         if ctx.contentOrigin != "catalog" {
             let pages: [[String: Any]] = (1...9).map { p in
                 ["page": p, "printed_page": "\(p)", "image_url": "/assets/manual_pages/page_\(p).png"]

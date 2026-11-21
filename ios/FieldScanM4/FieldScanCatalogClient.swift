@@ -500,11 +500,20 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         }
     }
 
+    public func clearCacheForCleanOnboarding() {
+        lock.lock()
+        etagCache.removeAll()
+        activeJobsByKey.removeAll()
+        jobsById.removeAll()
+        lock.unlock()
+    }
+
     public func resolveCatalog(
         manufacturer: String?,
         model: String,
         variant: String? = nil,
-        hardwareRevision: String? = nil
+        hardwareRevision: String? = nil,
+        forceRefresh: Bool = false
     ) throws -> [String: Any] {
         lock.lock()
         let (base, _, _, _, _, _) = try ensureSyncAllowedUnlocked()
@@ -512,7 +521,8 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         let attemptId = uiAttemptSeq
         let rawKey = "\((manufacturer ?? "").lowercased())|\(model.lowercased())|\((variant ?? "").lowercased())|\((hardwareRevision ?? "").lowercased())|\(base.lowercased())"
         let normKey = String(FieldScanCatalogContract.sha256Hex(Data(rawKey.utf8)).prefix(24))
-        if var existing = activeJobsByKey[normKey],
+        if !forceRefresh,
+           var existing = activeJobsByKey[normKey],
            let st = existing["job_state"] as? String, (st == "queued" || st == "running") {
             lock.unlock()
             existing["reused_existing_job"] = true
@@ -522,12 +532,15 @@ public final class FieldScanCatalogClient: NSObject, URLSessionTaskDelegate {
         lock.unlock()
 
         let cleanMfg = manufacturer?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "manufacturer": cleanMfg.isEmpty ? "UNKNOWN" : cleanMfg,
             "model": model.trimmingCharacters(in: .whitespacesAndNewlines),
             "variant": (variant?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? variant! : NSNull(),
             "hardware_revision": (hardwareRevision?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? hardwareRevision! : NSNull(),
         ]
+        if forceRefresh {
+            body["force_refresh"] = true
+        }
         let res = try performDataRequest(method: "POST", relPath: "/v1/catalog/resolve", jsonBody: body)
         guard var json = (try? JSONSerialization.jsonObject(with: res.body)) as? [String: Any] else {
             throw FieldScanCatalogError(code: "INVALID_ENVELOPE", message: "Invalid JSON from /v1/catalog/resolve")

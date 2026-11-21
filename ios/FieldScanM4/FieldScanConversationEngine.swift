@@ -245,14 +245,16 @@ public final class FieldScanConversationEngine {
                 replyText = "Yes, I can hear you loud and clear on the iPad! Ask me anything naturally—whether you want me to manipulate the 3D Digital Twin, inspect the camera feed, or open a section in the datasheet."
                 modelUsed = "FieldScan Conversational Core · iPad M4"
             } else {
+                let toolBlock = FieldScanCopilotRegistry.shared.buildLLMToolPromptBlock(descriptor: catalogDescriptor)
                 let sysPrompt = """
                 You are FieldScan AI, a friendly, natural, intelligent conversational assistant running locally on an iPad Air M4.
                 Respond strictly in natural English in 1 to 3 concise sentences.
                 Maintain continuity with the conversation history and answer ONLY what the user actually asked.
                 NEVER mention sensor telemetry, Modbus registers, temperatures, or datasheet pages unless the user explicitly asks about them.
+                \(toolBlock)
                 """
                 if vlmRunning, let baseURL = vlmBaseURL,
-                   let out = queryOpenAICompatibleVLM(baseURL: baseURL, systemPrompt: sysPrompt, history: history, userText: query, imageJpeg: nil, maxTokens: 120) {
+                   let out = queryOpenAICompatibleVLM(baseURL: baseURL, systemPrompt: sysPrompt, history: history, userText: query, imageJpeg: nil, maxTokens: 160) {
                     replyText = out
                 } else if let appleOut = queryAppleFoundationModel(systemPrompt: sysPrompt, history: history, userText: query) {
                     replyText = appleOut
@@ -382,11 +384,13 @@ public final class FieldScanConversationEngine {
                 twinHint = ""
             }
             let manualHint = lookup.matched ? "\nVerified Manual Reference: \(lookup.localizedAnswer)" : ""
+            let toolBlock = FieldScanCopilotRegistry.shared.buildLLMToolPromptBlock(descriptor: catalogDescriptor)
             let sysPrompt = """
-            You are FieldScan AI, an interactive 3D Digital Twin & industrial field engineer for the TZ THT-02 RS-485 sensor on an iPad Air M4.
+            You are FieldScan AI, an interactive 3D Digital Twin & industrial field engineer running on an iPad Air M4.
             Respond strictly in clear, natural English in 2 to 4 concise sentences answering ONLY what the operator asked.
             When a 3D Digital Twin Action is applied, briefly guide the operator through what you are showing on the 3D model so they can replicate it live on camera.
             Rely strictly on the provided live telemetry and verified datasheet facts; never invent SCADA/PLC confirmations or unverified values.
+            \(toolBlock)
             """
             let userPrompt = """
             Live Bench Telemetry:
@@ -397,7 +401,7 @@ public final class FieldScanConversationEngine {
             """
             let attachImg = isVisualFault ? rawCameraJpeg : nil
             if vlmRunning, let baseURL = vlmBaseURL,
-               let out = queryOpenAICompatibleVLM(baseURL: baseURL, systemPrompt: sysPrompt, history: Array(history.suffix(6)), userText: userPrompt, imageJpeg: attachImg, maxTokens: 155) {
+               let out = queryOpenAICompatibleVLM(baseURL: baseURL, systemPrompt: sysPrompt, history: Array(history.suffix(6)), userText: userPrompt, imageJpeg: attachImg, maxTokens: 195) {
                 replyText = out
             } else if let appleOut = queryAppleFoundationModel(systemPrompt: sysPrompt, history: Array(history.suffix(6)), userText: userPrompt) {
                 replyText = appleOut
@@ -597,7 +601,12 @@ public final class FieldScanConversationEngine {
             return "Hello! I'm FieldScan AI running locally on your iPad Air M4. Ask me in English to manipulate the 3D Digital Twin, inspect anything on the live camera, jump to a datasheet section, or check Modbus telemetry."
         }
 
-        return "Got it—I'm following right along. Let me know what you'd like me to show on the 3D Digital Twin, inspect on the camera, or open in the datasheet."
+        let trimmedNorm = norm.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedNorm.isEmpty {
+            let shortEcho = String(trimmedNorm.prefix(70))
+            return "I heard \"\(shortEcho)\". Tell me if you want me to open a datasheet page, inspect the camera view, rotate or explode the 3D sensor twin, or check Modbus readings."
+        }
+        return "I'm listening—tell me which datasheet section, 3D sensor zone, or Modbus reading you want to inspect."
     }
 
     private func buildSensorDiagnosticFallback(

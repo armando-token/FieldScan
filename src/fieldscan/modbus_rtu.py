@@ -480,6 +480,7 @@ class ModbusRTUScanner:
         self.max_sample_age_s: float = DEFAULT_MAX_SAMPLE_AGE_S
         self._pusr_host: str = os.environ.get("FIELDSCAN_PUSR_HOST", "").strip()
         self._pusr_port: int = int(os.environ.get("FIELDSCAN_PUSR_PORT", "502") or 502)
+        self._pusr_topology: str = "ap_direct"
         self._pusr_client: Any = None
         self.tx_audit_log: deque[dict[str, Any]] = deque(maxlen=256)
         self._breath_started_at: float = 0.0
@@ -490,12 +491,13 @@ class ModbusRTUScanner:
         if auto_start:
             self.start()
 
-    def set_pusr_gateway(self, host: str, port: int = 502) -> dict[str, Any]:
+    def set_pusr_gateway(self, host: str, port: int = 502, topology: str = "ap_direct") -> dict[str, Any]:
         """Configure isolated bench PUSR USR-DR164 Modbus TCP gateway (`MBAP`), cancelling prior connections."""
         from fieldscan.offline_guard import set_authorized_bench_gateway
 
         clean_host = (host or "").strip()
         clean_port = int(port)
+        clean_topo = "sta_lan" if str(topology or "").strip().lower() == "sta_lan" else "ap_direct"
         with self._lock:
             if self._pusr_client is not None:
                 try:
@@ -505,6 +507,7 @@ class ModbusRTUScanner:
                 self._pusr_client = None
             self._pusr_host = clean_host
             self._pusr_port = clean_port
+            self._pusr_topology = clean_topo
             self._connection_generation += 1
             self._last_hw_success = None
             self._last_valid_monotonic = -999.0
@@ -516,6 +519,7 @@ class ModbusRTUScanner:
             return {
                 "pusr_host": self._pusr_host,
                 "pusr_port": self._pusr_port,
+                "topology": self._pusr_topology,
                 "connection_generation": self._connection_generation,
             }
 
@@ -789,21 +793,33 @@ class ModbusRTUScanner:
                     transaction_id=res.get("transaction_id"),
                     crc_checked_by_client=False,
                     mbap_valid=True,
+                    gateway_connected=True,
                 )
             err_code = str(res.get("error_code") or "READ_TIMEOUT")
             err_detail = str(res.get("error_detail") or err_code)
+            if err_code == "BACKOFF_ACTIVE" and self._latest_telemetry.get("mode") == "pusr_tcp":
+                gw_connected = bool(self._latest_telemetry.get("gateway_connected", False))
+            else:
+                gw_connected = bool(res.get("gateway_connected", False))
+            if err_code == "MODBUS_EXCEPTION":
+                gw_status = f"PUSR :{self._pusr_port} CONNECTED · MODBUS EXCEPTION"
+            elif gw_connected:
+                gw_status = f"PUSR :{self._pusr_port} CONNECTED · NO RS-485 SENSOR REPLY"
+            else:
+                gw_status = f"PUSR {err_code} · {err_detail[:42]}"
             return self._record_telemetry(
                 online=False,
                 source="physical_tcp_gateway",
                 port=gw_uri,
-                adapter_present=False,
+                adapter_present=gw_connected,
+                gateway_connected=gw_connected,
                 mode=mode,
                 baud_bps=active_baud,
                 decoded=None,
                 tx_hex=res.get("tx_hex", ""),
                 rx_hex=res.get("rx_hex", ""),
                 roundtrip_ms=float(res.get("roundtrip_ms", 0.0)),
-                status_label=f"PUSR {err_code} · {err_detail[:42]}",
+                status_label=gw_status,
                 protocol="modbus_tcp_mbap",
                 transaction_id=res.get("transaction_id"),
                 error_code=err_code,
@@ -1088,6 +1104,7 @@ class ModbusRTUScanner:
         crc_checked_by_client: bool = False,
         mbap_valid: bool | None = None,
         preserve_original_timestamp: bool = False,
+        gateway_connected: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
             self._poll_seq += 1
@@ -1106,7 +1123,7 @@ class ModbusRTUScanner:
             slave_id = decoded["reported_slave_id"] if decoded else self.target_slave_id
             dip_bits = decoded["dip_bits"] if decoded else address_to_dip_bits(self.target_slave_id)
             healthy = bool(online and not abnormal and temp_c is not None and hum_rh is not None)
-            andon_light = "GREEN" if healthy else "RED"
+            andon_light = "GREEN" if healthy else ("AMBER" if (gateway_connected and not abnormal) else "RED")
 
             if online and decoded is not None:
                 if not preserve_original_timestamp or self._last_valid_historical is None:
@@ -1188,6 +1205,7 @@ class ModbusRTUScanner:
                 "error_detail": error_detail,
                 "source": source,
                 "port": port,
+                "gateway_connected": bool(gateway_connected),
                 "adapter_present": adapter_present,
                 "baud_bps": baud_bps,
                 "frame_format": "8N1",

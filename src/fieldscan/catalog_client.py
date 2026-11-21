@@ -351,6 +351,12 @@ class FieldScanCatalogClient:
         raw = f"{(manufacturer or '').strip().lower()}|{model.strip().lower()}|{(variant or '').strip().lower()}|{(hw_rev or '').strip().lower()}|{base_url.lower()}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
+    def clear_cache_for_clean_onboarding(self) -> None:
+        with self._lock:
+            self._etag_cache.clear()
+            self._active_jobs_by_key.clear()
+            self._jobs_by_id.clear()
+
     def resolve_catalog(
         self,
         *,
@@ -358,6 +364,7 @@ class FieldScanCatalogClient:
         model: str,
         variant: str | None = None,
         hardware_revision: str | None = None,
+        force_refresh: bool = False,
         transport: httpx.BaseTransport | None = None,
     ) -> dict[str, Any]:
         """POST `/v1/catalog/resolve` with strictly minimal identity (zero photos/serials/notes, `Section 3.2`, `M4-WAN-01..02`)."""
@@ -368,19 +375,21 @@ class FieldScanCatalogClient:
             self._ui_attempt_seq += 1
             attempt_id = self._ui_attempt_seq
             existing = self._active_jobs_by_key.get(norm_key)
-            if existing and existing.get("job_state") in ("queued", "running"):
+            if not force_refresh and existing and existing.get("job_state") in ("queued", "running"):
                 copied = dict(existing)
                 copied["reused_existing_job"] = True
                 copied["ui_attempt_id"] = attempt_id
                 return copied
 
         # Strict minimal payload — NEVER include serial_number, photos, bench IPs, or notes!
-        body = {
+        body: dict[str, Any] = {
             "manufacturer": (manufacturer or "").strip() or "UNKNOWN",
             "model": model.strip(),
             "variant": (variant or "").strip() or None,
             "hardware_revision": (hardware_revision or "").strip() or None,
         }
+        if force_refresh:
+            body["force_refresh"] = True
         resp = self._request("POST", "/v1/catalog/resolve", json_body=body, transport=transport)
         data = resp.json()
         self._hoist_identity_aliases(data)

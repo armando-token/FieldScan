@@ -1,6 +1,6 @@
 {
   "contract_version": "2.1.0",
-  "file_count": 31,
+  "file_count": 32,
   "files": {
     "assets/THT02_Users_Manual_v1.1.pdf": {
       "sha256": "fe5be7370ac42ad80d0e43c32c2b61d5f971a33ea9175c8405398d0fde4932cb",
@@ -66,6 +66,10 @@
       "sha256": "0b9ecafa37e4575b9e8300a0f414c70dc1b84fb0a98e20427a2c3215ec7c09d5",
       "size_bytes": 6829
     },
+    "knowledge/localization/copilot_voice_es.json": {
+      "sha256": "900a8b327728ad8a4200efba723d8139a2dd53d17921ac2ee94b8ea4a54e0ee4",
+      "size_bytes": 12210
+    },
     "knowledge/manual_index.json": {
       "sha256": "2fd05fbce244f184a402f40f3e3b0432d778bd67b82c060242c56f400043129f",
       "size_bytes": 8517
@@ -79,16 +83,16 @@
       "size_bytes": 3189
     },
     "static/app.js": {
-      "sha256": "783e671f4331268bd49bf3397b9f3114609950049bbf8a9a07cc1546c3a97661",
-      "size_bytes": 258086
+      "sha256": "7df2990038bf47a7d6fd6a0546443a69c638958e744fb27c24ff0eefcf5c749c",
+      "size_bytes": 358261
     },
     "static/index.html": {
-      "sha256": "764596636ba5478bdb40d9ee8dd8a5b4105b49f3d58e765b30423fa099598ebc",
-      "size_bytes": 46305
+      "sha256": "81e32250e498f74cb2003d5754153ed7592a27aa18ec2e27e9f2979713d24433",
+      "size_bytes": 43791
     },
     "static/styles.css": {
-      "sha256": "fc16b80808c85cf05dc8f894ba96c78572a4f7042376bba0ecba359dacb8aebd",
-      "size_bytes": 67788
+      "sha256": "a43d037dec91efc4b9783c0462260e45a94f51d82e668424ca75c915fdd864b7",
+      "size_bytes": 51241
     },
     "static/vendor/BufferGeometryUtils.js": {
       "sha256": "448c8dc2e08075d2e7ab9c915075fcdaf95b39e3875d6aedd97c4e38d9c2d9dd",
@@ -128,5 +132,5 @@
     }
   },
   "schema_version": 1,
-  "tree_sha256": "d0a959e0b529275844a572e58357fb439c2e470cb10e0402bf855fdb1b4b4d66"
+  "tree_sha256": "af7161765df121a74e86376a9010ab3f8aad2bc5e7139239773da3352dd8954a"
 }

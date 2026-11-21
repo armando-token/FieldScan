@@ -62,9 +62,14 @@ public struct FieldScanMemoryTelemetry: Codable {
 public final class FieldScanRuntimeConfig {
     public static let shared = FieldScanRuntimeConfig()
 
+    public static let defaultPusrAPHost = "10.10.100.254"
+    public static let alternatePusrAPHost = "192.168.0.7"
+    public static let defaultPusrPort = 502
+
     private let defaults = UserDefaults.standard
     private let kPusrHost = "fieldscan.pusr.host"
     private let kPusrPort = "fieldscan.pusr.port"
+    private let kPusrTopology = "fieldscan.pusr.topology"
     private let kMacTetherHost = "fieldscan.mac.tether_host"
     private let kMacTetherHTTPSPort = "fieldscan.mac.https_port"
     private let kMacTetherHTTPPort = "fieldscan.mac.http_port"
@@ -86,9 +91,21 @@ public final class FieldScanRuntimeConfig {
     public var pusrGatewayPort: Int {
         get {
             let p = defaults.integer(forKey: kPusrPort)
-            return p > 0 ? p : 502
+            return p > 0 ? p : Self.defaultPusrPort
         }
         set { defaults.set(newValue, forKey: kPusrPort) }
+    }
+
+    /// Preferred PUSR link topology (`ap_direct` primary for field no-router use; `sta_lan` optional secondary for lab/router use).
+    public var pusrGatewayTopology: String {
+        get {
+            let raw = (defaults.string(forKey: kPusrTopology) ?? "ap_direct").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return raw == "sta_lan" ? "sta_lan" : "ap_direct"
+        }
+        set {
+            let clean = newValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            defaults.set(clean == "sta_lan" ? "sta_lan" : "ap_direct", forKey: kPusrTopology)
+        }
     }
 
     public var macTetherHost: String {

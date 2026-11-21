@@ -1,0 +1,306 @@
+{
+  "schema_version": 1,
+  "locale": "es",
+  "audit_scope": "localized_voice_pack_only",
+  "speech_locales": [
+    "es-MX",
+    "es-ES",
+    "es-US"
+  ],
+  "tts_locales": [
+    "es-MX",
+    "es-US",
+    "es-ES"
+  ],
+  "language_cues": [
+    "abre",
+    "abrir",
+    "cierra",
+    "cerrar",
+    "muestrame",
+    "mostrar",
+    "donde",
+    "configuracion",
+    "configurar",
+    "catalogo",
+    "puerto",
+    "direccion",
+    "nube",
+    "rayos x",
+    "explotar",
+    "vista explotada",
+    "solido",
+    "restablecer",
+    "enfoca",
+    "enfocar",
+    "manual",
+    "pagina",
+    "seccion",
+    "camara",
+    "recorte",
+    "captura",
+    "foto",
+    "enlace",
+    "historial",
+    "expediente",
+    "borrador",
+    "fabricante",
+    "stock",
+    "ayuda",
+    "ajustes",
+    "herramientas",
+    "calibracion",
+    "respondiendo",
+    "lectura",
+    "temperatura",
+    "humedad",
+    "interruptor",
+    "interruptores",
+    "cambiar a espanol"
+  ],
+  "action_aliases": {
+    "config.open_pusr": [
+      "abre la configuracion del pusr",
+      "abre configuracion del pusr",
+      "abrir configuracion del pusr",
+      "abre el pusr",
+      "abre el gateway",
+      "configuracion de red pusr",
+      "panel pusr"
+    ],
+    "config.show_pusr_field": [
+      "muestrame donde ver la direccion",
+      "donde ver la direccion",
+      "muestrame el puerto",
+      "donde esta el puerto",
+      "donde veo el puerto",
+      "muestrame el host",
+      "donde esta la ip del pusr",
+      "donde se configura el puerto",
+      "donde se ve la direccion del pusr"
+    ],
+    "config.open_catalog": [
+      "abre el catalogo",
+      "abrir catalogo",
+      "abre catalogo",
+      "muestrame el catalogo",
+      "abrir paquetes",
+      "abre paquetes"
+    ],
+    "config.show_cloud_settings": [
+      "muestrame donde se configura cloud",
+      "donde se configura cloud",
+      "donde se configura la nube",
+      "muestrame configuracion de la nube",
+      "estado de cloud",
+      "esta habilitado cloud"
+    ],
+    "config.open_tools": [
+      "abre herramientas",
+      "abrir herramientas",
+      "abre configuracion",
+      "panel de herramientas"
+    ],
+    "config.close_tools": [
+      "cierra herramientas",
+      "cerrar herramientas"
+    ],
+    "config.open_chat": [
+      "abre el chat",
+      "abrir chat",
+      "muestrame el chat"
+    ],
+    "config.close_chat": [
+      "cierra el chat",
+      "cerrar chat"
+    ],
+    "config.open_calibration": [
+      "abre calibracion",
+      "abrir calibracion",
+      "hoja de ruta de calibracion"
+    ],
+    "config.open_sensor_spec": [
+      "abre especificacion del sensor",
+      "especificaciones del sensor",
+      "ficha del sensor"
+    ],
+    "config.open_app_settings": [
+      "abre ajustes de fieldscan",
+      "abre ajustes del ipad",
+      "permisos de red local",
+      "ajustes de la app"
+    ],
+    "twin.reset_view": [
+      "restablecer vista",
+      "reiniciar vista",
+      "cerrar carcasa",
+      "cierra la carcasa",
+      "vista completa",
+      "centrar gemelo",
+      "centra el gemelo"
+    ],
+    "twin.set_render_mode": [
+      "rayos x",
+      "modo rayos x",
+      "vista rayos x",
+      "ver por dentro",
+      "vista solida",
+      "modo solido"
+    ],
+    "twin.set_explode": [
+      "explotar",
+      "vista explotada",
+      "abrir carcasa",
+      "desarmar gemelo",
+      "colapsar gemelo"
+    ],
+    "twin.focus_part": [
+      "enfoca",
+      "enfocar",
+      "muestrame la sonda",
+      "muestrame el filtro",
+      "muestrame el conector",
+      "muestrame la brida",
+      "muestrame el sello",
+      "muestrame los cables"
+    ],
+    "twin.show_dip": [
+      "muestrame como configurar los dip",
+      "muestrame los dip",
+      "configurar los dip",
+      "interruptores dip",
+      "dip para direccion",
+      "dip para la direccion",
+      "dip para modbus",
+      "dip para esclavo"
+    ],
+    "manual.open_page": [
+      "abre la pagina",
+      "abrir pagina",
+      "ir a la pagina",
+      "muestrame la pagina"
+    ],
+    "manual.open_section": [
+      "seccion dip",
+      "seccion de cableado",
+      "seccion de calibracion",
+      "seccion de registros",
+      "donde esta en el manual",
+      "abre el manual"
+    ],
+    "manual.close": [
+      "cierra el manual",
+      "cerrar manual",
+      "cierra manual",
+      "oculta el manual"
+    ],
+    "camera.show_live": [
+      "vista en vivo",
+      "muestrame la camara",
+      "mostrar camara en vivo"
+    ],
+    "camera.show_dip_macro": [
+      "abre recorte dip",
+      "abrir recorte dip",
+      "acercamiento dip",
+      "macro dip"
+    ],
+    "camera.highlight_region": [
+      "senala la region",
+      "resalta en la camara"
+    ],
+    "camera.capture_evidence": [
+      "capturar evidencia",
+      "tomar foto",
+      "toma una foto",
+      "guardar foto"
+    ],
+    "bench.diagnose_link": [
+      "diagnostico del enlace",
+      "estado del enlace",
+      "esta respondiendo el sensor",
+      "el sensor responde",
+      "como esta modbus",
+      "estado del pusr"
+    ],
+    "bench.poll_readonly": [
+      "ejecutar lectura",
+      "leer sensor ahora",
+      "consulta modbus",
+      "hacer lectura autorizada"
+    ],
+    "session.open_history": [
+      "abre el historial",
+      "mostrar historial",
+      "historial del equipo",
+      "sesiones anteriores"
+    ],
+    "session.prepare_dossier": [
+      "preparar expediente",
+      "exportar expediente",
+      "generar expediente"
+    ],
+    "session.prepare_manufacturer_draft": [
+      "borrador para fabricante",
+      "preparar escalamiento",
+      "correo al fabricante"
+    ],
+    "session.prepare_stock_draft": [
+      "borrador de stock",
+      "pedido de repuestos",
+      "reponer stock"
+    ],
+    "help.list_actions": [
+      "ayuda",
+      "que puedes hacer",
+      "lista de acciones",
+      "acciones disponibles"
+    ]
+  },
+  "responses": {
+    "pusr_opened_host": "Abri la configuracion del PUSR y resalte el campo de direccion IP/host (lectura sin cambios automaticos). Actualmente configurado: {host_display}.",
+    "pusr_opened_port": "Abri la configuracion del PUSR y resalte el campo de puerto Modbus TCP (valor estandar 502; nunca 5502). Puerto actual: {port}. Ningun valor fue modificado.",
+    "pusr_opened_address": "Abri la configuracion del PUSR y enfoque la direccion del gateway ({host_display}:{port}). El destino de consulta Modbus autorizado sigue siendo #{authorized_slave}.",
+    "pusr_opened_generic": "Abri el panel de configuracion del PUSR (solo lectura; ningun parametro fue guardado ni conectado automaticamente).",
+    "catalog_opened": "Abri el catalogo de paquetes firmados. Cloud Sync esta {cloud_state}. No se emitio ninguna solicitud externa automatica.",
+    "cloud_settings_shown": "Abri el catalogo y resalte la seccion de configuracion de Cloud. Cloud Sync sigue {cloud_state} y las claves permanecen ocultas; no se inicio ninguna conexion externa.",
+    "manual_closed": "Cerre el visor del manual. La camara y el gemelo 3D siguen activos.",
+    "manual_opened": "Abri {doc_title} ({doc_rev}), pagina fisica {page} (impresa {printed_page}).",
+    "manual_page_missing": "La pagina {requested_page} no existe en {doc_title} (rango valido: 1 a {max_page}).",
+    "twin_xray_applied": "Active la vista Rayos X en el gemelo 3D actual.",
+    "twin_solid_applied": "Active la vista solida en el gemelo 3D actual.",
+    "twin_explode_applied": "Active la vista explotada del gemelo 3D.",
+    "twin_collapse_applied": "Cerre la vista explotada del gemelo 3D.",
+    "twin_reset_applied": "Restableci la camara y la posicion inicial del gemelo 3D.",
+    "twin_focus_applied": "Enfoque {part_label} en el gemelo 3D.",
+    "twin_capability_unavailable": "Esta accion 3D ({capability}) no esta disponible para el modelo activo ({scene_origin}). El visor actual no fue alterado.",
+    "dip_guide_applied": "Patron visual propuesto para direccion {target_addr} ({instruction_summary}). Abri el gemelo explotado, la pagina 5 del manual y el recorte DIP en vivo. Destino de consulta Modbus autorizado se mantiene sin cambios en #{authorized_slave}.",
+    "dip_reference_only": "El paquete activo no define geometria verificada de interruptores DIP; permanece en modo de referencia sin inventar posiciones.",
+    "dip_occlusion": "Detecto una mano o herramienta cubriendo el bloque DIP. Retirala un momento para verificar la posicion.",
+    "dip_low_confidence": "No puedo confirmar el switch {switch_num} todavia ({reason}). Acerca una vista clara del bloque DIP o confirma manualmente.",
+    "dip_observed": "Vista clara recibida en modo {source_label}. Patron esperado: {expected_pattern}. Verifica fisicamente antes de confirmar; la operacion Modbus solo se acredita con una lectura fisica fresca.",
+    "camera_live_shown": "Vista de camara en vivo activa (origen: {source_label}, edad del cuadro: {age_ms} ms).",
+    "camera_dip_macro_shown": "Abri el recorte macro DIP-8 sobre la vista de camara (origen: {source_label}).",
+    "camera_evidence_captured": "Evidencia fotografica capturada ({filename}, origen: {evidence_origin}).",
+    "camera_budget_paused": "Se alcanzo el presupuesto de capturas automaticas ({count}/{limit}); revisa las evidencias existentes. Todas las capturas confirmadas se conservan.",
+    "link_local_blocked": "El iPad todavia no puede acceder al gateway ({detail}). {ssid_note} Revisa el permiso de Red Local o abre el panel del PUSR.",
+    "link_gateway_no_sensor": "El gateway responde ({gateway}), pero el transmisor Modbus no respondio a esta consulta ({error_code}). Hipotesis a verificar en banco (no confirmadas): alimentacion 5-24V, polaridad RS-485 A+/B-, baud 9600 8N1 y direccion esclavo #{target_slave}.",
+    "link_channel_fault": "El transmisor responde en direccion #{slave_id}, pero un canal indica fallo 0x7FFF ({fault_detail}). {valid_sibling}",
+    "link_lost_historical": "Ultima lectura valida a las {last_ts} ({last_values}); ahora no hay dato reciente ({error_code}). Se muestra estrictamente como historico.",
+    "link_temp_falling": "Tendencia observada en {sample_count} lecturas frescas validas de la misma fuente: la temperatura bajo de {first_temp} a {last_temp} C ({delta_temp} C).",
+    "link_recovered": "Enlace Modbus recuperado tras nueva lectura valida en direccion #{slave_id}: {temp_str}, {hum_str}.",
+    "link_online_ok": "El transmisor respondio en direccion #{slave_id} ({protocol}, fuente: {source_label}): Temperatura {temp_str}, Humedad {hum_str}.",
+    "confirmation_required": "Esta accion ({action_id}) requiere confirmacion explicita del operador en pantalla. Ningun parametro fue modificado.",
+    "stale_turn_discarded": "Turno descartado por cambio de escena o sesion antes de completarse.",
+    "speech_offline_unavailable": "El reconocimiento de voz local para espanol no esta instalado en este iPad sin Internet. Usa texto, tacto o cambia a ingles.",
+    "system_wifi_instructions": "iPadOS no permite abrir directamente la pantalla de Wi-Fi desde una app. Abre Ajustes > Wi-Fi y conecta a la red USR-DR164-XXXX; tambien puedo abrir los ajustes propios de FieldScan.",
+    "app_settings_opened": "Solicite abrir los ajustes de FieldScan en iPadOS para revisar permisos de Red Local, Camara y Microfono.",
+    "help_intro": "Acciones disponibles del copiloto ({count} registradas): {summary}",
+    "history_opened": "Historial local disponible: {turns_count} turnos en la sesion actual y {prior_count} sesiones previas registradas para este equipo.",
+    "draft_manufacturer_ready": "Prepare un borrador local para el fabricante con hechos verificados y archivos seleccionados. Nada se envia automaticamente.",
+    "draft_stock_ready": "Prepare un borrador local de stock para SKU {sku} (cantidad verificada: {qty}, umbral: {threshold}). Nada se envia automaticamente.",
+    "draft_stock_unverified": "No puedo crear un borrador de stock sin cantidad verificada y SKU configurados explicitamente. Una falta de lectura o sensor desconectado no acredita bajo stock.",
+    "action_unavailable": "Control no disponible en el modo actual: {reason}. Ningun dato fue alterado.",
+    "ambiguous_clarification": "Solicitud ambigua ({reason}). Por favor especifica: {options}."
+  }
+}

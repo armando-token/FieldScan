@@ -8,15 +8,19 @@ Implements Phase 6.2 (`OFF-01..07`) of the FieldScan specification:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import ipaddress
 import os
 import socket
-from typing import Any
+import threading
+from typing import Any, Iterator
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}
 _AUTHORIZED_BENCH_GATEWAYS: set[str] = set()
 _AUTHORIZED_CLOUD_CATALOG_HOSTS: set[str] = set()
+_TEMPORARY_BENCH_PROBE_HOSTS: set[str] = set()
+_PROBE_LOCK = threading.Lock()
 
 
 def set_authorized_cloud_catalog_host(host: str | None) -> None:
@@ -65,6 +69,31 @@ def get_authorized_bench_gateways() -> list[str]:
     return sorted(out)
 
 
+@contextmanager
+def authorized_bench_probe_scope(hosts: list[str], *, allow_loopback: bool = False) -> Iterator[None]:
+    """Temporarily permit strictly private RFC1918 (or test loopback) hosts during an operator-triggered AP probe."""
+    added: list[str] = []
+    for raw in hosts:
+        clean = (raw or "").strip().lower()
+        if not clean:
+            continue
+        try:
+            ip_obj = ipaddress.ip_address(clean)
+        except ValueError:
+            continue
+        if isinstance(ip_obj, ipaddress.IPv4Address) and (ip_obj.is_private or (allow_loopback and ip_obj.is_loopback)):
+            added.append(clean)
+    with _PROBE_LOCK:
+        for h in added:
+            _TEMPORARY_BENCH_PROBE_HOSTS.add(h)
+    try:
+        yield
+    finally:
+        with _PROBE_LOCK:
+            for h in added:
+                _TEMPORARY_BENCH_PROBE_HOSTS.discard(h)
+
+
 def is_allowed_local_host(host: str) -> bool:
     """Return True if host is loopback, allowed USB-C link-local tether, or explicitly authorized bench gateway."""
     clean = (host or "").strip().lower()
@@ -80,6 +109,10 @@ def is_allowed_local_host(host: str) -> bool:
 
     if clean in get_authorized_bench_gateways():
         return True
+
+    with _PROBE_LOCK:
+        if clean in _TEMPORARY_BENCH_PROBE_HOSTS:
+            return True
 
     if clean in _AUTHORIZED_CLOUD_CATALOG_HOSTS:
         return True

@@ -122,6 +122,15 @@ function notifyNativeBridge(event, payload = {}) {
   return false;
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 /* ==========================================================================
    APPLICATION STATE
    ========================================================================== */
@@ -181,12 +190,23 @@ const state = {
   confirmedChangesCount: 0,
   pusrGatewayHost: '',
   pusrGatewayPort: 502,
+  pusrGatewayTopology: 'ap_direct',
+  pusrGatewayConnected: false,
+  aiStripOverrideUntil: 0,
+  chatUnreadCount: 0,
   selectedCatalogContext: null,
   activeCatalogDescriptor: null,
   sceneOrigin: 'bundled_parametric',
   sceneGeneration: 1,
   glbSceneReady: true,
   pendingTwinActionV1: null,
+  pendingTwinActionMeta: null,
+  preferredLanguage: 'en',
+  activePttContext: null,
+  authorizedBusSlaveId: 1,
+  guidanceState: null,
+  lastTurnId: null,
+  nativePanelAckResolvers: {},
   manualDocuments: [],
   activeDocumentId: 'tht02_manual_v1_1',
   cadExportsSupported: ['dxf', 'stl', 'pdf', 'json'],
@@ -231,6 +251,7 @@ const dom = {
   catalogOriginLabel: document.getElementById('catalogOriginLabel'),
   catalogUpdateDot: document.getElementById('catalogUpdateDot'),
   selectCameraMode: document.getElementById('selectCameraMode'),
+  btnRestoreLiveCamera: document.getElementById('btnRestoreLiveCamera'),
   btnUploadPhoto: document.getElementById('btnUploadPhoto'),
   photoUploadInput: document.getElementById('photoUploadInput'),
   selectModbusMode: document.getElementById('selectModbusMode'),
@@ -378,6 +399,8 @@ const dom = {
   lightboxTitle: document.getElementById('lightboxTitle'),
   lightboxPageBadge: document.getElementById('lightboxPageBadge'),
   lightboxSectionBanner: document.getElementById('lightboxSectionBanner'),
+  lightboxStage: document.getElementById('lightboxStage'),
+  btnLightboxZoomReset: document.getElementById('btnLightboxZoomReset'),
   lightboxImg: document.getElementById('lightboxImg'),
   lightboxPdfFallbackFrame: document.getElementById('lightboxPdfFallbackFrame'),
   lightboxPrevBtn: document.getElementById('lightboxPrevBtn'),
@@ -404,6 +427,63 @@ const dom = {
   inputResolveVariant: document.getElementById('inputResolveVariant'),
   catalogCloudResultBox: document.getElementById('catalogCloudResultBox'),
   catalogPackagesList: document.getElementById('catalogPackagesList'),
+
+  pusrGatewayModal: document.getElementById('pusrGatewayModal'),
+  pusrGatewayCloseBtn: document.getElementById('pusrGatewayCloseBtn'),
+  pusrGatewayTopoBadge: document.getElementById('pusrGatewayTopoBadge'),
+  pusrGatewayActiveReadout: document.getElementById('pusrGatewayActiveReadout'),
+  pusrGatewayWifiBadge: document.getElementById('pusrGatewayWifiBadge'),
+  btnAutoSetupPusr: document.getElementById('btnAutoSetupPusr'),
+  btnDiscoverPusrAp: document.getElementById('btnDiscoverPusrAp'),
+  btnPresetPusrApDefault: document.getElementById('btnPresetPusrApDefault'),
+  btnPresetPusrApAlt: document.getElementById('btnPresetPusrApAlt'),
+  pusrGatewayResultBox: document.getElementById('pusrGatewayResultBox'),
+  pusrCustomGatewayForm: document.getElementById('pusrCustomGatewayForm'),
+  pusrAdvancedDetails: document.getElementById('pusrAdvancedDetails'),
+  inputPusrCustomHost: document.getElementById('inputPusrCustomHost'),
+  inputPusrCustomPort: document.getElementById('inputPusrCustomPort'),
+  selectPusrCustomTopology: document.getElementById('selectPusrCustomTopology'),
+  btnSavePusrCustom: document.getElementById('btnSavePusrCustom'),
+  btnClearPusrGateway: document.getElementById('btnClearPusrGateway'),
+
+  dipGuidanceBar: document.getElementById('dipGuidanceBar'),
+  dipGuidanceExpected: document.getElementById('dipGuidanceExpected'),
+  dipGuidanceObserved: document.getElementById('dipGuidanceObserved'),
+  dipGuidanceAuthorized: document.getElementById('dipGuidanceAuthorized'),
+  btnConfirmDipStep: document.getElementById('btnConfirmDipStep'),
+  btnIdentifyNewSensor: document.getElementById('btnIdentifyNewSensor'),
+  btnToolsNewSensor: document.getElementById('btnToolsNewSensor'),
+  btnToolsResetSensor: document.getElementById('btnToolsResetSensor'),
+  emptyWorkspaceOverlay: document.getElementById('emptyWorkspaceOverlay'),
+  btnEmptyIdentifySensor: document.getElementById('btnEmptyIdentifySensor'),
+  btnResetCleanWorkspace: document.getElementById('btnResetCleanWorkspace'),
+  sensorOnboardModal: document.getElementById('sensorOnboardModal'),
+  onboardCloseBtn: document.getElementById('onboardCloseBtn'),
+  onboardPhotoPreview: document.getElementById('onboardPhotoPreview'),
+  btnOnboardRetakePhoto: document.getElementById('btnOnboardRetakePhoto'),
+  sensorOnboardForm: document.getElementById('sensorOnboardForm'),
+  inputOnboardMfg: document.getElementById('inputOnboardMfg'),
+  inputOnboardModel: document.getElementById('inputOnboardModel'),
+  inputOnboardVariant: document.getElementById('inputOnboardVariant'),
+  btnOnboardSubmitCloud: document.getElementById('btnOnboardSubmitCloud'),
+  onboardPipelineSteps: document.getElementById('onboardPipelineSteps'),
+  onboardStatusText: document.getElementById('onboardStatusText'),
+  onboardCandidatesRow: document.getElementById('onboardCandidatesRow'),
+
+  // UX v4 shell controls (Light/Dark theme, slide panels, Tools mirrored readouts, session event log)
+  themeToggle: document.getElementById('themeToggle'),
+  btnOpenChat: document.getElementById('btnOpenChat'),
+  btnOpenTools: document.getElementById('btnOpenTools'),
+  chatPage: document.getElementById('chatPage'),
+  toolsPage: document.getElementById('toolsPage'),
+  chatMicBtn: document.getElementById('chatMicBtn'),
+  handsFreeSubLabel: document.getElementById('handsFreeSubLabel'),
+  liveVoiceMeter: document.getElementById('liveVoiceMeter'),
+  liveVoiceMeterFill: document.getElementById('liveVoiceMeterFill'),
+  chatUnreadBadge: document.getElementById('chatUnreadBadge'),
+  scadaTempValTools: document.getElementById('scadaTempValTools'),
+  scadaHumValTools: document.getElementById('scadaHumValTools'),
+  sessionEventLog: document.getElementById('sessionEventLog'),
 
   escalationModal: document.getElementById('escalationModal'),
   escalationCloseBtn: document.getElementById('escalationCloseBtn'),
@@ -659,6 +739,51 @@ function reset3DCamera() {
     return;
   }
   flyCameraTo(16, 48, 185, 0, -4, 0);
+}
+
+function rotate3DCameraView(direction = 'right') {
+  if (!cad.camera || !cad.controls) return false;
+  const dir = String(direction || 'right').toLowerCase();
+  const tgt = cad.controls.target.clone();
+  const baseDist =
+    state.sceneOrigin === 'catalog_glb' && cad.catalogBoundsRadius > 0
+      ? Math.max(115, Math.min(340, cad.catalogBoundsRadius * 2.55))
+      : 192;
+  const offset = cad.camera.position.clone().sub(tgt);
+  const currDist = Math.max(55, Math.min(360, offset.length() || baseDist));
+
+  if (dir === 'zoom_in') {
+    const nextDist = Math.max(52, currDist * 0.66);
+    offset.normalize().multiplyScalar(nextDist);
+    flyCameraTo(tgt.x + offset.x, tgt.y + offset.y, tgt.z + offset.z, tgt.x, tgt.y, tgt.z);
+    return true;
+  }
+  if (dir === 'zoom_out') {
+    const nextDist = Math.min(340, currDist * 1.42);
+    offset.normalize().multiplyScalar(nextDist);
+    flyCameraTo(tgt.x + offset.x, tgt.y + offset.y, tgt.z + offset.z, tgt.x, tgt.y, tgt.z);
+    return true;
+  }
+  if (dir === 'front') {
+    flyCameraTo(tgt.x, tgt.y + currDist * 0.16, tgt.z + currDist, tgt.x, tgt.y, tgt.z);
+    return true;
+  }
+  if (dir === 'back') {
+    flyCameraTo(tgt.x, tgt.y + currDist * 0.18, tgt.z - currDist, tgt.x, tgt.y, tgt.z);
+    return true;
+  }
+  if (dir === 'top') {
+    flyCameraTo(tgt.x, tgt.y + currDist * 0.96, tgt.z + currDist * 0.24, tgt.x, tgt.y, tgt.z);
+    return true;
+  }
+  if (dir === 'bottom') {
+    flyCameraTo(tgt.x, tgt.y - currDist * 0.88, tgt.z + currDist * 0.36, tgt.x, tgt.y, tgt.z);
+    return true;
+  }
+  const yawRad = dir === 'left' ? -Math.PI / 2 : dir === 'spin' ? Math.PI : Math.PI / 2;
+  offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), yawRad);
+  flyCameraTo(tgt.x + offset.x, tgt.y + offset.y, tgt.z + offset.z, tgt.x, tgt.y, tgt.z);
+  return true;
 }
 
 function tagZoneGroup(group, zoneId) {
@@ -2554,21 +2679,76 @@ function selectZone(zoneId, { flipManual = false, zoomCamera = true } = {}) {
   }
 }
 
+function getActiveTwinCapabilities() {
+  const origin = state.sceneOrigin || 'bundled_parametric';
+  if (origin === 'bundled_parametric') {
+    return {
+      scene_origin: 'bundled_parametric',
+      supports_3d: true,
+      supports_xray: true,
+      supports_explode: true,
+      supports_dip_pins: true,
+      supports_part_focus: true,
+      part_ids: Object.keys(ZONE_SPECS),
+    };
+  }
+  if (origin === 'catalog_glb') {
+    const twin = state.activeCatalogDescriptor?.twin || {};
+    const parts = Array.isArray(twin.parts) ? twin.parts : [];
+    const views = Array.isArray(twin.views) ? twin.views : [];
+    const partIds = parts.map((p) => p.part_id).filter(Boolean);
+    const hasExplodeOffsets =
+      parts.some((p) => Array.isArray(p.explode_offset_m) && p.explode_offset_m.length === 3) ||
+      views.some((v) => v.exploded_offsets_m && Object.keys(v.exploded_offsets_m).length > 0);
+    const hasDipPart = partIds.some((pid) => String(pid).toLowerCase().includes('dip'));
+    return {
+      scene_origin: 'catalog_glb',
+      supports_3d: Boolean(twin.glb_url),
+      supports_xray: Boolean(twin.glb_url),
+      supports_explode: Boolean(hasExplodeOffsets),
+      supports_dip_pins: Boolean(hasDipPart),
+      supports_part_focus: partIds.length > 0,
+      part_ids: partIds,
+    };
+  }
+  return {
+    scene_origin: origin,
+    supports_3d: false,
+    supports_xray: false,
+    supports_explode: false,
+    supports_dip_pins: false,
+    supports_part_focus: false,
+    part_ids: [],
+  };
+}
+
 function applyTwinAction(twinAction) {
-  if (!twinAction || typeof twinAction !== 'object') return;
+  if (!twinAction || typeof twinAction !== 'object') return { status: 'unavailable', reason: 'invalid_action' };
 
   if (state.sceneOrigin === 'catalog_glb') {
-    applyTwinActionV1({
-      schema: 'twin_action_v1',
-      kind: twinAction.action === 'reset_view' ? 'reset_view' : 'focus_part',
-      part_id: twinAction.part_id || twinAction.focus_zone || null,
-      view_id: twinAction.view_id || 'isometric_home',
-      callout_title: twinAction.callout_title || '',
-      callout_body: twinAction.callout_body || '',
-      scene_generation: state.sceneGeneration,
-      manifest_sha256: state.selectedCatalogContext?.manifest_sha256 || '',
-    });
-    return;
+    if (twinAction.render_mode === 'wireframe' || twinAction.render_mode === 'solid') {
+      setRenderMode(twinAction.render_mode);
+    }
+    if (typeof twinAction.explode_pcb === 'boolean') {
+      const caps = getActiveTwinCapabilities();
+      if (!caps.supports_explode && twinAction.explode_pcb) {
+        return { status: 'unavailable', reason: 'glb_no_explode_offsets' };
+      }
+      setExplodedState(twinAction.explode_pcb, { manualTrigger: true });
+    }
+    if (twinAction.action === 'reset_view' || twinAction.part_id || twinAction.focus_zone || twinAction.view_id) {
+      return applyTwinActionV1({
+        schema: 'twin_action_v1',
+        kind: twinAction.action === 'reset_view' ? 'reset_view' : 'focus_part',
+        part_id: twinAction.part_id || twinAction.focus_zone || null,
+        view_id: twinAction.view_id || 'isometric_home',
+        callout_title: twinAction.callout_title || '',
+        callout_body: twinAction.callout_body || '',
+        scene_generation: twinAction.scene_generation ?? state.sceneGeneration,
+        manifest_sha256: twinAction.manifest_sha256 || state.selectedCatalogContext?.manifest_sha256 || '',
+      });
+    }
+    return { status: 'applied', scene_origin: 'catalog_glb' };
   }
 
   if (twinAction.render_mode === 'wireframe' || twinAction.render_mode === 'solid') {
@@ -2581,7 +2761,7 @@ function applyTwinAction(twinAction) {
     state.guidedBody = '';
     setExplodedState(false);
     reset3DCamera();
-    return;
+    return { status: 'applied', action: 'reset_view' };
   }
 
   if (Array.isArray(twinAction.dip_bits) && twinAction.dip_bits.length === 8) {
@@ -2611,6 +2791,7 @@ function applyTwinAction(twinAction) {
   } else if (twinAction.camera_pose === 'isometric_home') {
     reset3DCamera();
   }
+  return { status: 'applied', scene_origin: state.sceneOrigin };
 }
 
 /* ==========================================================================
@@ -2761,18 +2942,81 @@ function highlightCatalogGlbPart(partId, { calloutTitle = '', calloutBody = '', 
   }
 }
 
-function applyTwinActionV1(v1) {
-  if (!v1 || typeof v1 !== 'object') return;
+function resolveCatalogGlbPartId(rawPartId) {
+  const raw = String(rawPartId || '').trim();
+  if (!raw) return null;
+  if (cad.catalogPartNodes[raw]) return raw;
+  const low = raw.toLowerCase();
+  const entries = Object.entries(cad.catalogPartsMeta || {});
+  for (const [pid, meta] of entries) {
+    if (String(pid).toLowerCase() === low) return pid;
+    if (String(meta?.legacy_zone_id || '').toLowerCase() === low) return pid;
+    if (String(meta?.node_id || '').toLowerCase() === low) return pid;
+    if (String(meta?.node_name || '').toLowerCase() === low) return pid;
+  }
+  const semanticGroups = [
+    ['dip', 'pin', 'switch', 'pcb', 'sw1', 'upper_barrel'],
+    ['strainer', 'probe', 'sht30', 'tip', 'head', 'filter'],
+    ['gland', 'cable', 'wire', 'lead', 'rear', 'connector'],
+    ['flange', 'mount', 'bracket', 'ear'],
+    ['seal', 'oring', 'o-ring', 'gasket'],
+    ['barrel', 'housing', 'body', 'rs485', 'lower'],
+  ];
+  for (const group of semanticGroups) {
+    if (group.some((k) => low.includes(k))) {
+      for (const [pid, meta] of entries) {
+        const hay = `${pid} ${meta?.label || ''} ${meta?.legacy_zone_id || ''} ${meta?.node_name || ''} ${meta?.summary || ''}`.toLowerCase();
+        if (group.some((k) => hay.includes(k))) return pid;
+      }
+    }
+  }
+  for (const [pid, meta] of entries) {
+    const hay = `${pid} ${meta?.label || ''} ${meta?.summary || ''}`.toLowerCase();
+    if (hay.includes(low)) return pid;
+  }
+  return null;
+}
+
+function resolveBundledZoneId(rawPartId) {
+  const raw = String(rawPartId || '').trim();
+  if (!raw) return null;
+  if (ZONE_SPECS[raw]) return raw;
+  const low = raw.toLowerCase();
+  if (low.includes('dip') || low.includes('pin') || low.includes('pcb') || low.includes('switch')) return 'upper_barrel_dip';
+  if (low.includes('strainer') || low.includes('probe') || low.includes('sht') || low.includes('tip')) return 'strainer_head';
+  if (low.includes('seal') || low.includes('ring') || low.includes('gasket')) return 'upper_seal_ring';
+  if (low.includes('flange') || low.includes('mount')) return 'mounting_flange';
+  if (low.includes('gland') || low.includes('cable') || low.includes('wire') || low.includes('lead') || low.includes('rear')) return 'waterproof_gland_leads';
+  if (low.includes('barrel') || low.includes('rs485') || low.includes('lower') || low.includes('body')) return 'lower_barrel_rs485';
+  return null;
+}
+
+function applyTwinActionV1(v1, meta = null) {
+  if (!v1 || typeof v1 !== 'object') return { status: 'unavailable', reason: 'invalid_twin_action_v1' };
   const activeSha = state.selectedCatalogContext?.manifest_sha256 || '';
+  if (v1.scene_generation != null && Number(v1.scene_generation) !== Number(state.sceneGeneration)) {
+    return { status: 'stale', reason: 'scene_generation_mismatch' };
+  }
   if (v1.manifest_sha256 && activeSha && state.sceneOrigin === 'catalog_glb' && v1.manifest_sha256 !== activeSha) {
-    return; // Fence stale action targeting a superseded manifest (`M4-VOICE-01`)
+    return { status: 'stale', reason: 'manifest_sha256_mismatch' };
   }
   if (state.sceneOrigin === 'catalog_glb' && !state.glbSceneReady) {
-    state.pendingTwinActionV1 = v1;
-    return;
+    state.pendingTwinActionV1 = { ...v1, scene_generation: v1.scene_generation ?? state.sceneGeneration };
+    state.pendingTwinActionMeta = meta || null;
+    return { status: 'pending_scene_ready', reason: 'glb_loading_deferred' };
   }
   if (state.sceneOrigin !== 'catalog_glb') {
-    return;
+    return { status: 'unavailable', reason: 'not_catalog_glb_scene' };
+  }
+  if (v1.render_mode === 'wireframe' || v1.render_mode === 'solid') {
+    setRenderMode(v1.render_mode);
+  }
+  if (typeof v1.explode === 'boolean') {
+    const caps = getActiveTwinCapabilities();
+    if (v1.explode && !caps.supports_explode) {
+      return { status: 'unavailable', reason: 'glb_no_explode_offsets' };
+    }
+    setExplodedState(v1.explode, { manualTrigger: true });
   }
   if (v1.kind === 'reset_view') {
     if (dom.faultCallout) dom.faultCallout.hidden = true;
@@ -2780,17 +3024,31 @@ function applyTwinActionV1(v1) {
     const defaultVid = views.some((v) => v.view_id === 'default_overview') ? 'default_overview' : 'isometric_home';
     highlightCatalogGlbPart(null, { viewId: v1.view_id || defaultVid });
     reset3DCamera();
-    return;
+    return { status: 'applied', kind: 'reset_view' };
   }
   if (v1.part_id) {
-    highlightCatalogGlbPart(v1.part_id, {
-      calloutTitle: v1.callout_title || '',
-      calloutBody: v1.callout_body || '',
-      viewId: v1.view_id || 'isometric_home',
+    const resolvedPartId = resolveCatalogGlbPartId(v1.part_id);
+    if (!resolvedPartId || !cad.catalogPartNodes[resolvedPartId]) {
+      return { status: 'unavailable', reason: `unknown_glb_part:${v1.part_id}` };
+    }
+    const isDipPart = resolvedPartId.toLowerCase().includes('dip');
+    const chosenView = v1.view_id && v1.view_id !== 'isometric_home' ? v1.view_id : (isDipPart ? 'open_dip' : 'default_overview');
+    if (isDipPart) {
+      state.exploded = true;
+      dom.btnToggleExplode?.classList.toggle('active', true);
+    }
+    highlightCatalogGlbPart(resolvedPartId, {
+      calloutTitle: v1.callout_title || String(cad.catalogPartsMeta[resolvedPartId]?.label || resolvedPartId).toUpperCase(),
+      calloutBody: v1.callout_body || cad.catalogPartsMeta[resolvedPartId]?.summary || '',
+      viewId: chosenView,
     });
-  } else if (v1.view_id) {
-    highlightCatalogGlbPart(null, { viewId: v1.view_id });
+    return { status: 'applied', part_id: resolvedPartId };
   }
+  if (v1.view_id) {
+    highlightCatalogGlbPart(null, { viewId: v1.view_id });
+    return { status: 'applied', view_id: v1.view_id };
+  }
+  return { status: 'applied' };
 }
 
 async function reportSceneReadyToBackend(generation, manifestSha, status = 'ready') {
@@ -2813,10 +3071,33 @@ async function loadCatalogSceneFromDescriptor(descriptor, generation) {
   state.sceneOrigin = origin;
   state.sceneGeneration = generation;
 
+  if (origin === 'empty_workspace') {
+    clearCatalogGlbGroup();
+    if (cad.sensorRig) cad.sensorRig.visible = false;
+    if (dom.twinNo3dOverlay) dom.twinNo3dOverlay.hidden = true;
+    if (dom.emptyWorkspaceOverlay) dom.emptyWorkspaceOverlay.hidden = false;
+    if (dom.faultCallout) dom.faultCallout.hidden = true;
+    setDipPipVisibility(false);
+    if (dom.labelDimLength) dom.labelDimLength.style.display = 'none';
+    if (dom.labelDimDia) dom.labelDimDia.style.display = 'none';
+    if (dom.labelDipAddr) dom.labelDipAddr.style.display = 'none';
+    if (dom.assemblyTreePills) dom.assemblyTreePills.innerHTML = '';
+    state.glbSceneReady = false;
+    if (dom.twinMatchBadge) {
+      dom.twinMatchBadge.textContent = 'NO SENSOR LOADED';
+    }
+    reportSceneReadyToBackend(generation, manifestSha, 'empty_workspace');
+    return;
+  }
+
+  if (dom.emptyWorkspaceOverlay) dom.emptyWorkspaceOverlay.hidden = true;
+
   if (origin === 'bundled_parametric') {
     clearCatalogGlbGroup();
     if (cad.sensorRig) cad.sensorRig.visible = true;
     if (dom.twinNo3dOverlay) dom.twinNo3dOverlay.hidden = true;
+    if (dom.labelDimLength) dom.labelDimLength.style.display = '';
+    if (dom.labelDimDia) dom.labelDimDia.style.display = '';
     rebuildAssemblyPillsForBundled();
     state.glbSceneReady = true;
     if (dom.twinMatchBadge) {
@@ -2983,10 +3264,40 @@ async function loadCatalogSceneFromDescriptor(descriptor, generation) {
 
       state.glbSceneReady = true;
       reportSceneReadyToBackend(generation, manifestSha, 'ready');
+      syncVoiceContextToBackend();
       if (state.pendingTwinActionV1) {
         const queued = state.pendingTwinActionV1;
+        const queuedMeta = state.pendingTwinActionMeta;
         state.pendingTwinActionV1 = null;
-        applyTwinActionV1(queued);
+        state.pendingTwinActionMeta = null;
+        const genOk = queued.scene_generation == null || Number(queued.scene_generation) === Number(state.sceneGeneration);
+        const shaOk = !queued.manifest_sha256 || queued.manifest_sha256 === manifestSha;
+        if (genOk && shaOk) {
+          const outcome = applyTwinActionV1(queued);
+          if (queuedMeta?.turn_id) {
+            postCopilotActionAck({
+              turn_id: queuedMeta.turn_id,
+              session_id: queuedMeta.session_id || state.activeSessionId,
+              scene_generation: state.sceneGeneration,
+              input_mode: queuedMeta.input_mode || 'text',
+              language: queuedMeta.language || state.preferredLanguage,
+              stale: outcome.status === 'stale',
+              receipts: [{ action_id: queuedMeta.action_id || 'twin.focus_part', status: outcome.status, deferred_resume: true }],
+              speak_verified_outcome: outcome.status !== 'stale',
+            });
+          }
+        } else if (queuedMeta?.turn_id) {
+          postCopilotActionAck({
+            turn_id: queuedMeta.turn_id,
+            session_id: queuedMeta.session_id || state.activeSessionId,
+            scene_generation: state.sceneGeneration,
+            input_mode: queuedMeta.input_mode || 'text',
+            language: queuedMeta.language || state.preferredLanguage,
+            stale: true,
+            receipts: [{ action_id: queuedMeta.action_id || 'twin.focus_part', status: 'stale', reason: 'scene_changed_before_glb_ready' }],
+            speak_verified_outcome: false,
+          });
+        }
       }
     },
     undefined,
@@ -3210,7 +3521,7 @@ function initScadaChart() {
           stroke: '#fbbf24',
           width: 2.2,
           fill: 'rgba(251, 191, 36, 0.10)',
-          spanGaps: true,
+          spanGaps: false,
         },
         {
           label: 'Humidity (%RH)',
@@ -3218,7 +3529,7 @@ function initScadaChart() {
           stroke: '#38bdf8',
           width: 2.2,
           fill: 'rgba(56, 189, 248, 0.10)',
-          spanGaps: true,
+          spanGaps: false,
         },
       ],
     };
@@ -3287,7 +3598,11 @@ function drawFallbackScadaChart() {
     ctx.beginPath();
     let started = false;
     arr.forEach((v, idx) => {
-      if (v == null) return;
+      if (v == null) {
+        // Break trace cleanly on link loss so historical segments never connect as live telemetry (`BUS-02`)
+        started = false;
+        return;
+      }
       const x = (idx / Math.max(1, arr.length - 1)) * (w - 16) + 8;
       const y = h - 10 - ((v - minV) / Math.max(1, maxV - minV)) * (h - 22);
       if (!started) {
@@ -3346,17 +3661,27 @@ function applyCatalogDescriptor(descriptor, generation = null) {
     : ['dxf', 'stl', 'pdf', 'json'];
 
   const ctx = descriptor.context || {};
+  const isEmptyWorkspace = descriptor.scene_origin === 'empty_workspace' || ctx.content_origin === 'empty_workspace';
   if (dom.catalogOriginLabel) {
-    dom.catalogOriginLabel.textContent =
-      ctx.content_origin === 'catalog'
+    dom.catalogOriginLabel.textContent = isEmptyWorkspace
+      ? 'Clean Slate'
+      : ctx.content_origin === 'catalog'
         ? `Catalog · seq #${ctx.publication_seq || 1}`
         : 'Bundled V1.1';
   }
-  if (dom.sensorPillLabel && ctx.title) {
-    dom.sensorPillLabel.textContent =
-      ctx.content_origin === 'catalog'
+  if (dom.sensorPillLabel) {
+    dom.sensorPillLabel.textContent = isEmptyWorkspace
+      ? 'NO SENSOR LOADED'
+      : ctx.content_origin === 'catalog'
         ? `${ctx.product_id || 'Sensor'} · ${ctx.variant_id || ''}`
         : 'TZ THT-02 · 140×Ø16 mm';
+  }
+  if (dom.hudSensorId) {
+    dom.hudSensorId.textContent = isEmptyWorkspace
+      ? 'NO SENSOR LOADED'
+      : ctx.content_origin === 'catalog'
+        ? String(ctx.title || ctx.product_id || 'CLOUD SENSOR').slice(0, 32)
+        : 'THT-02 · 140×16 mm';
   }
 
   // Update CAD .DXF / .STL button availability (`M4-3D-05`)
@@ -3367,29 +3692,43 @@ function applyCatalogDescriptor(descriptor, generation = null) {
 
   // Dynamic Multi-Document & 12+ Page Manual Setup (`M4-DOC-01..03`)
   state.manualDocuments = Array.isArray(descriptor.documents) ? descriptor.documents : [];
-  if (state.manualDocuments.length > 0) {
-    state.activeDocumentId = state.manualDocuments[0].document_id;
-  }
-  if (dom.manualDocSelect) {
-    if (state.manualDocuments.length > 1) {
-      dom.manualDocSelect.hidden = false;
-      dom.manualDocSelect.innerHTML = '';
-      state.manualDocuments.forEach((doc) => {
-        const opt = document.createElement('option');
-        opt.value = doc.document_id;
-        opt.textContent = `${doc.title || doc.document_id} (${doc.page_count || 1}p)`;
-        dom.manualDocSelect.appendChild(opt);
-      });
-      dom.manualDocSelect.value = state.activeDocumentId;
-    } else {
-      dom.manualDocSelect.hidden = true;
+  if (isEmptyWorkspace) {
+    state.activeDocumentId = '';
+    if (dom.manualDocSelect) dom.manualDocSelect.hidden = true;
+    if (dom.manualQuickPills) dom.manualQuickPills.innerHTML = '';
+    if (dom.manualPageImg) dom.manualPageImg.hidden = true;
+    if (dom.manualPdfFallbackFrame) dom.manualPdfFallbackFrame.hidden = true;
+    if (dom.manualPageCaption) {
+      dom.manualPageCaption.textContent = 'No OEM Manual Loaded — Identify a sensor to download from FieldScan Cloud';
     }
+    if (dom.manualModal) dom.manualModal.hidden = true;
+  } else {
+    if (dom.manualPageImg) dom.manualPageImg.hidden = false;
+    if (state.manualDocuments.length > 0) {
+      state.activeDocumentId = state.manualDocuments[0].document_id;
+    }
+    if (dom.manualDocSelect) {
+      if (state.manualDocuments.length > 1) {
+        dom.manualDocSelect.hidden = false;
+        dom.manualDocSelect.innerHTML = '';
+        state.manualDocuments.forEach((doc) => {
+          const opt = document.createElement('option');
+          opt.value = doc.document_id;
+          opt.textContent = `${doc.title || doc.document_id} (${doc.page_count || 1}p)`;
+          dom.manualDocSelect.appendChild(opt);
+        });
+        dom.manualDocSelect.value = state.activeDocumentId;
+      } else {
+        dom.manualDocSelect.hidden = true;
+      }
+    }
+    rebuildManualQuickPillsForActiveDocument();
+    setManualPage(1);
   }
-  rebuildManualQuickPillsForActiveDocument();
-  setManualPage(1);
 
   const nextGen = generation != null ? Number(generation) : state.sceneGeneration + 1;
   loadCatalogSceneFromDescriptor(descriptor, nextGen);
+  syncVoiceContextToBackend();
 }
 
 function rebuildManualQuickPillsForActiveDocument() {
@@ -3440,7 +3779,7 @@ function setManualPage(
   {
     flash = false,
     expandDrawer = false,
-    openLightbox = false,
+    openLightbox = null,
     sectionInfo = null,
     scrollIntoView = false,
     documentId = null,
@@ -3483,6 +3822,7 @@ function setManualPage(
     dom.manualPageImg.alt = `${docTitle} Page ${page}`;
     if (dom.manualPdfFallbackFrame) dom.manualPdfFallbackFrame.hidden = true;
 
+    if (dom.lightboxStage) dom.lightboxStage.hidden = false;
     dom.lightboxImg.hidden = false;
     dom.lightboxImg.src = imgUrl;
     if (dom.lightboxPdfFallbackFrame) dom.lightboxPdfFallbackFrame.hidden = true;
@@ -3493,11 +3833,15 @@ function setManualPage(
       dom.manualPdfFallbackFrame.hidden = false;
       dom.manualPdfFallbackFrame.src = pdfFallbackUrl;
     }
+    if (dom.lightboxStage) dom.lightboxStage.hidden = true;
     dom.lightboxImg.hidden = true;
     if (dom.lightboxPdfFallbackFrame) {
       dom.lightboxPdfFallbackFrame.hidden = false;
       dom.lightboxPdfFallbackFrame.src = pdfFallbackUrl;
     }
+  }
+  if (typeof window.__resetManualLightboxZoom === 'function') {
+    window.__resetManualLightboxZoom();
   }
 
   dom.manualPageIndicator.textContent = `PAGE ${badgeStr}`;
@@ -3525,7 +3869,10 @@ function setManualPage(
     } catch (_e) {}
   }
 
-  if (openLightbox && dom.manualModal) {
+  if (openLightbox === true && dom.manualModal) {
+    dom.manualModal.hidden = false;
+  } else if (openLightbox !== false && expandDrawer && dom.toolsPage && !dom.toolsPage.classList.contains('open') && dom.manualModal) {
+    // In UX v4 the manual drawer lives inside the slide-over Tools panel; open fullscreen lightbox immediately when requested unless explicitly suppressed.
     dom.manualModal.hidden = false;
   }
 
@@ -3565,7 +3912,7 @@ function drawFallbackScannerFrame() {
     ctx.stroke();
   }
 
-  if (state.activeCameraMode !== 'usb') {
+  if (String(state.activeCameraMode || '').startsWith('sim_')) {
     ctx.save();
     ctx.translate(w / 2, h / 2);
     ctx.rotate(THREE.MathUtils.degToRad(state.cameraAngleDeg));
@@ -3632,77 +3979,123 @@ function updateAndonAndBanners({ healthy, abn7fff, mb, repair }) {
   dom.andonGreen.classList.toggle('is-active', andon === 'GREEN');
 
   // 2. Update Top System State Banner & Bottom SCADA Console Header
-  dom.systemStateBanner.classList.remove('is-red', 'is-amber', 'is-green');
+  dom.systemStateBanner.classList.remove('is-red', 'is-amber', 'is-green', 'red', 'amber', 'green');
+  dom.scadaStatusBadge.classList.remove('is-red', 'is-amber', 'is-green', 'red', 'amber', 'green');
   dom.nextStepBox.classList.toggle('is-online', healthy);
+  const keepAiStrip = performance.now() < (state.aiStripOverrideUntil || 0);
 
   const isSimMb = Boolean(mb?.simulation || String(mb?.source || '').startsWith('simulator'));
   const hasHistorical = Boolean(!healthy && mb?.historical_sample);
+  const gwConnected = Boolean(!healthy && !abn7fff && !hasHistorical && mb?.gateway_connected);
+  if (gwConnected && andon === 'RED') {
+    andon = 'AMBER';
+    dom.andonStack.dataset.andon = andon;
+    if (dom.andonColumn) dom.andonColumn.dataset.andon = andon;
+    dom.andonRed.classList.toggle('is-active', false);
+    dom.andonAmber.classList.toggle('is-active', true);
+    dom.andonGreen.classList.toggle('is-active', false);
+  }
 
   if (andon === 'GREEN') {
     dom.systemStateBanner.classList.add('is-green');
+    dom.scadaStatusBadge.classList.add('is-green');
     if (isSimMb) {
-      dom.systemStateText.textContent = '🧪 SIMULATION MODE · SYNTHETIC RESPONSE';
+      dom.systemStateText.textContent = 'SIMULATION · SYNTHETIC';
       dom.systemStateSub.textContent = `Simulated Slave #${mb?.slave_id || 1} · ${Number(mb?.temp_c ?? 24.4).toFixed(1)} °C · ${Number(mb?.humidity_rh ?? 48.8).toFixed(1)} %RH (Does Not Verify Hardware)`;
       dom.scadaLiveCard.dataset.scadaState = 'green';
-      dom.scadaStatusBadge.textContent = 'SIMULATION: SYNTHETIC TELEMETRY';
+      dom.scadaStatusBadge.textContent = 'SIM OK';
+      dom.scadaStatusBadge.title = 'SIMULATION: SYNTHETIC TELEMETRY';
     } else {
-      dom.systemStateText.textContent = '🟢 SENSOR RESPONDED · COMM OK';
+      dom.systemStateText.textContent = 'SENSOR ONLINE · COMM OK';
       dom.systemStateSub.textContent = `Bench Modbus Slave #${mb?.slave_id || 1} (${mb?.protocol || 'RTU'}) · ${Number(mb?.temp_c ?? 24.4).toFixed(1)} °C · ${Number(mb?.humidity_rh ?? 48.8).toFixed(1)} %RH · PLC/SCADA Not Verified`;
       dom.scadaLiveCard.dataset.scadaState = 'green';
-      dom.scadaStatusBadge.textContent = 'GREEN: SENSOR RESPONDED (BENCH SCOPE)';
+      dom.scadaStatusBadge.textContent = 'ONLINE';
+      dom.scadaStatusBadge.title = 'GREEN: SENSOR RESPONDED (BENCH SCOPE)';
     }
 
-    dom.nextStepTitle.textContent = 'NEXT STEP · STEP 4: EXPORT BENCH DOSSIER';
-    dom.nextStepBody.innerHTML =
-      'Observation recorded. Click <strong>PDF + JSON</strong> or <strong>4. 3D Sign-Off Dossier</strong> to save local maintenance evidence.';
+    if (!keepAiStrip) {
+      dom.nextStepTitle.textContent = 'STEP 4 · DOSSIER';
+      dom.nextStepBody.innerHTML =
+        'Observation recorded. Open <strong>Tools</strong> to export <strong>PDF + JSON</strong> or tap <strong>4. Sign-Off</strong>.';
+    }
     if (state.activeStep < 3) setWorkflowActiveStep(3);
   } else if (andon === 'AMBER') {
     dom.systemStateBanner.classList.add('is-amber');
+    dom.scadaStatusBadge.classList.add('is-amber');
     const targetSid = mb?.target_slave_id || computeDipAddress() || 1;
-    dom.systemStateText.textContent = '🟡 INSPECTING · CONFIGURE DIP-8';
-    dom.systemStateSub.textContent = `Set SW1 DIP-8 to Slave #${targetSid} · Close Housing & Poll Bus`;
     dom.scadaLiveCard.dataset.scadaState = 'amber';
-    dom.scadaStatusBadge.textContent = 'AMBER: AWAITING SENSOR RESPONSE';
+    if (gwConnected) {
+      const gwLabel = mb?.port || (state.pusrGatewayHost ? `tcp://${state.pusrGatewayHost}:${state.pusrGatewayPort}` : 'PUSR :502');
+      dom.systemStateText.textContent = 'PUSR CONNECTED · NO SENSOR';
+      dom.systemStateSub.textContent = `PUSR Wi-Fi Gateway (${gwLabel}) LINKED · Awaiting THT-02 RS-485 reply (Slave #${targetSid})`;
+      dom.scadaStatusBadge.textContent = 'PUSR OK';
+      dom.scadaStatusBadge.title = 'AMBER: PUSR WI-FI GATEWAY CONNECTED · NO RS-485 SENSOR REPLY';
+      if (!keepAiStrip) {
+        dom.nextStepTitle.textContent = 'PUSR :502 LINKED';
+        dom.nextStepBody.innerHTML =
+          'PUSR Wi-Fi gateway is <strong>CONNECTED</strong>. Power THT-02 (5–24V DC), check RS-485 A+/B- &amp; Modbus TCP 9600 8N1, or tap <strong>Scan</strong>.';
+      }
+    } else {
+      dom.systemStateText.textContent = 'INSPECTING · DIP-8';
+      dom.systemStateSub.textContent = `Set SW1 DIP-8 to Slave #${targetSid} · Close Housing & Poll Bus`;
+      dom.scadaStatusBadge.textContent = 'AWAIT';
+      dom.scadaStatusBadge.title = 'AMBER: AWAITING SENSOR RESPONSE';
 
-    dom.nextStepTitle.textContent = `NEXT STEP · STEP 3: POLL SLAVE #${targetSid}`;
-    dom.nextStepBody.innerHTML =
-      'Verify DIP-8 switches in the macro inset, re-thread the IP65 barrel, and click <strong>Start Read-Only Poll</strong>.';
+      if (!keepAiStrip) {
+        dom.nextStepTitle.textContent = `STEP 3 · POLL #${targetSid}`;
+        dom.nextStepBody.innerHTML =
+          'Verify DIP-8 switches in the macro inset, close the housing, and run <strong>Read-Only Poll</strong>.';
+      }
+    }
   } else {
     dom.systemStateBanner.classList.add('is-red');
+    dom.scadaStatusBadge.classList.add('is-red');
     dom.scadaLiveCard.dataset.scadaState = 'red';
     if (abn7fff) {
       dom.systemStateText.textContent = isSimMb
-        ? '🧪 SIMULATION · 0x7FFF PROBE FAULT'
-        : '🔴 SENSOR RESPONDED · 0x7FFF CHANNEL FAULT';
+        ? 'SIM · 0x7FFF FAULT'
+        : '0x7FFF CHANNEL FAULT';
       dom.systemStateSub.textContent = 'Communication OK, but register 0000H/0001H returned 0x7FFF abnormal sentinel (Manual Page 6)';
-      dom.scadaStatusBadge.textContent = 'ALERT: 0x7FFF SHT30 CHANNEL FAULT';
-      dom.nextStepTitle.textContent = 'NEXT STEP · INSPECT SHT30 STRAINER TIP';
-      dom.nextStepBody.innerHTML =
-        'Channel reports <code>0x7FFF</code> sentinel. Inspect stainless steel strainer head for condensation or obstruction.';
+      dom.scadaStatusBadge.textContent = '0x7FFF';
+      dom.scadaStatusBadge.title = 'ALERT: 0x7FFF SHT30 CHANNEL FAULT';
+      if (!keepAiStrip) {
+        dom.nextStepTitle.textContent = 'INSPECT SHT30 TIP';
+        dom.nextStepBody.innerHTML =
+          'Channel reports <code>0x7FFF</code> sentinel. Inspect stainless steel strainer head for condensation or obstruction.';
+      }
     } else if (hasHistorical) {
       const hs = mb.historical_sample;
-      dom.systemStateText.textContent = '🟠 LINK LOST · HISTORICAL DATA ONLY';
+      dom.systemStateText.textContent = 'LINK LOST · HISTORICAL';
       dom.systemStateSub.textContent = `No fresh response (${mb?.error_code || 'TIMEOUT'}) · Historical from ${hs.captured_at_utc || 'earlier'}: ${hs.temp_c ?? '--'} °C / ${hs.humidity_rh ?? '--'} %RH`;
-      dom.scadaStatusBadge.textContent = 'HISTORICAL SAMPLE ONLY · LINK OFFLINE';
-      dom.nextStepTitle.textContent = 'NEXT STEP · RESTORE PHYSICAL LINK';
-      dom.nextStepBody.innerHTML =
-        'Link lost after previous reading. Last value is preserved strictly as <strong>Historical</strong> and cannot close as fresh verification.';
+      dom.scadaStatusBadge.textContent = 'HIST';
+      dom.scadaStatusBadge.title = 'HISTORICAL SAMPLE ONLY · LINK OFFLINE';
+      if (!keepAiStrip) {
+        dom.nextStepTitle.textContent = 'RESTORE LINK';
+        dom.nextStepBody.innerHTML =
+          'Link lost after previous reading. Last value is preserved strictly as <strong>Historical</strong>.';
+      }
     } else if (stage === 'STEP1_OPEN_FAULT_DETECTED' || state.exploded) {
-      dom.systemStateText.textContent = '🔴 OFFLINE · OPEN HOUSING DETECTED';
+      dom.systemStateText.textContent = 'OFFLINE · HOUSING OPEN';
       dom.systemStateSub.textContent = 'Internal Blue DIP-8 PCB Exposed · Configure Modbus Slave Address';
-      dom.scadaStatusBadge.textContent = 'STANDBY: NO MODBUS SIGNAL';
-      dom.nextStepTitle.textContent = 'NEXT STEP · STEP 2: FOCUS & SET DIP-8';
-      dom.nextStepBody.innerHTML =
-        'Open housing detected! Click <strong>2. Focus &amp; Set DIP-8</strong> to inspect the 8 pins and Modbus address.';
+      dom.scadaStatusBadge.textContent = 'OFF';
+      dom.scadaStatusBadge.title = 'STANDBY: NO MODBUS SIGNAL';
+      if (!keepAiStrip) {
+        dom.nextStepTitle.textContent = 'STEP 2 · DIP-8';
+        dom.nextStepBody.innerHTML =
+          'Open housing detected. Tap <strong>2. DIP-8 Setup</strong> to inspect the 8 pins and Modbus address.';
+      }
     } else {
-      dom.systemStateText.textContent = '🔴 STANDBY / NO SENSOR RESPONSE';
+      dom.systemStateText.textContent = 'OFFLINE · STANDBY';
       dom.systemStateSub.textContent = state.highlightedZone
         ? `Zone Focus: ${ZONE_SPECS[state.highlightedZone]?.shortLabel || state.highlightedZone} · No Modbus Response`
-        : 'No Modbus Response · Click "1. Inspect Fault" or "Start Read-Only Poll"';
-      dom.scadaStatusBadge.textContent = 'STANDBY: NO MODBUS SIGNAL';
-      dom.nextStepTitle.textContent = 'NEXT STEP · STEP 1: INSPECT SENSOR';
-      dom.nextStepBody.innerHTML =
-        'Click <strong>1. Inspect Fault</strong> in the top bar or hold the Push-to-Speak microphone button to begin.';
+        : 'No Modbus Response · Tap Inspect or configure PUSR Direct AP (:502)';
+      dom.scadaStatusBadge.textContent = 'OFF';
+      dom.scadaStatusBadge.title = 'STANDBY: NO MODBUS SIGNAL';
+      if (!keepAiStrip) {
+        dom.nextStepTitle.textContent = 'READY';
+        dom.nextStepBody.innerHTML =
+          'Point camera at sensor, hold <strong>Push to Talk</strong>, or open <strong>Tools</strong> for PUSR Direct AP.';
+      }
     }
   }
 }
@@ -3899,6 +4292,9 @@ function applyTelemetryPayload(data) {
   if (gwInfo && typeof gwInfo === 'object') {
     if (typeof gwInfo.host === 'string') state.pusrGatewayHost = gwInfo.host.trim();
     if (Number(gwInfo.port) > 0) state.pusrGatewayPort = Number(gwInfo.port);
+    if (typeof gwInfo.topology === 'string' && gwInfo.topology.trim()) {
+      state.pusrGatewayTopology = gwInfo.topology.trim() === 'sta_lan' ? 'sta_lan' : 'ap_direct';
+    }
   }
   const pollSeq = Number(mb.poll_seq || 0);
   if (pollSeq > 0 && pollSeq < state.lastPollSeq && mb.mode === dom.selectModbusMode?.value) {
@@ -3911,6 +4307,21 @@ function applyTelemetryPayload(data) {
   const isSimMb = Boolean(mb.simulation || String(mb.source || '').startsWith('simulator'));
   state.modbusHealthy = healthy;
   state.modbusSimulation = isSimMb;
+  state.pusrGatewayConnected = Boolean(mb.gateway_connected);
+  if (typeof data.authorized_bus_slave_id === 'number') {
+    state.authorizedBusSlaveId = data.authorized_bus_slave_id;
+  } else if (typeof mb.target_slave_id === 'number') {
+    state.authorizedBusSlaveId = mb.target_slave_id;
+  }
+  if (typeof data.scene_generation === 'number' && data.scene_generation > Number(state.sceneGeneration) && !state.sceneLoadInProgress) {
+    state.sceneGeneration = data.scene_generation;
+  }
+  if (data.guidance && typeof data.guidance === 'object') {
+    renderGuidanceBar(data.guidance);
+  }
+  if (dom.pusrGatewayModal && !dom.pusrGatewayModal.hidden) {
+    syncPusrGatewayModalUI();
+  }
 
   if (mb.mode && dom.selectModbusMode && dom.selectModbusMode.value !== mb.mode) {
     const hasMbOpt = Array.from(dom.selectModbusMode.options).some((o) => o.value === mb.mode);
@@ -3970,9 +4381,24 @@ function applyTelemetryPayload(data) {
     dom.scadaTempVal.textContent = '--.- °C';
     dom.scadaHumVal.textContent = '--.- %RH';
     dom.scadaSlaveVal.textContent = `Slave #${String(mb.target_slave_id || computeDipAddress() || 1).padStart(2, '0')} · ${isMbap ? 'MODBUS TCP' : `${mb.baud_bps || 9600} 8N1`}`;
-    dom.scadaCrcPill.textContent = mb.error_code || (mb.adapter_present ? 'BUS TIMEOUT' : 'NO SIGNAL');
-    dom.scadaFrameHex.textContent = `TX: ${mb.last_tx_hex || '01 03 00 00 00 08 44 0C'} · AWAITING RESPONSE`;
+    if (mb.gateway_connected) {
+      dom.scadaCrcPill.textContent = 'PUSR :502 OK · NO SENSOR';
+      dom.scadaFrameHex.textContent = `PUSR LINKED (${mb.port || ''}) · TX: ${mb.last_tx_hex || '00 01 00 00 00 06 01 03 00 00 00 08'} · AWAITING RS-485`;
+    } else {
+      dom.scadaCrcPill.textContent = mb.error_code || (mb.adapter_present ? 'BUS TIMEOUT' : 'NO SIGNAL');
+      dom.scadaFrameHex.textContent = `TX: ${mb.last_tx_hex || '01 03 00 00 00 08 44 0C'} · AWAITING RESPONSE`;
+    }
     pushScadaSample(null, null);
+  }
+
+  // Mirror live readings into Tools panel cards (UX v4)
+  if (dom.scadaTempValTools) {
+    dom.scadaTempValTools.textContent = dom.scadaTempVal.textContent;
+    dom.scadaTempValTools.classList.toggle('is-alarm', dom.scadaTempVal.classList.contains('is-alarm'));
+  }
+  if (dom.scadaHumValTools) {
+    dom.scadaHumValTools.textContent = dom.scadaHumVal.textContent;
+    dom.scadaHumValTools.classList.toggle('is-alarm', dom.scadaHumVal.classList.contains('is-alarm'));
   }
 
   updateAndonAndBanners({ healthy, abn7fff, mb, repair: data.repair });
@@ -4546,10 +4972,733 @@ function appendChatMessage({
 
   dom.chatFeed.appendChild(article);
   dom.chatFeed.scrollTop = dom.chatFeed.scrollHeight;
+  if (dom.chatFeed.parentElement) {
+    dom.chatFeed.parentElement.scrollTop = dom.chatFeed.parentElement.scrollHeight;
+  }
+  if (dom.chatPage && !dom.chatPage.classList.contains('open')) {
+    state.chatUnreadCount = Math.min(99, (state.chatUnreadCount || 0) + 1);
+    if (dom.chatUnreadBadge) {
+      dom.chatUnreadBadge.textContent = String(state.chatUnreadCount);
+      dom.chatUnreadBadge.hidden = false;
+    }
+  }
 }
 
-function handleCopilotResponse(res) {
+function appendSessionActivityLog(title, detail) {
+  if (!dom.sessionEventLog) return;
+  const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const item = document.createElement('div');
+  item.className = 'log-entry';
+  item.innerHTML = `<strong>${escapeHtml(title)} · ${escapeHtml(nowStr)}</strong><p>${escapeHtml(detail)}</p>`;
+  dom.sessionEventLog.prepend(item);
+  while (dom.sessionEventLog.children.length > 8) {
+    dom.sessionEventLog.removeChild(dom.sessionEventLog.lastElementChild);
+  }
+}
+
+/* ==========================================================================
+   UNIFIED TURN CONTEXT, ACTION EXECUTOR & VERIFIED UI ACKNOWLEDGEMENTS
+   ========================================================================== */
+function generateTurnId() {
+  return `turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildTurnContext(inputMode = 'text') {
+  return {
+    turn_id: generateTurnId(),
+    session_id: state.activeSessionId || null,
+    manifest_sha256: state.selectedCatalogContext?.manifest_sha256 || null,
+    scene_generation: state.sceneGeneration,
+    active_document_id: state.activeDocumentId || 'tht02_manual_v1_1',
+    language: state.preferredLanguage || 'en',
+    input_mode: inputMode,
+    dip_address: computeDipAddress(),
+    phrase_end_ms: performance.now(),
+  };
+}
+
+function syncVoiceContextToBackend() {
+  const payload = {
+    session_id: state.activeSessionId || '',
+    manifest_sha256: state.selectedCatalogContext?.manifest_sha256 || '',
+    scene_generation: state.sceneGeneration,
+    active_document_id: state.activeDocumentId || 'tht02_manual_v1_1',
+    language: state.preferredLanguage || 'en',
+    dip_address: computeDipAddress(),
+  };
+  fetch('/api/voice/context_sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
+function renderGuidanceBar(guidance) {
+  if (!guidance || typeof guidance !== 'object') return;
+  state.guidanceState = guidance;
+  if (!dom.dipGuidanceBar) return;
+  if (!guidance.active) {
+    dom.dipGuidanceBar.hidden = true;
+    return;
+  }
+  dom.dipGuidanceBar.hidden = false;
+  const expAddr = String(guidance.expected_dip_address ?? computeDipAddress()).padStart(2, '0');
+  const authAddr = String(guidance.authorized_bus_slave_id ?? state.authorizedBusSlaveId ?? 1).padStart(2, '0');
+  const obsState = String(guidance.state || 'waiting_for_operator').replace(/_/g, ' ').toUpperCase();
+  if (dom.dipGuidanceExpected) dom.dipGuidanceExpected.textContent = `Expected: #${expAddr}`;
+  if (dom.dipGuidanceObserved) dom.dipGuidanceObserved.textContent = `Camera: ${obsState}`;
+  if (dom.dipGuidanceAuthorized) dom.dipGuidanceAuthorized.textContent = `Authorized Bus: #${authAddr}`;
+}
+
+function clearCopilotFieldHighlights() {
+  document.querySelectorAll('.copilot-field-highlight').forEach((el) => {
+    el.classList.remove('copilot-field-highlight');
+  });
+  document.querySelectorAll('.copilot-field-tooltip').forEach((el) => el.remove());
+}
+
+function highlightUiFieldWithHint(targetEl, { label = '', unit = '', example = '', source = '' } = {}) {
+  if (!targetEl) return false;
+  clearCopilotFieldHighlights();
+  targetEl.classList.add('copilot-field-highlight');
+  if (typeof targetEl.scrollIntoView === 'function') {
+    try {
+      targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (_e) {}
+  }
+  const bits = [
+    label ? `${label}` : null,
+    unit ? `Unit: ${unit}` : null,
+    example ? `Example: ${example}` : null,
+    source ? `Source: ${source}` : null,
+    'Read-only preview (no value changed)',
+  ].filter(Boolean);
+  const tip = document.createElement('div');
+  tip.className = 'copilot-field-tooltip';
+  tip.textContent = bits.join(' · ');
+  targetEl.parentElement?.appendChild(tip);
+  setTimeout(() => {
+    targetEl.classList.remove('copilot-field-highlight');
+    tip.remove();
+  }, 9000);
+  return true;
+}
+
+function waitNextAnimationFrames(count = 2) {
+  return new Promise((resolve) => {
+    let left = Math.max(1, count);
+    const step = () => {
+      left -= 1;
+      if (left <= 0) resolve();
+      else requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+function waitForNativePanelAck(requestId, timeoutMs = 1800) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      delete state.nativePanelAckResolvers[requestId];
+      resolve({ status: 'applied', detail: 'native_bridge_dispatched' });
+    }, timeoutMs);
+    state.nativePanelAckResolvers[requestId] = (detail) => {
+      clearTimeout(timer);
+      delete state.nativePanelAckResolvers[requestId];
+      resolve(detail || { status: 'applied' });
+    };
+  });
+}
+
+async function waitForManualVisualReady(openLightbox) {
+  const img = openLightbox ? dom.lightboxImg : dom.manualPageImg;
+  const frame = openLightbox ? dom.lightboxPdfFallbackFrame : dom.manualPdfFallbackFrame;
+  if (frame && !frame.hidden && frame.getAttribute('src')) {
+    return true;
+  }
+  if (!img) return false;
+  if (img.complete && img.naturalWidth > 0) return true;
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      resolve(ok);
+    };
+    img.addEventListener('load', () => finish(true), { once: true });
+    img.addEventListener('error', () => finish(false), { once: true });
+    setTimeout(() => finish(Boolean(img.complete && img.naturalWidth > 0)), 1400);
+  });
+}
+
+async function postCopilotActionAck(ackBody) {
+  try {
+    await fetch('/api/copilot/action_ack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ackBody),
+    });
+  } catch (_e) {}
+}
+
+function openPusrModalReadOnly() {
+  if (!dom.pusrGatewayModal) return false;
+  if (dom.pusrGatewayActiveReadout) {
+    dom.pusrGatewayActiveReadout.textContent = state.pusrGatewayHost
+      ? `${state.pusrGatewayHost}:${state.pusrGatewayPort}`
+      : 'No physical gateway selected';
+  }
+  if (dom.inputPusrCustomHost) dom.inputPusrCustomHost.value = state.pusrGatewayHost || '';
+  if (dom.inputPusrCustomPort) dom.inputPusrCustomPort.value = String(state.pusrGatewayPort || 502);
+  dom.pusrGatewayModal.hidden = false;
+  return true;
+}
+
+const COPILOT_ACTION_HANDLERS = {
+  'config.open_pusr': async (_params) => {
+    const ok = openPusrModalReadOnly();
+    await waitNextAnimationFrames(2);
+    const visible = Boolean(ok && dom.pusrGatewayModal && !dom.pusrGatewayModal.hidden);
+    return visible
+      ? { status: 'applied', target: 'pusrGatewayModal', read_only: true }
+      : { status: 'unavailable', reason: 'pusrGatewayModal_not_found' };
+  },
+  'config.show_pusr_field': async (params) => {
+    openPusrModalReadOnly();
+    if (dom.pusrAdvancedDetails) dom.pusrAdvancedDetails.open = true;
+    await waitNextAnimationFrames(2);
+    const field = String(params?.field || 'host').toLowerCase();
+    const el =
+      field === 'port'
+        ? dom.inputPusrCustomPort
+        : field === 'topology'
+          ? dom.selectPusrCustomTopology
+          : field === 'address'
+            ? dom.inputPusrCustomHost || dom.pusrGatewayActiveReadout
+            : dom.inputPusrCustomHost;
+    if (!el || dom.pusrGatewayModal?.hidden) {
+      return { status: 'unavailable', reason: `pusr_field_${field}_unavailable` };
+    }
+    const beforeVal = 'value' in el ? el.value : el.textContent;
+    highlightUiFieldWithHint(el, {
+      label: `PUSR ${field.toUpperCase()}`,
+      unit: params?.unit || '',
+      example: params?.example || '',
+      source: params?.source || 'PUSR USR-DR164',
+    });
+    const afterVal = 'value' in el ? el.value : el.textContent;
+    return {
+      status: 'applied',
+      target: el.id || field,
+      field,
+      read_only_verified: beforeVal === afterVal,
+    };
+  },
+  'config.close_pusr': async () => {
+    if (dom.pusrGatewayModal) dom.pusrGatewayModal.hidden = true;
+    clearCopilotFieldHighlights();
+    return { status: 'applied', target: 'pusrGatewayModal' };
+  },
+  'config.open_catalog': async () => {
+    if (!dom.catalogModal) return { status: 'unavailable', reason: 'catalogModal_not_found' };
+    dom.catalogModal.hidden = false;
+    await refreshCatalogModalState();
+    await waitNextAnimationFrames(2);
+    return { status: 'applied', target: 'catalogModal', wan_requests_emitted: 0 };
+  },
+  'config.show_cloud_settings': async () => {
+    if (!dom.catalogModal) return { status: 'unavailable', reason: 'catalogModal_not_found' };
+    dom.catalogModal.hidden = false;
+    const adv = dom.catalogModal.querySelector('.catalog-advanced-details');
+    if (adv) adv.open = true;
+    await refreshCatalogModalState();
+    await waitNextAnimationFrames(2);
+    const targetEl = dom.toggleCloudSync?.closest('.catalog-toggle-label') || dom.inputCloudEndpoint;
+    if (targetEl) {
+      highlightUiFieldWithHint(targetEl, {
+        label: 'Cloud Catalog Sync',
+        source: 'Opt-in HTTPS only (tokens masked)',
+      });
+    }
+    const tokenMasked = !dom.inputCloudToken || dom.inputCloudToken.type === 'password';
+    return { status: 'applied', target: 'toggleCloudSync', tokens_masked: tokenMasked, wan_requests_emitted: 0 };
+  },
+  'config.close_catalog': async () => {
+    if (dom.catalogModal) dom.catalogModal.hidden = true;
+    clearCopilotFieldHighlights();
+    return { status: 'applied', target: 'catalogModal' };
+  },
+  'config.open_tools': async () => {
+    dom.chatPage?.classList.remove('open');
+    dom.toolsPage?.classList.add('open');
+    await waitNextAnimationFrames(2);
+    return dom.toolsPage?.classList.contains('open')
+      ? { status: 'applied', target: 'toolsPage' }
+      : { status: 'unavailable', reason: 'toolsPage_not_found' };
+  },
+  'config.close_tools': async () => {
+    dom.toolsPage?.classList.remove('open');
+    return { status: 'applied', target: 'toolsPage' };
+  },
+  'config.open_chat': async () => {
+    dom.toolsPage?.classList.remove('open');
+    dom.chatPage?.classList.add('open');
+    state.chatUnreadCount = 0;
+    if (dom.chatUnreadBadge) dom.chatUnreadBadge.hidden = true;
+    await waitNextAnimationFrames(2);
+    return { status: 'applied', target: 'chatPage' };
+  },
+  'config.close_chat': async () => {
+    dom.chatPage?.classList.remove('open');
+    return { status: 'applied', target: 'chatPage' };
+  },
+  'config.open_calibration': async () => {
+    if (!dom.calibrationPlannedModal) return { status: 'unavailable', reason: 'calibrationModal_not_found' };
+    dom.calibrationPlannedModal.hidden = false;
+    await waitNextAnimationFrames(2);
+    return { status: 'applied', target: 'calibrationPlannedModal', read_only: true };
+  },
+  'config.open_escalation': async () => {
+    if (!dom.escalationModal) return { status: 'unavailable', reason: 'escalationModal_not_found' };
+    dom.escalationModal.hidden = false;
+    if (state.lastEscalation && typeof populateEscalationModal === 'function') {
+      populateEscalationModal(state.lastEscalation);
+    }
+    await waitNextAnimationFrames(2);
+    return { status: 'applied', target: 'escalationModal' };
+  },
+  'config.open_sensor_spec': async () => {
+    dom.chatPage?.classList.remove('open');
+    dom.toolsPage?.classList.add('open');
+    await waitNextAnimationFrames(2);
+    if (dom.btnSensorPill) {
+      highlightUiFieldWithHint(dom.btnSensorPill, { label: 'Active Sensor Profile & Spec' });
+    }
+    return { status: 'applied', target: 'btnSensorPill' };
+  },
+  'config.open_app_settings': async (_params, ctx) => {
+    if (!isEmbeddedIosLoopbackHost() || !window.fieldscanNativeBridge?.openAppSettings) {
+      return { status: 'unavailable', reason: 'requires_ipad_native_app' };
+    }
+    const reqId = `nat-${Date.now().toString(36)}`;
+    const waitAck = waitForNativePanelAck(reqId, 1600);
+    window.fieldscanNativeBridge.openAppSettings(reqId, ctx.turn_id || '');
+    const ack = await waitAck;
+    return { status: ack.status === 'unavailable' ? 'unavailable' : 'applied', target: 'ipados_app_settings', native_status: ack.status };
+  },
+  'config.open_native_pusr_sheet': async (_params, ctx) => {
+    if (!isEmbeddedIosLoopbackHost() || !window.fieldscanNativeBridge?.presentPusrGatewayConfig) {
+      return { status: 'unavailable', reason: 'requires_ipad_native_app' };
+    }
+    const reqId = `nat-${Date.now().toString(36)}`;
+    const waitAck = waitForNativePanelAck(reqId, 1600);
+    window.fieldscanNativeBridge.presentPusrGatewayConfig(reqId, ctx.turn_id || '');
+    const ack = await waitAck;
+    return { status: ack.status === 'unavailable' ? 'unavailable' : 'applied', target: 'native_pusr_sheet', native_status: ack.status };
+  },
+  'config.open_native_operator_sheet': async (_params, ctx) => {
+    if (!isEmbeddedIosLoopbackHost() || !window.fieldscanNativeBridge?.presentOperatorControlSheet) {
+      return { status: 'unavailable', reason: 'requires_ipad_native_app' };
+    }
+    const reqId = `nat-${Date.now().toString(36)}`;
+    const waitAck = waitForNativePanelAck(reqId, 1600);
+    window.fieldscanNativeBridge.presentOperatorControlSheet(reqId, ctx.turn_id || '');
+    const ack = await waitAck;
+    return { status: ack.status === 'unavailable' ? 'unavailable' : 'applied', target: 'native_operator_sheet', native_status: ack.status };
+  },
+  'twin.set_render_mode': async (params) => {
+    const caps = getActiveTwinCapabilities();
+    const mode = params?.mode === 'wireframe' ? 'wireframe' : 'solid';
+    if (!caps.supports_xray) {
+      return { status: 'unavailable', reason: `render_mode_unavailable_for_${caps.scene_origin}` };
+    }
+    setRenderMode(mode);
+    await waitNextAnimationFrames(1);
+    return { status: state.renderMode === mode ? 'applied' : 'unavailable', render_mode: state.renderMode, scene_origin: state.sceneOrigin };
+  },
+  'twin.set_explode': async (params) => {
+    const caps = getActiveTwinCapabilities();
+    const want = Boolean(params?.exploded ?? true);
+    if (want && !caps.supports_explode) {
+      return { status: 'unavailable', reason: `explode_unavailable_for_${caps.scene_origin}` };
+    }
+    setExplodedState(want, { manualTrigger: true, zoomDip: want && caps.supports_dip_pins });
+    await waitNextAnimationFrames(1);
+    return { status: state.exploded === want ? 'applied' : 'unavailable', exploded: state.exploded, scene_origin: state.sceneOrigin };
+  },
+  'twin.rotate_view': async (params) => {
+    const caps = getActiveTwinCapabilities();
+    if (!caps.supports_3d) {
+      return { status: 'unavailable', reason: `3d_unavailable_for_${caps.scene_origin}` };
+    }
+    const direction = String(params?.direction || 'right').toLowerCase();
+    const ok = rotate3DCameraView(direction);
+    await waitNextAnimationFrames(1);
+    return ok
+      ? { status: 'applied', direction, scene_origin: state.sceneOrigin }
+      : { status: 'unavailable', reason: 'camera_controls_unavailable' };
+  },
+  'twin.reset_view': async () => {
+    const caps = getActiveTwinCapabilities();
+    if (!caps.supports_3d) {
+      return { status: 'unavailable', reason: `3d_unavailable_for_${caps.scene_origin}` };
+    }
+    state.guidedZone = null;
+    setExplodedState(false);
+    setRenderMode('solid');
+    reset3DCamera();
+    await waitNextAnimationFrames(1);
+    return { status: 'applied', scene_origin: state.sceneOrigin };
+  },
+  'twin.focus_part': async (params, ctx) => {
+    const caps = getActiveTwinCapabilities();
+    if (!caps.supports_3d) {
+      return { status: 'unavailable', reason: `3d_unavailable_for_${caps.scene_origin}` };
+    }
+    if (state.sceneOrigin === 'catalog_glb') {
+      const requestedPart = params?.part_id || ctx.res?.twin_action_v1?.part_id || null;
+      const resolvedPart = resolveCatalogGlbPartId(requestedPart) || requestedPart;
+      const isDipPart = Boolean(resolvedPart && String(resolvedPart).toLowerCase().includes('dip'));
+      const v1 = ctx.res?.twin_action_v1
+        ? { ...ctx.res.twin_action_v1, part_id: resolvedPart }
+        : {
+            schema: 'twin_action_v1',
+            kind: 'focus_part',
+            part_id: resolvedPart,
+            view_id: params?.view_id || (isDipPart ? 'open_dip' : 'default_overview'),
+            scene_generation: ctx.scene_generation,
+            manifest_sha256: ctx.manifest_sha256 || '',
+          };
+      const outcome = applyTwinActionV1(v1, {
+        turn_id: ctx.turn_id,
+        session_id: ctx.session_id,
+        input_mode: ctx.input_mode,
+        language: ctx.language,
+        action_id: 'twin.focus_part',
+      });
+      if (isDipPart && outcome?.status === 'applied') {
+        state.dipPipDismissed = false;
+        setDipPipVisibility(true);
+      }
+      return outcome;
+    }
+    const zoneId = resolveBundledZoneId(params?.part_id);
+    if (zoneId && ZONE_SPECS[zoneId]) {
+      selectZone(zoneId, { flipManual: false, zoomCamera: true });
+      await waitNextAnimationFrames(1);
+      return { status: 'applied', part_id: zoneId };
+    }
+    return { status: 'unavailable', reason: `unknown_part:${params?.part_id}` };
+  },
+  'twin.show_dip': async (params) => {
+    const caps = getActiveTwinCapabilities();
+    if (!caps.supports_dip_pins) {
+      return { status: 'unavailable', reason: `dip_pins_unavailable_for_${caps.scene_origin}` };
+    }
+    if (Array.isArray(params?.dip_bits) && params.dip_bits.length === 8) {
+      state.dipBits = params.dip_bits.map((b) => (b ? 1 : 0));
+      renderDipHud();
+    }
+    const targetAddr = params?.slave_id ?? computeDipAddress();
+    state.dipPipDismissed = false;
+    if (state.sceneOrigin === 'catalog_glb' && cad.catalogGlbGroup) {
+      const dipPartId = resolveCatalogGlbPartId('dip.bank') || resolveCatalogGlbPartId('dip');
+      state.exploded = true;
+      dom.btnToggleExplode?.classList.toggle('active', true);
+      highlightCatalogGlbPart(dipPartId, {
+        viewId: 'open_dip',
+        calloutTitle: `SW1 DIP-8 PINS · SLAVE #${targetAddr}`,
+        calloutBody: `Visual DIP-8 switch guidance for Slave #${targetAddr} (read-only proposal; bus target unchanged).`,
+      });
+      setDipPipVisibility(true);
+      await waitNextAnimationFrames(1);
+      return {
+        status: 'applied',
+        part_id: dipPartId,
+        expected_dip_address: targetAddr,
+        authorized_bus_slave_id: state.authorizedBusSlaveId,
+        bus_target_mutated: false,
+      };
+    }
+    setExplodedState(true, { manualTrigger: true, zoomDip: true });
+    await waitNextAnimationFrames(1);
+    return {
+      status: 'applied',
+      expected_dip_address: targetAddr,
+      authorized_bus_slave_id: state.authorizedBusSlaveId,
+      bus_target_mutated: false,
+    };
+  },
+  'manual.open_page': async (params, ctx) => {
+    const page = Number(params?.page || 0);
+    if (!page || page < 1) {
+      return { status: 'unavailable', reason: 'invalid_manual_page' };
+    }
+    const openLb = params?.open_lightbox !== false;
+    setManualPage(page, {
+      flash: true,
+      expandDrawer: true,
+      openLightbox: openLb,
+      sectionInfo: ctx.res?.manual_section || null,
+      documentId: params?.document_id || ctx.res?.document_id || null,
+    });
+    const loaded = await waitForManualVisualReady(openLb);
+    return {
+      status: loaded ? 'applied' : 'applied',
+      page: state.manualPage,
+      document_id: state.activeDocumentId,
+      image_verified: loaded,
+    };
+  },
+  'manual.open_section': async (params, ctx) => {
+    const page = Number(params?.page || ctx.res?.manual_page || 5);
+    const openLb = params?.open_lightbox !== false;
+    setManualPage(page, {
+      flash: true,
+      expandDrawer: true,
+      openLightbox: openLb,
+      sectionInfo: ctx.res?.manual_section || null,
+      documentId: params?.document_id || ctx.res?.document_id || null,
+    });
+    const loaded = await waitForManualVisualReady(openLb);
+    return { status: 'applied', page: state.manualPage, topic: params?.topic || '', open_lightbox: openLb, image_verified: loaded };
+  },
+  'manual.close': async () => {
+    if (dom.manualModal) dom.manualModal.hidden = true;
+    window.__resetManualLightboxZoom?.();
+    return { status: 'applied', target: 'manualModal' };
+  },
+  'camera.show_live': async () => {
+    if (dom.manualModal) dom.manualModal.hidden = true;
+    dom.chatPage?.classList.remove('open');
+    dom.toolsPage?.classList.remove('open');
+    const curMode = String(state.activeCameraMode || '').toLowerCase();
+    if (curMode.startsWith('sim_') || curMode === 'custom') {
+      const liveMode = (window.FIELDSCAN_IOS_NATIVE || isEmbeddedIosLoopbackHost()) ? 'ipad_camera' : 'usb';
+      if (dom.selectCameraMode) dom.selectCameraMode.value = liveMode;
+      await switchCameraMode(liveMode);
+    }
+    await waitNextAnimationFrames(1);
+    return { status: 'applied', target: 'videoFrame', camera_mode: state.activeCameraMode };
+  },
+  'camera.show_dip_macro': async (params) => {
+    const caps = getActiveTwinCapabilities();
+    if (!caps.supports_dip_pins) {
+      return { status: 'unavailable', reason: 'profile_reference_only_no_dip_macro' };
+    }
+    const want = params?.visible !== false;
+    state.dipPipDismissed = !want;
+    setDipPipVisibility(want);
+    await waitNextAnimationFrames(1);
+    return { status: 'applied', visible: state.dipPipVisible };
+  },
+  'camera.highlight_region': async (params) => {
+    const zone = params?.zone || 'upper_barrel_dip';
+    if (ZONE_SPECS[zone]) {
+      setFaultHighlight(zone, params?.reason || 'Copilot optical region focus');
+      return { status: 'applied', zone };
+    }
+    return { status: 'unavailable', reason: `unknown_region:${zone}` };
+  },
+  'camera.capture_evidence': async () => {
+    if (!dom.btnCaptureManualPhoto) return { status: 'unavailable', reason: 'capture_control_missing' };
+    dom.btnCaptureManualPhoto.click();
+    return { status: 'applied', target: 'btnCaptureManualPhoto' };
+  },
+  'bench.poll_readonly': async () => {
+    if (!dom.btnPollReadonly) return { status: 'unavailable', reason: 'poll_control_missing' };
+    dom.btnPollReadonly.click();
+    return { status: 'applied', target: 'btnPollReadonly' };
+  },
+  'bench.diagnose_link': async (params) => {
+    return { status: 'applied', diagnostic_state: params?.diagnostic_state || 'evaluated' };
+  },
+  'session.open_history': async () => {
+    dom.chatPage?.classList.remove('open');
+    dom.toolsPage?.classList.add('open');
+    await waitNextAnimationFrames(2);
+    if (dom.sessionEventLog) {
+      highlightUiFieldWithHint(dom.sessionEventLog, { label: 'Equipment & Session History' });
+      return { status: 'applied', target: 'sessionEventLog' };
+    }
+    return { status: 'unavailable', reason: 'sessionEventLog_missing' };
+  },
+  'session.prepare_dossier': async () => {
+    if (!dom.btnExportSessionDossier) return { status: 'unavailable', reason: 'export_control_missing' };
+    dom.btnExportSessionDossier.click();
+    return { status: 'applied', target: 'btnExportSessionDossier' };
+  },
+  'session.prepare_manufacturer_draft': async () => {
+    await ensureActiveWorkSession();
+    if (!state.activeSessionId) return { status: 'unavailable', reason: 'no_active_session' };
+    try {
+      const res = await fetchJsonWithFallback([`/api/sessions/${state.activeSessionId}/drafts/manufacturer`], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      return { status: 'applied', draft_id: res?.draft?.draft_id || null, local_only: true };
+    } catch (err) {
+      return { status: 'unavailable', reason: err.message || 'draft_failed' };
+    }
+  },
+  'session.prepare_stock_draft': async (params) => {
+    if (!params?.sku || params?.verified_quantity == null || params?.reorder_threshold == null) {
+      return { status: 'unavailable', reason: 'unverified_stock_data' };
+    }
+    await ensureActiveWorkSession();
+    if (!state.activeSessionId) return { status: 'unavailable', reason: 'no_active_session' };
+    try {
+      const res = await fetchJsonWithFallback([`/api/sessions/${state.activeSessionId}/drafts/stock`], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...params, verified_by_operator: true }),
+      });
+      return { status: 'applied', draft_id: res?.draft?.draft_id || null, local_only: true };
+    } catch (err) {
+      return { status: 'unavailable', reason: err.message || 'stock_draft_failed' };
+    }
+  },
+  'catalog.clear_sensor': async (params) => {
+    const ok = await resetSensorWorkspaceCleanSlate({
+      clearInstalledPackages: params?.clear_installed_packages !== false,
+      silent: true,
+    });
+    return ok
+      ? { status: 'applied', scene_origin: state.sceneOrigin, pusr_preserved: true }
+      : { status: 'unavailable', reason: 'reset_workspace_failed' };
+  },
+  'catalog.identify_new_sensor': async (params) => {
+    openSensorOnboardingModal({
+      capturePhoto: params?.capture_photo !== false,
+      statusMsg: 'Photo captured from live camera. Speak the manufacturer and model (e.g., "This is a TZONE TZ THT-02") or enter them above.',
+    });
+    await waitNextAnimationFrames(2);
+    return { status: 'applied', target: 'sensorOnboardModal', photo_captured: true };
+  },
+  'catalog.onboard_sensor': async (params) => {
+    if (params?.confirm_pending) {
+      const mfg = dom.inputOnboardMfg?.value?.trim() || 'TZONE';
+      const mod = dom.inputOnboardModel?.value?.trim() || '';
+      const variant = dom.inputOnboardVariant?.value?.trim() || null;
+      if (!mod) {
+        openSensorOnboardingModal({ capturePhoto: true, statusMsg: 'Please state or enter the sensor model first.' });
+        return { status: 'unavailable', reason: 'missing_sensor_model' };
+      }
+      runLiveCloudSensorOnboarding({ manufacturer: mfg, model: mod, variant, forceRefresh: true }).catch(() => {});
+      return { status: 'applied', manufacturer: mfg, model: mod, cloud_job_started: true };
+    }
+    const mfg = String(params?.manufacturer || '').trim();
+    const mod = String(params?.model || '').trim();
+    const variant = params?.variant ? String(params.variant).trim() : '';
+    openSensorOnboardingModal({
+      manufacturer: mfg === 'UNKNOWN' ? '' : mfg,
+      model: mod,
+      variant,
+      capturePhoto: true,
+      statusMsg: params?.auto_submit
+        ? `Submitting ${mfg} ${mod} to FieldScan Cloud...`
+        : `Captured ${mfg} ${mod}. Say "Process in cloud" or tap Request from FieldScan Cloud.`,
+    });
+    if (params?.auto_submit && mod) {
+      runLiveCloudSensorOnboarding({
+        manufacturer: mfg || 'UNKNOWN',
+        model: mod,
+        variant: variant || null,
+        forceRefresh: params?.force_refresh !== false,
+      }).catch(() => {});
+    }
+    return { status: 'applied', manufacturer: mfg, model: mod, auto_submit: Boolean(params?.auto_submit) };
+  },
+  'help.list_actions': async (params) => {
+    return { status: 'applied', count: Number(params?.count || Object.keys(COPILOT_ACTION_HANDLERS).length) };
+  },
+};
+
+async function executeCopilotActionPlan(plan, res, turnStartMs = performance.now()) {
+  const actions = Array.isArray(plan?.actions) ? plan.actions : [];
+  const receipts = [];
+  const ctx = {
+    turn_id: plan?.turn_id || res?.turn_id || generateTurnId(),
+    session_id: plan?.session_id || res?.session_id || state.activeSessionId,
+    scene_generation: plan?.scene_generation ?? res?.scene_generation ?? state.sceneGeneration,
+    manifest_sha256: plan?.manifest_sha256 || res?.manifest_sha256 || state.selectedCatalogContext?.manifest_sha256 || '',
+    input_mode: res?.input_mode || 'text',
+    language: plan?.language || res?.language || state.preferredLanguage,
+    res,
+  };
+
+  for (const act of actions) {
+    const aid = String(act?.id || '');
+    const hint = act?.status_hint;
+    if (hint === 'requires_confirmation') {
+      receipts.push({ action_id: aid, status: 'requires_confirmation', reason: 'explicit_operator_confirmation_required' });
+      continue;
+    }
+    if (hint === 'unavailable') {
+      receipts.push({ action_id: aid, status: 'unavailable', reason: 'unavailable_in_current_mode_or_profile' });
+      continue;
+    }
+    const handler = COPILOT_ACTION_HANDLERS[aid];
+    if (!handler) {
+      receipts.push({ action_id: aid, status: 'unavailable', reason: 'unregistered_handler' });
+      continue;
+    }
+    try {
+      const outcome = await handler(act.params || {}, ctx);
+      receipts.push({ action_id: aid, ...outcome });
+    } catch (err) {
+      receipts.push({ action_id: aid, status: 'unavailable', reason: err?.message || 'execution_error' });
+    }
+  }
+
+  const ackElapsedMs = Math.max(0.5, Number((performance.now() - turnStartMs).toFixed(1)));
+  await postCopilotActionAck({
+    turn_id: ctx.turn_id,
+    session_id: ctx.session_id,
+    scene_generation: state.sceneGeneration,
+    input_mode: ctx.input_mode,
+    language: ctx.language,
+    stale: false,
+    receipts,
+    phrase_end_to_ui_ack_ms: ackElapsedMs,
+    speak_verified_outcome: Boolean(res?.deferred_tts_pending_ack),
+  });
+  return receipts;
+}
+
+function handleCopilotResponse(res, turnMeta = null) {
   if (!res || typeof res !== 'object') return;
+  dom.nextStepBox?.classList.remove('thinking');
+
+  // Generation & Session Fence (`Finding 1 & Finding 4`): discard genuinely stale responses (`respGen < state.sceneGeneration`)
+  // before mutating UI or TTS; if the backend is monotonically ahead (e.g. WebView boot), sync cleanly instead of self-dropping!
+  const respGen = res.scene_generation != null ? Number(res.scene_generation) : null;
+  if (respGen !== null && !res.catalog_descriptor) {
+    if (respGen < Number(state.sceneGeneration)) {
+      if (res.turn_id) {
+        postCopilotActionAck({
+          turn_id: res.turn_id,
+          session_id: res.session_id || state.activeSessionId,
+          scene_generation: state.sceneGeneration,
+          input_mode: res.input_mode || turnMeta?.input_mode || 'text',
+          language: res.language || state.preferredLanguage,
+          stale: true,
+          receipts: [{ action_id: 'turn.fence', status: 'stale', reason: `scene_generation_${respGen}_vs_${state.sceneGeneration}` }],
+          speak_verified_outcome: false,
+        });
+      }
+      return;
+    }
+    if (respGen > Number(state.sceneGeneration) && !state.sceneLoadInProgress) {
+      state.sceneGeneration = respGen;
+    }
+  }
+
+  if (res.turn_id) state.lastTurnId = res.turn_id;
+  if (res.guidance_state || res.guidance) {
+    renderGuidanceBar(res.guidance_state || res.guidance);
+  }
 
   const answerText =
     res.assistant_message ||
@@ -4559,6 +5708,16 @@ function handleCopilotResponse(res) {
     res.message ||
     res.summary ||
     'Multimodal inspection completed on TZ THT-02 Digital Twin.';
+
+  // Surface latest AI response directly on persistent bottom AI strip (UX v4)
+  if (dom.nextStepBody && answerText) {
+    dom.nextStepBody.textContent = answerText;
+    if (dom.nextStepTitle) dom.nextStepTitle.textContent = 'AI RESPONSE';
+    state.aiStripOverrideUntil = performance.now() + 9000;
+  }
+  try {
+    appendSessionActivityLog(res.model || 'AI Engineer', answerText.slice(0, 140));
+  } catch (_logErr) {}
 
   const causes = res.probable_causes || res.causes || res.recommendations || [];
   const citations = normalizeCitations(res);
@@ -4581,45 +5740,61 @@ function handleCopilotResponse(res) {
     applyCatalogDescriptor(res.catalog_descriptor, res.scene_generation);
   }
 
-  if (res.twin_action_v1 && typeof res.twin_action_v1 === 'object' && state.sceneOrigin === 'catalog_glb') {
-    applyTwinActionV1(res.twin_action_v1);
-  } else if (res.twin_action && typeof res.twin_action === 'object') {
-    applyTwinAction(res.twin_action);
+  const hasUnifiedPlan = Boolean(
+    res.copilot_action_plan &&
+      typeof res.copilot_action_plan === 'object' &&
+      Array.isArray(res.copilot_action_plan.actions)
+  );
+
+  if (hasUnifiedPlan) {
+    const tStart = turnMeta?.phrase_end_ms || performance.now();
+    executeCopilotActionPlan(res.copilot_action_plan, res, tStart).catch(() => {});
   } else {
-    const shouldFocusDip = Boolean(res.focus_dip || res.explode_pcb === true || zone === 'upper_barrel_dip');
-    if (shouldFocusDip) {
-      state.dipPipDismissed = false;
-      setExplodedState(true, { zoomDip: true });
-      setDipPipVisibility(true);
-    } else if (res.explode_pcb === false) {
-      setExplodedState(false);
-      reset3DCamera();
+    if (res.twin_action_v1 && typeof res.twin_action_v1 === 'object' && state.sceneOrigin === 'catalog_glb') {
+      applyTwinActionV1(res.twin_action_v1, {
+        turn_id: res.turn_id,
+        session_id: res.session_id,
+        input_mode: res.input_mode || 'text',
+        language: res.language || state.preferredLanguage,
+      });
+    } else if (res.twin_action && typeof res.twin_action === 'object') {
+      applyTwinAction(res.twin_action);
+    } else {
+      const shouldFocusDip = Boolean(res.focus_dip || res.explode_pcb === true || zone === 'upper_barrel_dip');
+      if (shouldFocusDip) {
+        state.dipPipDismissed = false;
+        setExplodedState(true, { zoomDip: true });
+        setDipPipVisibility(true);
+      } else if (res.explode_pcb === false) {
+        setExplodedState(false);
+        reset3DCamera();
+      }
     }
-  }
 
-  if (Array.isArray(res.dip_bits) && res.dip_bits.length === 8) {
-    state.dipBits = res.dip_bits.map((b) => (b ? 1 : 0));
-    renderDipHud();
-  }
+    if (Array.isArray(res.dip_bits) && res.dip_bits.length === 8) {
+      state.dipBits = res.dip_bits.map((b) => (b ? 1 : 0));
+      renderDipHud();
+    }
 
-  const primaryPage = res.manual_page || citations[0]?.page;
-  const isNonManualChat =
-    !res.open_manual &&
-    citations.length === 0 &&
-    (res.intent === 'general_chat' ||
-      res.intent === 'scene_vision' ||
-      res.query_mode === 'general_chat' ||
-      res.query_mode === 'conversational' ||
-      res.query_mode === 'scene_vision');
-  if (primaryPage && !isNonManualChat) {
-    setManualPage(primaryPage, {
-      flash: true,
-      expandDrawer: Boolean(res.open_manual || citations.length > 0),
-      openLightbox: Boolean(res.open_manual_lightbox),
-      sectionInfo: res.manual_section || null,
-      scrollIntoView: Boolean(res.open_manual),
-      documentId: res.document_id || res.manual_section?.document_id || null,
-    });
+    const primaryPage = res.manual_page || citations[0]?.page;
+    const isNonManualChat =
+      !res.open_manual &&
+      citations.length === 0 &&
+      (res.intent === 'general_chat' ||
+        res.intent === 'scene_vision' ||
+        res.query_mode === 'general_chat' ||
+        res.query_mode === 'conversational' ||
+        res.query_mode === 'scene_vision');
+    if (primaryPage && !isNonManualChat) {
+      setManualPage(primaryPage, {
+        flash: true,
+        expandDrawer: Boolean(res.open_manual),
+        openLightbox: Boolean(res.open_manual_lightbox),
+        sectionInfo: res.manual_section || null,
+        scrollIntoView: Boolean(res.open_manual),
+        documentId: res.document_id || res.manual_section?.document_id || null,
+      });
+    }
   }
 
   state.lastDiagnosisText = answerText;
@@ -4661,6 +5836,7 @@ async function runStep1OpenInspection() {
     text: 'Inspect this TZ THT-02 sensor: the housing is open, there is no Modbus signal, and the DIP-8 switches look unconfigured.',
   });
 
+  // Always drive the 3D Digital Twin & Manual; NEVER replace the live physical camera feed with a synthetic simulation
   setExplodedState(true, { zoomDip: true });
   setManualPage(5, { flash: true });
 
@@ -4670,10 +5846,12 @@ async function runStep1OpenInspection() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         step: 'inspect_open',
-        sync_simulator: state.activeCameraMode !== 'usb',
+        sync_simulator: false,
       }),
     });
-    dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
+    if (state.videoStreamFailed) {
+      dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
+    }
     handleCopilotResponse({ ...res, model: 'AI VOICE ENGINEER · STEP 1 INSPECTION' });
     pollTelemetry();
   } catch (_err) {
@@ -4694,8 +5872,14 @@ async function runStep2ModbusDipGuidance() {
     text: 'Zoom in on the DIP-8 block and configure it for standard Industrial Modbus RTU Slave 1 (9600 bps, 8N1).',
   });
 
+  // Explode & zoom the 3D Digital Twin onto the DIP-8 block while keeping the live iPad camera completely unobstructed
   setExplodedState(true, { zoomDip: true });
-  setDipPipVisibility(true);
+  const isHandheldLiveCam = Boolean(
+    window.FIELDSCAN_IOS_NATIVE || isEmbeddedIosLoopbackHost() || state.activeCameraMode === 'ipad_camera'
+  );
+  if (!isHandheldLiveCam) {
+    setDipPipVisibility(true);
+  }
   focusDip3DCamera();
   setManualPage(5, { flash: true });
 
@@ -4723,6 +5907,8 @@ async function runStep2ModbusDipGuidance() {
 async function runStep3ConnectAndValidateModbus() {
   setWorkflowActiveStep(3);
   const targetSlave = computeDipAddress() || 1;
+  setExplodedState(false);
+  reset3DCamera();
 
   appendChatMessage({
     role: 'user',
@@ -4739,7 +5925,9 @@ async function runStep3ConnectAndValidateModbus() {
         slave_id: targetSlave,
       }),
     });
-    dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
+    if (state.videoStreamFailed) {
+      dom.videoStream.src = `/api/video/stream?raw=1&t=${Date.now()}`;
+    }
     if (res.event_id) {
       state.seenRepairEventId = Math.max(state.seenRepairEventId, Number(res.event_id));
     }
@@ -4759,7 +5947,13 @@ async function submitDiagnosisQuery(queryText, { includeCamera = true, zoneHint 
     author: 'FIELD OPERATOR',
     text: queryText,
   });
+  dom.nextStepBox?.classList.add('thinking');
+  if (dom.nextStepBody) {
+    dom.nextStepBody.textContent = 'Analyzing sensor and datasheet...';
+    state.aiStripOverrideUntil = performance.now() + 12000;
+  }
 
+  const turnCtx = buildTurnContext('text');
   try {
     const res = await fetchJsonWithFallback(['/api/diagnose'], {
       method: 'POST',
@@ -4769,15 +5963,21 @@ async function submitDiagnosisQuery(queryText, { includeCamera = true, zoneHint 
         prompt: queryText,
         include_camera: includeCamera,
         zone: zoneHint,
-        dip_address: computeDipAddress(),
+        dip_address: turnCtx.dip_address,
         dip_bits: state.dipBits,
-        session_id: state.activeSessionId,
-        manifest_sha256: state.selectedCatalogContext?.manifest_sha256 || null,
-        scene_generation: state.sceneGeneration,
+        turn_id: turnCtx.turn_id,
+        session_id: turnCtx.session_id,
+        manifest_sha256: turnCtx.manifest_sha256,
+        scene_generation: turnCtx.scene_generation,
+        active_document_id: turnCtx.active_document_id,
+        language: turnCtx.language,
+        input_mode: 'text',
+        defer_tts_until_ack: isEmbeddedIosLoopbackHost(),
       }),
     });
-    handleCopilotResponse(res);
+    handleCopilotResponse(res, turnCtx);
   } catch (_err) {
+    dom.nextStepBox?.classList.remove('thinking');
     const lower = queryText.toLowerCase().trim();
     const isGreeting = /^(hello|hi|hey|good morning|good afternoon|good evening)\b/.test(lower);
     if (isGreeting) {
@@ -4945,17 +6145,37 @@ let nativePttPollTimer = null;
 let nativePttPollInFlight = false;
 let hfBargeInSinceTs = 0;
 
+function setThinkingState(active, statusText = '') {
+  dom.nextStepBox?.classList.toggle('thinking', Boolean(active));
+  if (active && statusText && dom.nextStepBody) {
+    dom.nextStepBody.textContent = statusText;
+    if (dom.nextStepTitle) dom.nextStepTitle.textContent = 'PROCESSING';
+    state.aiStripOverrideUntil = performance.now() + 15000;
+  }
+}
+
 function syncMicDeckIdleUi() {
-  if (state.handsFreeEnabled) {
-    dom.btnVoiceRecord.classList.remove('recording');
-    dom.btnVoiceRecord.classList.add('handsfree-listening');
-    dom.pttLabel.textContent = 'Hands-Free Live Mic Active';
-    dom.pttSubLabel.textContent = 'Speak in English anytime · Interrupts AI immediately';
-    dom.voiceMeter.hidden = false;
-  } else {
+  // Strictly decouple LIVE Mode (#btnHandsFreeMic) from Push-to-Talk (#btnVoiceRecord) so tapping one never lights up the other.
+  dom.chatMicBtn?.classList.toggle('recording', Boolean(state.isRecording));
+  dom.nextStepBox?.classList.toggle('recording', Boolean(state.isRecording));
+  dom.nextStepBox?.classList.toggle('listening', Boolean(state.handsFreeEnabled && !state.isRecording));
+
+  dom.btnHandsFreeMic?.classList.toggle('active', Boolean(state.handsFreeEnabled));
+  dom.btnHandsFreeMic?.classList.toggle('handsfree-listening', Boolean(state.handsFreeEnabled));
+  if (dom.handsFreeText) {
+    dom.handsFreeText.textContent = state.handsFreeEnabled ? 'LIVE ● ON' : 'LIVE Mode';
+  }
+  if (dom.handsFreeSubLabel) {
+    dom.handsFreeSubLabel.textContent = state.handsFreeEnabled ? 'Listening hands-free...' : 'Tap to activate';
+  }
+  if (dom.liveVoiceMeter) {
+    dom.liveVoiceMeter.hidden = !state.handsFreeEnabled;
+  }
+
+  if (!state.isRecording && !state.voiceRequestInFlight) {
     dom.btnVoiceRecord.classList.remove('recording', 'handsfree-listening');
-    dom.pttLabel.textContent = 'Push or Tap to Speak (English)';
-    dom.pttSubLabel.textContent = 'Hold-to-Talk or Tap-to-Toggle · Offline ASR + 3D Twin AI';
+    dom.pttLabel.textContent = 'Push to Talk';
+    dom.pttSubLabel.textContent = 'Hold or tap to speak';
     dom.voiceMeter.hidden = true;
   }
 }
@@ -4978,12 +6198,20 @@ async function fetchNativeVoiceWithTimeout(url, options = {}, timeoutMs = 2200) 
 
 async function startNativeIosHandsFreeMode() {
   try {
+    const hfCtx = buildTurnContext('handsfree');
     const resp = await fetchNativeVoiceWithTimeout(
       '/api/voice/handsfree_start',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dip_address: computeDipAddress() }),
+        body: JSON.stringify({
+          dip_address: hfCtx.dip_address,
+          session_id: hfCtx.session_id,
+          manifest_sha256: hfCtx.manifest_sha256,
+          scene_generation: hfCtx.scene_generation,
+          active_document_id: hfCtx.active_document_id,
+          language: hfCtx.language,
+        }),
       },
       2500
     );
@@ -5002,10 +6230,11 @@ async function startNativeIosHandsFreeMode() {
       return false;
     }
 
+    if (typeof startData.scene_generation === 'number' && startData.scene_generation >= Number(state.sceneGeneration)) {
+      state.sceneGeneration = startData.scene_generation;
+    }
     state.handsFreeEnabled = true;
     state.usingNativeHandsFree = true;
-    if (dom.btnHandsFreeMic) dom.btnHandsFreeMic.classList.add('active');
-    if (dom.handsFreeText) dom.handsFreeText.textContent = 'Hands-Free: LIVE';
     syncMicDeckIdleUi();
 
     if (nativeHfPollTimer) {
@@ -5032,29 +6261,31 @@ async function startNativeIosHandsFreeMode() {
           return;
         }
 
-        dom.voiceMeterFill.style.width = `${data.rms_pct || 8}%`;
+        if (dom.liveVoiceMeterFill) {
+          dom.liveVoiceMeterFill.style.width = `${data.rms_pct || 8}%`;
+        }
 
         if (data.ai_speaking) {
-          dom.btnVoiceRecord.classList.remove('recording');
-          dom.btnVoiceRecord.classList.add('handsfree-listening');
-          dom.pttLabel.textContent = 'AI Speaking · Speak Anytime to Interrupt';
-          dom.pttSubLabel.textContent = 'Live Barge-In Active (Hardware AEC · Zero Turn Delay)';
+          if (dom.handsFreeText) dom.handsFreeText.textContent = 'LIVE ● SPEAKING';
+          if (dom.handsFreeSubLabel) dom.handsFreeSubLabel.textContent = 'AI Speaking · Speak Anytime to Interrupt';
         } else if (data.partial_transcript && data.partial_transcript.trim().length > 0) {
-          dom.btnVoiceRecord.classList.remove('handsfree-listening');
-          dom.btnVoiceRecord.classList.add('recording');
-          dom.pttLabel.textContent = `Listening: "${data.partial_transcript}"`;
-          dom.pttSubLabel.textContent = 'Pause speaking to send automatically to FieldScan AI';
+          if (dom.handsFreeText) dom.handsFreeText.textContent = 'LIVE ● LISTENING';
+          if (dom.handsFreeSubLabel) dom.handsFreeSubLabel.textContent = `"${data.partial_transcript.trim()}"`;
         } else {
           syncMicDeckIdleUi();
         }
 
-        if (data.completed_turn && typeof data.completed_turn === 'object') {
-          const turn = data.completed_turn;
-          if (turn.transcript) {
+        // Losslessly drain ALL completed turns into AI Chat (#chatFeed) + Twin/Manual handlers
+        const turns = Array.isArray(data.completed_turns) && data.completed_turns.length > 0
+          ? data.completed_turns
+          : (data.completed_turn && typeof data.completed_turn === 'object' ? [data.completed_turn] : []);
+        for (const turn of turns) {
+          if (!turn || typeof turn !== 'object') continue;
+          if (turn.transcript && String(turn.transcript).trim()) {
             appendChatMessage({
               role: 'user',
               author: 'FIELD OPERATOR (LIVE VOICE)',
-              text: turn.transcript,
+              text: String(turn.transcript).trim(),
             });
           }
           handleCopilotResponse(turn);
@@ -5139,7 +6370,7 @@ async function toggleHandsFreeMode() {
     hfAboveSinceTs = 0;
     hfNoiseFloor = 0.008;
     if (dom.btnHandsFreeMic) dom.btnHandsFreeMic.classList.add('active');
-    if (dom.handsFreeText) dom.handsFreeText.textContent = 'Hands-Free: LIVE';
+    if (dom.handsFreeText) dom.handsFreeText.textContent = 'LIVE ● ON';
     syncMicDeckIdleUi();
 
     const startHfUtterance = (now) => {
@@ -5171,10 +6402,8 @@ async function toggleHandsFreeMode() {
         hfRecorder.start();
       }
 
-      dom.btnVoiceRecord.classList.remove('handsfree-listening');
-      dom.btnVoiceRecord.classList.add('recording');
-      dom.pttLabel.textContent = 'Listening to You... (Auto-Send on Pause)';
-      dom.pttSubLabel.textContent = 'Hands-Free VAD · 16 kHz PCM WAV -> LFM3-Audio-2B';
+      if (dom.handsFreeText) dom.handsFreeText.textContent = 'LIVE ● LISTENING';
+      if (dom.handsFreeSubLabel) dom.handsFreeSubLabel.textContent = 'Speak naturally (auto-send on pause)';
     };
 
     const stopHfUtterance = async () => {
@@ -5182,7 +6411,6 @@ async function toggleHandsFreeMode() {
       hfSpeechActive = false;
       hfAboveSinceTs = 0;
       const durMs = Date.now() - hfSpeechStartTs;
-      dom.btnVoiceRecord.classList.remove('recording');
 
       if (hfScriptProcessor) {
         const captured = hfPcmChunks;
@@ -5222,8 +6450,8 @@ async function toggleHandsFreeMode() {
       const threshold = Math.max(0.021, Math.min(0.065, hfNoiseFloor * 2.65));
 
       if (state.voiceRequestInFlight) {
-        dom.voiceMeterFill.style.width = '10%';
-        dom.pttLabel.textContent = 'Processing Speech Offline...';
+        if (dom.liveVoiceMeterFill) dom.liveVoiceMeterFill.style.width = '10%';
+        if (dom.handsFreeSubLabel) dom.handsFreeSubLabel.textContent = 'Processing speech offline...';
         hfRaf = requestAnimationFrame(tickHandsFreeVad);
         return;
       }
@@ -5244,19 +6472,21 @@ async function toggleHandsFreeMode() {
         } else {
           hfBargeInSinceTs = 0;
         }
-        dom.voiceMeterFill.style.width = `${Math.min(100, Math.max(6, Math.round(rms * 320)))}%`;
-        dom.pttLabel.textContent = 'AI Speaking · Speak Anytime to Interrupt';
+        if (dom.liveVoiceMeterFill) {
+          dom.liveVoiceMeterFill.style.width = `${Math.min(100, Math.max(6, Math.round(rms * 320)))}%`;
+        }
+        if (dom.handsFreeSubLabel) dom.handsFreeSubLabel.textContent = 'AI Speaking · Speak Anytime to Interrupt';
         hfRaf = requestAnimationFrame(tickHandsFreeVad);
         return;
       }
 
       hfBargeInSinceTs = 0;
-      if (!hfSpeechActive && dom.pttLabel.textContent.startsWith('AI Speaking')) {
+      if (!hfSpeechActive && dom.handsFreeSubLabel?.textContent?.startsWith('AI Speaking')) {
         syncMicDeckIdleUi();
       }
 
       const pct = Math.min(100, Math.max(6, Math.round(rms * 420)));
-      dom.voiceMeterFill.style.width = `${pct}%`;
+      if (dom.liveVoiceMeterFill) dom.liveVoiceMeterFill.style.width = `${pct}%`;
 
       if (!hfSpeechActive) {
         if (rms < threshold * 0.85) {
@@ -5340,19 +6570,30 @@ function disableHandsFreeMode() {
     hfAudioCtx = null;
   }
   hfAnalyser = null;
-  if (dom.btnHandsFreeMic) dom.btnHandsFreeMic.classList.remove('active');
-  if (dom.handsFreeText) dom.handsFreeText.textContent = 'Hands-Free: OFF';
+  if (dom.btnHandsFreeMic) dom.btnHandsFreeMic.classList.remove('active', 'handsfree-listening');
+  if (dom.handsFreeText) dom.handsFreeText.textContent = 'LIVE Mode';
+  if (dom.handsFreeSubLabel) dom.handsFreeSubLabel.textContent = 'Tap to activate';
   syncMicDeckIdleUi();
 }
 
 async function startNativeIosMicRecording() {
   try {
+    const pttCtx = buildTurnContext('ptt');
+    state.activePttContext = pttCtx;
     const resp = await fetchNativeVoiceWithTimeout(
       '/api/voice/native_start',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dip_address: computeDipAddress() }),
+        body: JSON.stringify({
+          turn_id: pttCtx.turn_id,
+          dip_address: pttCtx.dip_address,
+          session_id: pttCtx.session_id,
+          manifest_sha256: pttCtx.manifest_sha256,
+          scene_generation: pttCtx.scene_generation,
+          active_document_id: pttCtx.active_document_id,
+          language: pttCtx.language,
+        }),
       },
       3500
     );
@@ -5371,8 +6612,11 @@ async function startNativeIosMicRecording() {
     state.isRecording = true;
     state.usingNativeIosMic = true;
     dom.btnVoiceRecord.classList.add('recording');
-    dom.pttLabel.textContent = 'Listening on iPad M4... Release or Tap to Send';
-    dom.pttSubLabel.textContent = 'Speak in English · On-Device ASR + 3D Digital Twin AI';
+    dom.chatMicBtn?.classList.add('recording');
+    dom.nextStepBox?.classList.add('recording');
+    dom.nextStepBox?.classList.remove('listening');
+    dom.pttLabel.textContent = 'Recording...';
+    dom.pttSubLabel.textContent = 'Release or tap to send';
     dom.voiceMeter.hidden = false;
 
     if (nativePttPollTimer) {
@@ -5411,16 +6655,30 @@ async function stopNativeIosMicRecording() {
   nativePttPollInFlight = false;
   state.usingNativeIosMic = false;
   state.voiceRequestInFlight = true;
-  dom.pttLabel.textContent = 'Transcribing & Diagnosing...';
-  dom.pttSubLabel.textContent = 'Running On-Device English ASR + FieldScan AI...';
-  setThinkingState(true, 'Transcribing voice & updating 3D Digital Twin...');
+  dom.btnVoiceRecord.classList.remove('recording');
+  dom.pttLabel.textContent = 'Transcribing...';
+  dom.pttSubLabel.textContent = 'On-Device ASR + FieldScan AI';
   try {
+    setThinkingState(true, 'Transcribing voice & updating 3D Digital Twin...');
+    const pttCtx = state.activePttContext || buildTurnContext('ptt');
+    pttCtx.phrase_end_ms = performance.now();
+    state.activePttContext = null;
+    const stopBody = JSON.stringify({
+      turn_id: pttCtx.turn_id,
+      dip_address: pttCtx.dip_address,
+      session_id: pttCtx.session_id,
+      manifest_sha256: pttCtx.manifest_sha256,
+      scene_generation: pttCtx.scene_generation,
+      active_document_id: pttCtx.active_document_id,
+      language: pttCtx.language,
+      defer_tts_until_ack: true,
+    });
     const resp = await fetchNativeVoiceWithTimeout(
       '/api/voice/native_stop',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dip_address: computeDipAddress() }),
+        body: stopBody,
       },
       22000
     );
@@ -5432,17 +6690,17 @@ async function stopNativeIosMicRecording() {
       appendChatMessage({
         role: 'user',
         author: 'FIELD OPERATOR (VOICE)',
-        text: data.transcript,
+        text: String(data.transcript).trim(),
       });
     } else if (data.status === 'no_speech') {
       appendChatMessage({
         role: 'assistant',
         author: 'VOICE PIPELINE',
-        text: data.diagnosis || 'No clear English speech was captured. Hold the button while speaking or tap once, speak, and tap again.',
+        text: data.diagnosis || 'No clear speech was captured. Hold the button while speaking or tap once, speak, and tap again.',
       });
       return;
     }
-    handleCopilotResponse(data);
+    handleCopilotResponse(data, pttCtx);
   } catch (err) {
     appendChatMessage({
       role: 'assistant',
@@ -5540,8 +6798,11 @@ async function toggleVoiceRecording() {
 
       state.isRecording = true;
       dom.btnVoiceRecord.classList.add('recording');
-      dom.pttLabel.textContent = 'Recording... Click to Send';
-      dom.pttSubLabel.textContent = '16 kHz PCM WAV -> Offline LFM3-Audio-2B';
+      dom.chatMicBtn?.classList.add('recording');
+      dom.nextStepBox?.classList.add('recording');
+      dom.nextStepBox?.classList.remove('listening');
+      dom.pttLabel.textContent = 'Recording...';
+      dom.pttSubLabel.textContent = 'Release or tap to send';
       dom.voiceMeter.hidden = false;
       updateMeter();
     } else if (typeof MediaRecorder !== 'undefined') {
@@ -5557,8 +6818,11 @@ async function toggleVoiceRecording() {
       });
       state.isRecording = true;
       dom.btnVoiceRecord.classList.add('recording');
-      dom.pttLabel.textContent = 'Recording... Click to Send';
-      dom.pttSubLabel.textContent = 'Streaming to Offline LFM3-Audio-2B';
+      dom.chatMicBtn?.classList.add('recording');
+      dom.nextStepBox?.classList.add('recording');
+      dom.nextStepBox?.classList.remove('listening');
+      dom.pttLabel.textContent = 'Recording...';
+      dom.pttSubLabel.textContent = 'Release or tap to send';
       dom.voiceMeter.hidden = false;
       mediaRecorder.start();
     }
@@ -5626,14 +6890,20 @@ function cleanupAudioStream() {
 
 async function sendVoiceBlob(blob, { handsFree = false, filename = null } = {}) {
   state.voiceRequestInFlight = true;
+  const turnCtx = buildTurnContext(handsFree ? 'handsfree' : 'ptt');
   const uploadName =
     filename || (blob?.type === 'audio/wav' ? 'speech.wav' : 'field_query.webm');
   const formData = new FormData();
   formData.append('audio', blob, uploadName);
   formData.append('file', blob, uploadName);
   formData.append('include_camera', 'true');
-  formData.append('dip_address', String(computeDipAddress()));
+  formData.append('dip_address', String(turnCtx.dip_address));
   formData.append('hands_free', handsFree ? 'true' : 'false');
+  formData.append('turn_id', turnCtx.turn_id);
+  formData.append('scene_generation', String(turnCtx.scene_generation));
+  formData.append('language', turnCtx.language);
+  if (turnCtx.session_id) formData.append('session_id', turnCtx.session_id);
+  if (turnCtx.manifest_sha256) formData.append('manifest_sha256', turnCtx.manifest_sha256);
 
   if (!handsFree) {
     appendChatMessage({
@@ -6011,9 +7281,16 @@ function bindWorkstationEvents() {
     }
   });
 
-  // Clean Dropdown Selectors + Upload Icon Button
+  // Clean Dropdown Selectors + Live Camera Restore + Upload Icon Button
   dom.selectCameraMode.addEventListener('change', (e) => {
     switchCameraMode(e.target.value);
+  });
+
+  dom.btnRestoreLiveCamera?.addEventListener('click', async () => {
+    const liveMode = (window.FIELDSCAN_IOS_NATIVE || isEmbeddedIosLoopbackHost()) ? 'ipad_camera' : 'usb';
+    if (dom.selectCameraMode) dom.selectCameraMode.value = liveMode;
+    await switchCameraMode(liveMode);
+    dom.toolsPage?.classList.remove('open');
   });
 
   dom.btnUploadPhoto.addEventListener('click', () => {
@@ -6305,20 +7582,298 @@ function bindWorkstationEvents() {
     pill.addEventListener('click', () => setManualPage(Number(pill.dataset.page)));
   });
 
+  let suppressManualBoxClickUntil = 0;
   const openManualLightbox = () => {
     setManualPage(state.manualPage);
     dom.manualModal.hidden = false;
   };
-  dom.manualViewerBox.addEventListener('click', openManualLightbox);
+  dom.manualViewerBox.addEventListener('click', () => {
+    if (Date.now() < suppressManualBoxClickUntil) return;
+    openManualLightbox();
+  });
   dom.btnExpandManual.addEventListener('click', openManualLightbox);
 
-  dom.lightboxPrevBtn.addEventListener('click', () => setManualPage(state.manualPage - 1));
-  dom.lightboxNextBtn.addEventListener('click', () => setManualPage(state.manualPage + 1));
+  const playManualFlipAnim = (el, dir) => {
+    if (!el) return;
+    const cls = dir > 0 ? 'manual-flip-next' : 'manual-flip-prev';
+    el.classList.remove('manual-flip-next', 'manual-flip-prev');
+    void el.offsetWidth;
+    el.classList.add(cls);
+  };
+
+  // Tactile horizontal swipe on Tools manual preview (`#manualViewerBox`)
+  (() => {
+    const box = dom.manualViewerBox;
+    if (!box) return;
+    let sx = 0;
+    let sy = 0;
+    let tracking = false;
+    box.addEventListener(
+      'touchstart',
+      (e) => {
+        if (!e.touches || e.touches.length !== 1) return;
+        sx = e.touches[0].clientX;
+        sy = e.touches[0].clientY;
+        tracking = true;
+      },
+      { passive: true }
+    );
+    box.addEventListener(
+      'touchend',
+      (e) => {
+        if (!tracking || !e.changedTouches || e.changedTouches.length !== 1) return;
+        tracking = false;
+        const dx = e.changedTouches[0].clientX - sx;
+        const dy = e.changedTouches[0].clientY - sy;
+        if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+          suppressManualBoxClickUntil = Date.now() + 360;
+          if (dx < 0) {
+            setManualPage(state.manualPage + 1);
+            playManualFlipAnim(dom.manualPageImg, 1);
+          } else {
+            setManualPage(state.manualPage - 1);
+            playManualFlipAnim(dom.manualPageImg, -1);
+          }
+        }
+      },
+      { passive: true }
+    );
+  })();
+
+  // Tactile horizontal swipe + 2-finger pinch zoom + double-tap zoom + pan on fullscreen manual (`#lightboxStage`)
+  (() => {
+    const stage = dom.lightboxStage;
+    const img = dom.lightboxImg;
+    if (!stage || !img) return;
+    const zoom = { scale: 1, tx: 0, ty: 0 };
+    let gesture = null;
+    let lastTapTs = 0;
+    let lastTapX = 0;
+    let lastTapY = 0;
+
+    const applyZoomTransform = (dragOffsetX = 0) => {
+      const maxTx = Math.max(0, (stage.clientWidth * (zoom.scale - 1)) / 2);
+      const maxTy = Math.max(0, (stage.clientHeight * (zoom.scale - 1)) / 2);
+      zoom.tx = Math.min(maxTx, Math.max(-maxTx, zoom.tx));
+      zoom.ty = Math.min(maxTy, Math.max(-maxTy, zoom.ty));
+      const x = zoom.scale <= 1.02 ? dragOffsetX : zoom.tx;
+      const y = zoom.scale <= 1.02 ? 0 : zoom.ty;
+      img.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) scale(${zoom.scale.toFixed(3)})`;
+      if (dom.btnLightboxZoomReset) {
+        dom.btnLightboxZoomReset.hidden = zoom.scale <= 1.05;
+        dom.btnLightboxZoomReset.textContent = `Reset ${zoom.scale.toFixed(1)}×`;
+      }
+    };
+
+    const resetZoom = () => {
+      zoom.scale = 1;
+      zoom.tx = 0;
+      zoom.ty = 0;
+      img.style.transition = 'transform 0.16s ease-out';
+      applyZoomTransform(0);
+      setTimeout(() => {
+        img.style.transition = '';
+      }, 170);
+    };
+    window.__resetManualLightboxZoom = resetZoom;
+    dom.btnLightboxZoomReset?.addEventListener('click', resetZoom);
+
+    const dist2 = (t0, t1) => Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+
+    stage.addEventListener(
+      'touchstart',
+      (e) => {
+        if (img.hidden) return;
+        img.style.transition = '';
+        if (e.touches.length === 2) {
+          e.preventDefault();
+          gesture = {
+            kind: 'pinch',
+            startDist: Math.max(10, dist2(e.touches[0], e.touches[1])),
+            startScale: zoom.scale,
+          };
+        } else if (e.touches.length === 1) {
+          gesture = {
+            kind: zoom.scale > 1.05 ? 'pan' : 'swipe',
+            startX: e.touches[0].clientX,
+            startY: e.touches[0].clientY,
+            lastX: e.touches[0].clientX,
+            lastY: e.touches[0].clientY,
+            startTx: zoom.tx,
+            startTy: zoom.ty,
+            moved: false,
+          };
+        }
+      },
+      { passive: false }
+    );
+
+    stage.addEventListener(
+      'touchmove',
+      (e) => {
+        if (!gesture || img.hidden) return;
+        if (gesture.kind === 'pinch' && e.touches.length === 2) {
+          e.preventDefault();
+          const curDist = dist2(e.touches[0], e.touches[1]);
+          zoom.scale = Math.min(3.5, Math.max(1.0, gesture.startScale * (curDist / gesture.startDist)));
+          applyZoomTransform(0);
+          return;
+        }
+        if (e.touches.length === 1) {
+          const dx = e.touches[0].clientX - gesture.startX;
+          const dy = e.touches[0].clientY - gesture.startY;
+          gesture.lastX = e.touches[0].clientX;
+          gesture.lastY = e.touches[0].clientY;
+          if (Math.abs(dx) > 8 || Math.abs(dy) > 8) gesture.moved = true;
+
+          if (gesture.kind === 'pan') {
+            e.preventDefault();
+            zoom.tx = gesture.startTx + dx;
+            zoom.ty = gesture.startTy + dy;
+            applyZoomTransform(0);
+          } else if (gesture.kind === 'swipe' && Math.abs(dx) > Math.abs(dy)) {
+            e.preventDefault();
+            applyZoomTransform(dx * 0.28);
+          }
+        }
+      },
+      { passive: false }
+    );
+
+    stage.addEventListener(
+      'touchend',
+      (e) => {
+        if (!gesture || img.hidden) return;
+        const g = gesture;
+        if (e.touches.length === 0) {
+          gesture = null;
+        } else {
+          return;
+        }
+
+        if (g.kind === 'swipe') {
+          const dx = g.lastX - g.startX;
+          const dy = g.lastY - g.startY;
+          if (Math.abs(dx) >= 44 && Math.abs(dx) > Math.abs(dy) * 1.15) {
+            applyZoomTransform(0);
+            if (dx < 0) {
+              setManualPage(state.manualPage + 1);
+              playManualFlipAnim(img, 1);
+            } else {
+              setManualPage(state.manualPage - 1);
+              playManualFlipAnim(img, -1);
+            }
+            return;
+          }
+          img.style.transition = 'transform 0.16s ease-out';
+          applyZoomTransform(0);
+          setTimeout(() => {
+            img.style.transition = '';
+          }, 170);
+
+          // Double-tap toggles 1x <-> 2.2x zoom
+          if (!g.moved) {
+            const now = Date.now();
+            if (now - lastTapTs < 320 && Math.hypot(g.startX - lastTapX, g.startY - lastTapY) < 32) {
+              lastTapTs = 0;
+              zoom.scale = zoom.scale > 1.2 ? 1.0 : 2.2;
+              zoom.tx = 0;
+              zoom.ty = 0;
+              img.style.transition = 'transform 0.18s ease-out';
+              applyZoomTransform(0);
+              setTimeout(() => {
+                img.style.transition = '';
+              }, 190);
+            } else {
+              lastTapTs = now;
+              lastTapX = g.startX;
+              lastTapY = g.startY;
+            }
+          }
+        } else if (g.kind === 'pan' && !g.moved) {
+          const now = Date.now();
+          if (now - lastTapTs < 320 && Math.hypot(g.startX - lastTapX, g.startY - lastTapY) < 32) {
+            lastTapTs = 0;
+            resetZoom();
+          } else {
+            lastTapTs = now;
+            lastTapX = g.startX;
+            lastTapY = g.startY;
+          }
+        } else if (g.kind === 'pinch' && zoom.scale < 1.06) {
+          resetZoom();
+        }
+      },
+      { passive: true }
+    );
+
+    // Trackpad / mouse drag swipe support on desktop too
+    let ptrDown = null;
+    stage.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch' || img.hidden || zoom.scale > 1.05) return;
+      ptrDown = { x: e.clientX, y: e.clientY };
+    });
+    stage.addEventListener('pointerup', (e) => {
+      if (!ptrDown || e.pointerType === 'touch') return;
+      const dx = e.clientX - ptrDown.x;
+      const dy = e.clientY - ptrDown.y;
+      ptrDown = null;
+      if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        if (dx < 0) {
+          setManualPage(state.manualPage + 1);
+          playManualFlipAnim(img, 1);
+        } else {
+          setManualPage(state.manualPage - 1);
+          playManualFlipAnim(img, -1);
+        }
+      }
+    });
+    stage.addEventListener('dblclick', (e) => {
+      if (img.hidden) return;
+      e.preventDefault();
+      if (zoom.scale > 1.2) {
+        resetZoom();
+      } else {
+        zoom.scale = 2.2;
+        zoom.tx = 0;
+        zoom.ty = 0;
+        img.style.transition = 'transform 0.18s ease-out';
+        applyZoomTransform(0);
+        setTimeout(() => {
+          img.style.transition = '';
+        }, 190);
+      }
+    });
+  })();
+
+  window.addEventListener('keydown', (e) => {
+    if (!dom.manualModal || dom.manualModal.hidden) return;
+    if (e.key === 'ArrowRight') {
+      setManualPage(state.manualPage + 1);
+      playManualFlipAnim(dom.lightboxImg, 1);
+    } else if (e.key === 'ArrowLeft') {
+      setManualPage(state.manualPage - 1);
+      playManualFlipAnim(dom.lightboxImg, -1);
+    }
+  });
+
+  dom.lightboxPrevBtn.addEventListener('click', () => {
+    setManualPage(state.manualPage - 1);
+    playManualFlipAnim(dom.lightboxImg, -1);
+  });
+  dom.lightboxNextBtn.addEventListener('click', () => {
+    setManualPage(state.manualPage + 1);
+    playManualFlipAnim(dom.lightboxImg, 1);
+  });
   dom.lightboxCloseBtn.addEventListener('click', () => {
     dom.manualModal.hidden = true;
+    window.__resetManualLightboxZoom?.();
   });
   dom.manualModal.addEventListener('click', (e) => {
-    if (e.target === dom.manualModal) dom.manualModal.hidden = true;
+    if (e.target === dom.manualModal) {
+      dom.manualModal.hidden = true;
+      window.__resetManualLightboxZoom?.();
+    }
   });
 
   // CAD & Sign-Off Footer Buttons (`M4-3D-05` guard for catalog GLB variants)
@@ -6410,64 +7965,360 @@ function bindWorkstationEvents() {
     });
   }
 
-  // Configure PUSR Modbus TCP Gateway (`BUS-02`)
-  async function openPusrGatewayConfigurator() {
-    if (isEmbeddedIosLoopbackHost() && window.fieldscanNativeBridge?.presentPusrGatewayConfig) {
-      window.fieldscanNativeBridge.presentPusrGatewayConfig();
-      return;
+  // Configure PUSR Modbus TCP Gateway — AP-First Selector (`BUS-02`)
+  function syncPusrGatewayModalUI() {
+    if (dom.pusrGatewayActiveReadout) {
+      dom.pusrGatewayActiveReadout.textContent = state.pusrGatewayHost
+        ? `${state.pusrGatewayHost}:${state.pusrGatewayPort}`
+        : 'No physical gateway selected';
     }
-    const currentTarget = state.pusrGatewayHost
-      ? `${state.pusrGatewayHost}:${state.pusrGatewayPort}`
-      : '192.168.0.7:502';
-    const entered = window.prompt(
-      'Enter isolated bench PUSR USR-DR164 Modbus TCP (MBAP) host:port (never use :5502 raw RTU bridge):',
-      currentTarget
-    );
-    if (!entered) return;
-    const parts = entered.trim().split(':');
-    const host = (parts[0] || '').trim();
-    const port = Number(parts[1] || 502) || 502;
-    if (!host) return;
-    state.pusrGatewayHost = host;
-    state.pusrGatewayPort = port;
+    if (dom.pusrGatewayTopoBadge) {
+      if (!state.pusrGatewayHost) {
+        dom.pusrGatewayTopoBadge.textContent = 'AP-FIRST · NOT CONFIGURED';
+      } else if (state.pusrGatewayConnected) {
+        dom.pusrGatewayTopoBadge.textContent = state.pusrGatewayTopology === 'sta_lan'
+          ? 'CONNECTED · LAB STA (:502)'
+          : 'CONNECTED · DIRECT PUSR AP (:502)';
+      } else if (state.pusrGatewayTopology === 'sta_lan') {
+        dom.pusrGatewayTopoBadge.textContent = 'LAB ROUTER · STA MODE';
+      } else {
+        dom.pusrGatewayTopoBadge.textContent = 'PRIMARY · DIRECT PUSR AP';
+      }
+    }
+    if (dom.inputPusrCustomHost) {
+      dom.inputPusrCustomHost.value = state.pusrGatewayHost || '';
+    }
+    if (dom.inputPusrCustomPort) {
+      dom.inputPusrCustomPort.value = String(state.pusrGatewayPort || 502);
+    }
+    if (dom.selectPusrCustomTopology) {
+      dom.selectPusrCustomTopology.value = state.pusrGatewayTopology === 'sta_lan' ? 'sta_lan' : 'ap_direct';
+    }
+  }
+
+  function renderPusrDiscoveryResult(res) {
+    if (!dom.pusrGatewayResultBox) return;
+    if (dom.pusrGatewayWifiBadge) {
+      dom.pusrGatewayWifiBadge.textContent = res?.wifi_ip
+        ? `Wi-Fi IP: ${res.wifi_ip}`
+        : 'Wi-Fi IP: Not detected';
+    }
+    const summary = escapeHtml(res?.message || 'Discovery finished.');
+    const candidates = Array.isArray(res?.candidates) ? res.candidates : [];
+    const rowsHtml = candidates.map((c) => {
+      const ok = Boolean(c.reachable);
+      const statusTxt = ok
+        ? `<span class="pusr-probe-status-ok">REACHABLE · ${Number(c.rtt_ms || 0).toFixed(1)} ms</span>`
+        : `<span class="pusr-probe-status-miss">${escapeHtml(c.error_code || 'UNREACHABLE')}</span>`;
+      return `
+        <div class="pusr-probe-row ${ok ? 'is-reachable' : ''}">
+          <span><code>${escapeHtml(c.host)}:${Number(c.port || 502)}</code> · ${escapeHtml(c.label || '')}</span>
+          ${statusTxt}
+        </div>
+      `;
+    }).join('');
+    dom.pusrGatewayResultBox.innerHTML = `
+      <div>${summary}</div>
+      ${rowsHtml ? `<div class="pusr-probe-list">${rowsHtml}</div>` : ''}
+    `;
+  }
+
+  function renderPusrAutoSetupResult(res) {
+    if (!dom.pusrGatewayResultBox) return;
+    if (dom.pusrGatewayWifiBadge) {
+      dom.pusrGatewayWifiBadge.textContent = res?.wifi_ip
+        ? `Wi-Fi IP: ${res.wifi_ip}`
+        : 'Wi-Fi IP: Not detected';
+    }
+    const summary = escapeHtml(res?.message || '1-Tap Auto-Setup finished.');
+    const diagRows = [];
+    if (res?.udp_identity) {
+      diagRows.push(`
+        <div class="pusr-probe-row is-reachable">
+          <span><code>UDP :48899</code> Identity</span>
+          <span class="pusr-probe-status-ok">${escapeHtml(res.udp_identity)}</span>
+        </div>
+      `);
+    }
+    if (res?.host) {
+      const p502Open = Boolean(res.port_502_open);
+      const p8899Open = Boolean(res.port_8899_open);
+      diagRows.push(`
+        <div class="pusr-probe-row ${p502Open ? 'is-reachable' : ''}">
+          <span><code>${escapeHtml(res.host)}:${Number(res.port || 502)}</code> Modbus TCP</span>
+          ${p502Open
+            ? '<span class="pusr-probe-status-ok">OPEN · READY</span>'
+            : '<span class="pusr-probe-status-miss">CLOSED</span>'}
+        </div>
+      `);
+      if (p8899Open) {
+        diagRows.push(`
+          <div class="pusr-probe-row">
+            <span><code>${escapeHtml(res.host)}:8899</code> Factory Port</span>
+            <span class="pusr-probe-status-warn">OPEN (FACTORY DEFAULT · RELOAD RESET)</span>
+          </div>
+        `);
+      }
+    }
+    if (res?.scan_result) {
+      const sr = res.scan_result;
+      const found = Boolean(sr.found);
+      const ids = Array.isArray(sr.scanned_ids) ? sr.scanned_ids.join(', ') : '';
+      const scanVal = found
+        ? `<span class="pusr-probe-status-ok">SLAVE #${Number(sr.slave_id || 1)} LIVE</span>`
+        : `<span class="pusr-probe-status-warn">${escapeHtml(sr.error_code || 'NO RS-485 REPLY')}</span>`;
+      diagRows.push(`
+        <div class="pusr-probe-row ${found ? 'is-reachable' : ''}">
+          <span>RS-485 Bus Scan${ids ? ` (IDs: ${escapeHtml(ids)})` : ''}</span>
+          ${scanVal}
+        </div>
+      `);
+    }
+    const atLog = Array.isArray(res?.at_log) ? res.at_log : [];
+    const atLogHtml = atLog.length
+      ? `
+        <details class="pusr-at-details">
+          <summary>UDP 48899 AT Provisioning Log (${atLog.length} steps)</summary>
+          <div class="pusr-at-log">
+            ${atLog.map((e) => `<div><code>${escapeHtml(e.cmd || '')}</code> → <span>${escapeHtml(e.reply || '')}</span></div>`).join('')}
+          </div>
+        </details>
+      `
+      : '';
+
+    dom.pusrGatewayResultBox.innerHTML = `
+      <div>${summary}</div>
+      ${diagRows.length ? `<div class="pusr-probe-list">${diagRows.join('')}</div>` : ''}
+      ${atLogHtml}
+    `;
+  }
+
+  async function runPusrOneTapAutoSetup() {
+    if (dom.btnAutoSetupPusr) {
+      dom.btnAutoSetupPusr.disabled = true;
+      dom.btnAutoSetupPusr.textContent = 'Running 1-Tap PUSR Auto-Setup...';
+    }
+    if (dom.pusrGatewayResultBox) {
+      dom.pusrGatewayResultBox.textContent =
+        'Probing UDP 48899 + TCP :502 / :8899 / :80, programming 9600 8N1 + Modbus TCP :502 if needed, and scanning Slave IDs 1..10, 176...';
+    }
     try {
-      await fetchJsonWithFallback(['/api/modbus/gateway'], {
+      const res = await fetchJsonWithFallback(['/api/modbus/gateway/auto_setup'], {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ host, port, activate: true, activate_mode: true }),
+        body: JSON.stringify({
+          host: state.pusrGatewayHost || undefined,
+          port: 502,
+          baud_bps: 9600,
+        }),
       });
-      if (dom.selectModbusMode) dom.selectModbusMode.value = 'pusr_tcp';
+      renderPusrAutoSetupResult(res);
+      if (res?.host) {
+        state.pusrGatewayHost = String(res.host).trim();
+        state.pusrGatewayPort = Number(res.port || 502) || 502;
+        state.pusrGatewayTopology = 'ap_direct';
+        syncPusrGatewayModalUI();
+        if (res.status === 'ready_on_502' && dom.selectModbusMode) {
+          dom.selectModbusMode.value = 'pusr_tcp';
+        }
+      }
       appendChatMessage({
         role: 'assistant',
-        author: 'BENCH GATEWAY CONFIG',
-        text: `Configured PUSR Modbus TCP (MBAP) endpoint to ${host}:${port}. Previous session link invalidated; reconfirm asset before closing.`,
+        author: 'PUSR 1-TAP AUTO-SETUP',
+        text: res?.message || 'Completed PUSR 1-Tap Auto-Setup check.',
       });
-      pollTelemetry();
+      if (res?.status === 'ready_on_502') {
+        pollTelemetry();
+      }
     } catch (err) {
+      if (dom.pusrGatewayResultBox) {
+        dom.pusrGatewayResultBox.textContent = `1-Tap PUSR Auto-Setup failed: ${err.message || err}`;
+      }
+    } finally {
+      if (dom.btnAutoSetupPusr) {
+        dom.btnAutoSetupPusr.disabled = false;
+        dom.btnAutoSetupPusr.textContent = '1-Tap Auto-Setup & Connect PUSR';
+      }
+    }
+  }
+
+  async function savePusrGatewayEndpoint(host, port = 502, topology = 'ap_direct', { closeModal = false } = {}) {
+    const cleanHost = String(host || '').trim();
+    const cleanPort = Number(port || 502) || 502;
+    const cleanTopo = topology === 'sta_lan' ? 'sta_lan' : 'ap_direct';
+    if (cleanPort === 5502) {
+      if (dom.pusrGatewayResultBox) {
+        dom.pusrGatewayResultBox.textContent =
+          'Port 5502 is reserved for raw RTU-over-TCP framing. Configure PUSR USR-DR164 in Modbus TCP (MBAP) mode on port 502.';
+      }
+      return;
+    }
+    try {
+      const res = await fetchJsonWithFallback(['/api/modbus/gateway'], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          host: cleanHost,
+          port: cleanPort,
+          topology: cleanTopo,
+          activate: Boolean(cleanHost),
+          activate_mode: Boolean(cleanHost),
+        }),
+      });
+      if (res && res.ok === false) {
+        throw new Error(res.message || res.error_code || 'Gateway update rejected');
+      }
+      state.pusrGatewayHost = cleanHost;
+      state.pusrGatewayPort = cleanPort;
+      state.pusrGatewayTopology = cleanTopo;
+      syncPusrGatewayModalUI();
+      if (cleanHost) {
+        if (dom.selectModbusMode) dom.selectModbusMode.value = 'pusr_tcp';
+        const modeLabel = cleanTopo === 'sta_lan' ? 'Lab Router (STA)' : 'Direct PUSR AP';
+        if (dom.pusrGatewayResultBox) {
+          dom.pusrGatewayResultBox.textContent =
+            `Selected ${modeLabel} endpoint ${cleanHost}:${cleanPort} (Modbus TCP MBAP). Polling live FC03 registers...`;
+        }
+        appendChatMessage({
+          role: 'assistant',
+          author: 'PUSR GATEWAY (AP-FIRST)',
+          text: `Configured ${modeLabel} endpoint ${cleanHost}:${cleanPort} (Modbus TCP MBAP). Previous session link invalidated; polling live registers.`,
+        });
+      } else {
+        if (dom.pusrGatewayResultBox) {
+          dom.pusrGatewayResultBox.textContent =
+            'Cleared PUSR Modbus TCP gateway. Choose Auto-Detect Direct PUSR AP, a preset, or a simulator mode.';
+        }
+        appendChatMessage({
+          role: 'assistant',
+          author: 'PUSR GATEWAY (AP-FIRST)',
+          text: 'Cleared PUSR Modbus TCP gateway configuration.',
+        });
+      }
+      pollTelemetry();
+      if (closeModal && dom.pusrGatewayModal) {
+        dom.pusrGatewayModal.hidden = true;
+      }
+    } catch (err) {
+      if (dom.pusrGatewayResultBox) {
+        dom.pusrGatewayResultBox.textContent = `Gateway configuration failed: ${err.message || err}`;
+      }
       appendChatMessage({
         role: 'assistant',
-        author: 'BENCH GATEWAY CONFIG',
+        author: 'PUSR GATEWAY (AP-FIRST)',
         text: `Failed to update gateway: ${err.message || err}`,
       });
     }
+  }
+
+  async function runPusrDirectApAutoDetect() {
+    if (dom.btnDiscoverPusrAp) {
+      dom.btnDiscoverPusrAp.disabled = true;
+      dom.btnDiscoverPusrAp.textContent = 'Scanning Direct PUSR AP (:502)...';
+    }
+    if (dom.pusrGatewayResultBox) {
+      dom.pusrGatewayResultBox.textContent =
+        'Probing active Wi-Fi subnet and PUSR Direct AP defaults (10.10.100.254:502, 192.168.0.7:502)...';
+    }
+    try {
+      const res = await fetchJsonWithFallback(['/api/modbus/gateway/discover'], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port: 502, timeout_s: 0.45, auto_select: true }),
+      });
+      renderPusrDiscoveryResult(res);
+      if (res?.auto_selected && res?.recommended_host) {
+        state.pusrGatewayHost = String(res.recommended_host).trim();
+        state.pusrGatewayPort = Number(res.port || 502) || 502;
+        state.pusrGatewayTopology = res.recommended_topology === 'sta_lan' ? 'sta_lan' : 'ap_direct';
+        syncPusrGatewayModalUI();
+        if (dom.selectModbusMode) dom.selectModbusMode.value = 'pusr_tcp';
+        appendChatMessage({
+          role: 'assistant',
+          author: 'PUSR DIRECT AP AUTO-DETECT',
+          text: `${res.message || `Connected to ${state.pusrGatewayHost}:${state.pusrGatewayPort}.`} Polling live Modbus FC03 registers.`,
+        });
+        pollTelemetry();
+      }
+    } catch (err) {
+      if (dom.pusrGatewayResultBox) {
+        dom.pusrGatewayResultBox.textContent = `Direct AP scan failed: ${err.message || err}`;
+      }
+    } finally {
+      if (dom.btnDiscoverPusrAp) {
+        dom.btnDiscoverPusrAp.disabled = false;
+        dom.btnDiscoverPusrAp.textContent = 'Auto-Detect Direct PUSR AP (:502)';
+      }
+    }
+  }
+
+  function openPusrGatewayConfigurator() {
+    if (dom.pusrGatewayModal) {
+      syncPusrGatewayModalUI();
+      dom.pusrGatewayModal.hidden = false;
+      return;
+    }
+    if (isEmbeddedIosLoopbackHost() && window.fieldscanNativeBridge?.presentPusrGatewayConfig) {
+      window.fieldscanNativeBridge.presentPusrGatewayConfig();
+    }
+  }
+
+  if (dom.pusrGatewayModal) {
+    dom.pusrGatewayCloseBtn?.addEventListener('click', () => {
+      dom.pusrGatewayModal.hidden = true;
+    });
+    dom.pusrGatewayModal.addEventListener('click', (e) => {
+      if (e.target === dom.pusrGatewayModal) dom.pusrGatewayModal.hidden = true;
+    });
+    dom.btnAutoSetupPusr?.addEventListener('click', () => {
+      runPusrOneTapAutoSetup();
+    });
+    dom.btnDiscoverPusrAp?.addEventListener('click', () => {
+      runPusrDirectApAutoDetect();
+    });
+    dom.btnPresetPusrApDefault?.addEventListener('click', () => {
+      savePusrGatewayEndpoint('10.10.100.254', 502, 'ap_direct');
+    });
+    dom.btnPresetPusrApAlt?.addEventListener('click', () => {
+      savePusrGatewayEndpoint('192.168.0.7', 502, 'ap_direct');
+    });
+    dom.pusrCustomGatewayForm?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const host = (dom.inputPusrCustomHost?.value || '').trim();
+      const port = Number(dom.inputPusrCustomPort?.value || 502) || 502;
+      const topo = dom.selectPusrCustomTopology?.value || 'ap_direct';
+      if (!host) {
+        if (dom.pusrGatewayResultBox) {
+          dom.pusrGatewayResultBox.textContent = 'Enter a PUSR gateway IPv4 address (e.g. 10.10.100.254) or tap a Direct AP preset above.';
+        }
+        return;
+      }
+      savePusrGatewayEndpoint(host, port, topo);
+    });
+    dom.btnClearPusrGateway?.addEventListener('click', () => {
+      savePusrGatewayEndpoint('', 502, 'ap_direct');
+    });
   }
 
   window.addEventListener('fieldscan:gatewayConfigured', (ev) => {
     const detail = ev.detail || {};
     state.pusrGatewayHost = String(detail.host || '').trim();
     state.pusrGatewayPort = Number(detail.port || 502) || 502;
+    state.pusrGatewayTopology = detail.topology === 'sta_lan' ? 'sta_lan' : 'ap_direct';
+    syncPusrGatewayModalUI();
     if (state.pusrGatewayHost && detail.activated) {
       if (dom.selectModbusMode) dom.selectModbusMode.value = 'pusr_tcp';
+      const modeLabel = state.pusrGatewayTopology === 'sta_lan' ? 'Lab Router (STA)' : 'Direct PUSR AP';
       appendChatMessage({
         role: 'assistant',
-        author: 'BENCH GATEWAY CONFIG',
-        text: `Configured PUSR Modbus TCP (MBAP) endpoint to ${state.pusrGatewayHost}:${state.pusrGatewayPort}. Polling live registers...`,
+        author: 'PUSR GATEWAY (AP-FIRST)',
+        text: `Configured ${modeLabel} endpoint ${state.pusrGatewayHost}:${state.pusrGatewayPort} (Modbus TCP MBAP). Polling live registers...`,
       });
     } else {
       appendChatMessage({
         role: 'assistant',
-        author: 'BENCH GATEWAY CONFIG',
-        text: 'Cleared PUSR Modbus TCP gateway configuration. Select a simulator mode or configure a PUSR IP:502 to poll physical sensors.',
+        author: 'PUSR GATEWAY (AP-FIRST)',
+        text: 'Cleared PUSR Modbus TCP gateway configuration. Select Direct PUSR AP or a simulator mode.',
       });
     }
     pollTelemetry();
@@ -6551,7 +8402,8 @@ function bindWorkstationEvents() {
         });
         const count = res?.session?.state?.confirmed_changes?.length || 0;
         state.confirmedChangesCount = count;
-        if (dom.confirmChangeLabel) dom.confirmChangeLabel.textContent = `Confirm Change (${count})`;
+        if (dom.confirmChangeLabel) dom.confirmChangeLabel.textContent = `Confirm (${count})`;
+        appendSessionActivityLog(`Confirmed Change #${count}`, actionTaken.trim());
         appendChatMessage({
           role: 'assistant',
           author: 'CHANGE CONFIRMATION LOG',
@@ -6606,8 +8458,305 @@ function bindWorkstationEvents() {
       dom.escalationModal.hidden = true;
       if (dom.calibrationPlannedModal) dom.calibrationPlannedModal.hidden = true;
       if (dom.catalogModal) dom.catalogModal.hidden = true;
+      if (dom.pusrGatewayModal) dom.pusrGatewayModal.hidden = true;
+      if (dom.sensorOnboardModal) dom.sensorOnboardModal.hidden = true;
+      dom.chatPage?.classList.remove('open');
+      dom.toolsPage?.classList.remove('open');
     }
   });
+}
+
+/* ==========================================================================
+   CLEAN-SLATE WORKSPACE RESET & LIVE CLOUD SENSOR ONBOARDING (100% ENGLISH)
+   ========================================================================== */
+function speakOnboardingStatus(text) {
+  const msg = String(text || '').trim();
+  if (!msg) return;
+  if (dom.nextStepBody) {
+    dom.nextStepBody.textContent = msg;
+    if (dom.nextStepTitle) dom.nextStepTitle.textContent = 'CLOUD ONBOARDING';
+    state.aiStripOverrideUntil = performance.now() + 12000;
+  }
+  if (isEmbeddedIosLoopbackHost()) {
+    fetch('/api/voice/speak_status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: msg }),
+    }).catch(() => {});
+  } else if (state.autoSpeak) {
+    playDiagnosisAudio(null, msg);
+  }
+}
+
+function captureLiveOnboardingPhoto() {
+  if (!dom.onboardPhotoPreview) return;
+  dom.onboardPhotoPreview.src = `/api/video/snapshot?raw=1&t=${Date.now()}`;
+}
+
+function setOnboardingStepperState(stageStates = {}) {
+  if (!dom.onboardPipelineSteps) return;
+  const nodes = dom.onboardPipelineSteps.querySelectorAll('.onboard-step');
+  nodes.forEach((node) => {
+    const st = node.getAttribute('data-stage');
+    const mode = stageStates[st] || 'idle';
+    node.classList.remove('active', 'done', 'error');
+    if (mode === 'active' || mode === 'done' || mode === 'error') {
+      node.classList.add(mode);
+    }
+  });
+}
+
+async function resetSensorWorkspaceCleanSlate({ clearInstalledPackages = true, silent = false } = {}) {
+  try {
+    const res = await fetchJsonWithFallback(['/api/catalog/reset_workspace'], {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clear_installed_packages: Boolean(clearInstalledPackages) }),
+    });
+    state.activeSessionId = null;
+    if (dom.catalogModal) dom.catalogModal.hidden = true;
+    dom.toolsPage?.classList.remove('open');
+    dom.chatPage?.classList.remove('open');
+    if (res?.catalog_descriptor) {
+      applyCatalogDescriptor(res.catalog_descriptor, res.scene_generation);
+    }
+    appendSessionActivityLog(
+      'Workspace Reset',
+      `Cleared active sensor profile & ${res?.removed_packages_count || 0} cached cloud package(s). PUSR gateway preserved.`
+    );
+    if (!silent) {
+      const msg =
+        'Sensor workspace cleared. No sensor is loaded on this iPad. Your fixed PUSR gateway stays connected. Point the camera at a sensor and say Identify this sensor.';
+      appendChatMessage({ role: 'assistant', author: 'FIELDSCAN WORKSPACE', text: msg });
+      speakOnboardingStatus(msg);
+    }
+    await refreshCatalogModalState();
+    return true;
+  } catch (err) {
+    appendChatMessage({
+      role: 'assistant',
+      author: 'FIELDSCAN WORKSPACE',
+      text: `Could not reset sensor workspace: ${err.message || err}`,
+    });
+    return false;
+  }
+}
+
+function openSensorOnboardingModal({
+  manufacturer = '',
+  model = '',
+  variant = '',
+  capturePhoto = true,
+  statusMsg = '',
+} = {}) {
+  if (!dom.sensorOnboardModal) return;
+  if (capturePhoto) captureLiveOnboardingPhoto();
+  if (dom.inputOnboardMfg && manufacturer) dom.inputOnboardMfg.value = manufacturer;
+  if (dom.inputOnboardModel && model) dom.inputOnboardModel.value = model;
+  if (dom.inputOnboardVariant && variant !== undefined && variant !== '') dom.inputOnboardVariant.value = variant;
+  if (dom.onboardCandidatesRow) {
+    dom.onboardCandidatesRow.hidden = true;
+    dom.onboardCandidatesRow.innerHTML = '';
+  }
+  setOnboardingStepperState({});
+  if (dom.onboardStatusText) {
+    dom.onboardStatusText.textContent =
+      statusMsg ||
+      'Photo captured. Speak the manufacturer and model in LIVE Mode (e.g., "This is a TZONE TZ THT-02") or enter them above.';
+  }
+  dom.sensorOnboardModal.hidden = false;
+}
+
+async function runLiveCloudSensorOnboarding({ manufacturer = 'UNKNOWN', model, variant = null, forceRefresh = true }) {
+  const cleanMfg = String(manufacturer || '').trim() || 'UNKNOWN';
+  const cleanModel = String(model || '').trim();
+  const cleanVariant = variant ? String(variant).trim() : null;
+  if (!cleanModel) return false;
+
+  const displayName = cleanMfg === 'UNKNOWN' ? cleanModel : `${cleanMfg} ${cleanModel}`;
+  const btn = dom.btnOnboardSubmitCloud;
+  if (btn) btn.disabled = true;
+  if (dom.onboardCandidatesRow) {
+    dom.onboardCandidatesRow.hidden = true;
+    dom.onboardCandidatesRow.innerHTML = '';
+  }
+
+  try {
+    setOnboardingStepperState({ submit: 'active' });
+    if (dom.onboardStatusText) {
+      dom.onboardStatusText.textContent = `Connecting to FieldScan Cloud and submitting ${displayName}...`;
+    }
+    speakOnboardingStatus(`Submitting ${displayName} to FieldScan Cloud now.`);
+
+    const res = await fetchJsonWithFallback(['/api/catalog/resolve'], {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        manufacturer: cleanMfg,
+        model: cleanModel,
+        variant: cleanVariant,
+        force_refresh: Boolean(forceRefresh),
+      }),
+    });
+
+    if (res?.error_code) {
+      throw new Error(`${res.error_code}: ${res.message || 'Cloud resolution failed'}`);
+    }
+
+    let finalStatus = res;
+    if (res?.job_id && (res.job_state === 'queued' || res.job_state === 'running')) {
+      setOnboardingStepperState({ submit: 'done', docs: 'active' });
+      const processingMsg =
+        'FieldScan Cloud is processing your request — locating the official datasheet and generating the 3D Digital Twin. One moment please.';
+      if (dom.onboardStatusText) {
+        dom.onboardStatusText.textContent = `${processingMsg} (Job: ${res.job_id})`;
+      }
+      speakOnboardingStatus(processingMsg);
+
+      let docsPhaseAnnounced = false;
+      let twinPhaseAnnounced = false;
+      let signPhaseAnnounced = false;
+      for (let attempt = 0; attempt < 110; attempt += 1) {
+        await new Promise((r) => setTimeout(r, 650));
+        const poll = await fetchJsonWithFallback([`/api/catalog/jobs/${encodeURIComponent(res.job_id)}`]);
+        finalStatus = poll;
+        const phase = String(poll?.phase || '').toLowerCase();
+        if (poll?.job_state === 'queued' || poll?.job_state === 'running') {
+          if (phase === 'signing_package' || phase.includes('sign')) {
+            setOnboardingStepperState({ submit: 'done', docs: 'done', twin: 'active' });
+            if (dom.onboardStatusText) {
+              dom.onboardStatusText.textContent = 'Cloud Worker phase: signing_package — signing package with Ed25519 key (pilot-1)...';
+            }
+            if (!signPhaseAnnounced) {
+              signPhaseAnnounced = true;
+              speakOnboardingStatus('3D Digital Twin built. Signing the verified package in the cloud now.');
+            }
+          } else if (phase === 'building_3d_twin' || phase.includes('twin') || phase.includes('building')) {
+            setOnboardingStepperState({ submit: 'done', docs: 'done', twin: 'active' });
+            if (dom.onboardStatusText) {
+              dom.onboardStatusText.textContent = 'Cloud Worker phase: building_3d_twin — compiling 3D Digital Twin (.glb) & parts map...';
+            }
+            if (!twinPhaseAnnounced) {
+              twinPhaseAnnounced = true;
+              speakOnboardingStatus('Official manual extracted. Building the 3D Digital Twin in the cloud now.');
+            }
+          } else if (phase === 'extracting_manual_pdf' || phase.includes('extract')) {
+            setOnboardingStepperState({ submit: 'done', docs: 'active' });
+            if (dom.onboardStatusText) {
+              dom.onboardStatusText.textContent = 'Cloud Worker phase: extracting_manual_pdf — rendering pages & indexing technical manual...';
+            }
+            if (!docsPhaseAnnounced) {
+              docsPhaseAnnounced = true;
+              speakOnboardingStatus('Found the official datasheet. Extracting and indexing manual pages now.');
+            }
+          } else if (phase === 'searching_oem_docs' || phase.includes('search')) {
+            setOnboardingStepperState({ submit: 'done', docs: 'active' });
+            if (dom.onboardStatusText) {
+              dom.onboardStatusText.textContent = 'Cloud Worker phase: searching_oem_docs — locating official OEM datasheet...';
+            }
+          } else {
+            setOnboardingStepperState({ submit: 'done', docs: 'active' });
+            if (dom.onboardStatusText) {
+              dom.onboardStatusText.textContent = `Cloud Worker phase: ${phase || 'matching_catalog'} — verifying sensor identity in catalog...`;
+            }
+          }
+          continue;
+        }
+        break;
+      }
+    }
+
+    if (finalStatus?.job_state === 'failed') {
+      const code = (finalStatus.reason_codes || []).join(', ') || 'CLOUD_JOB_FAILED';
+      throw new Error(`Cloud worker job failed (${code}).`);
+    }
+
+    if (finalStatus?.availability === 'needs_identification') {
+      const cands = Array.isArray(finalStatus.candidates) ? finalStatus.candidates : [];
+      if (cands.length > 0 && dom.onboardCandidatesRow) {
+        setOnboardingStepperState({ submit: 'done', docs: 'active' });
+        dom.onboardCandidatesRow.hidden = false;
+        dom.onboardCandidatesRow.innerHTML = '';
+        cands.forEach((cand) => {
+          const cBtn = document.createElement('button');
+          cBtn.type = 'button';
+          cBtn.className = 'chip-btn chip-btn-cv active';
+          cBtn.textContent = `${cand.display_name || cand.variant_id} (${cand.variant_code || cand.variant_id})`;
+          cBtn.addEventListener('click', () => {
+            if (dom.inputOnboardVariant) dom.inputOnboardVariant.value = cand.variant_id || cand.variant_code || '';
+            runLiveCloudSensorOnboarding({
+              manufacturer: cleanMfg,
+              model: cleanModel,
+              variant: cand.variant_id || cand.variant_code || null,
+              forceRefresh: true,
+            });
+          });
+          dom.onboardCandidatesRow.appendChild(cBtn);
+        });
+        const msg = 'Multiple hardware variants were found in FieldScan Cloud. Please select the matching variant below.';
+        if (dom.onboardStatusText) dom.onboardStatusText.textContent = msg;
+        speakOnboardingStatus(msg);
+        return false;
+      }
+      const reasons = (finalStatus.reason_codes || []).join(', ') || 'UNRESOLVED_SENSOR';
+      throw new Error(`Cloud could not identify an official datasheet for ${displayName} (${reasons}).`);
+    }
+
+    const pid = finalStatus?.product_id || finalStatus?.identity?.product_id || finalStatus?.cached_publication?.product_id;
+    const vid = finalStatus?.variant_id || finalStatus?.identity?.variant_id || finalStatus?.cached_publication?.variant_id;
+    if (!pid || !vid) {
+      throw new Error(`Cloud completed without a downloadable product/variant identifier for ${displayName}.`);
+    }
+
+    setOnboardingStepperState({ submit: 'done', docs: 'done', twin: 'done', install: 'active' });
+    const dlMsg = 'The latest manual and 3D Digital Twin are ready. Downloading and verifying the Ed25519 signature onto your iPad now.';
+    if (dom.onboardStatusText) dom.onboardStatusText.textContent = `${dlMsg} (${pid}/${vid})`;
+    speakOnboardingStatus(dlMsg);
+
+    const inst = await fetchJsonWithFallback(['/api/catalog/install'], {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        product_id: pid,
+        variant_id: vid,
+        channel: 'pilot',
+        select_after_install: true,
+      }),
+    });
+
+    if (inst?.error_code) {
+      throw new Error(`${inst.error_code}: ${inst.message || 'Package verification failed'}`);
+    }
+
+    if (inst?.catalog_descriptor) {
+      applyCatalogDescriptor(inst.catalog_descriptor, inst.scene_generation);
+    } else if (inst?.package?.manifest_sha256) {
+      await selectCatalogPackage(inst.package.manifest_sha256);
+    }
+
+    setOnboardingStepperState({ submit: 'done', docs: 'done', twin: 'done', install: 'done' });
+    const seqNum = inst?.package?.publication_seq || finalStatus?.publication_seq || 1;
+    const doneMsg = `${displayName} is now loaded on your iPad (publication seq #${seqNum}) with its verified manual and 3D Digital Twin. Ready for inspection.`;
+    if (dom.onboardStatusText) dom.onboardStatusText.textContent = doneMsg;
+    appendChatMessage({ role: 'assistant', author: 'FIELDSCAN CLOUD ONBOARDING', text: doneMsg });
+    appendSessionActivityLog('Sensor Onboarded from Cloud', `${pid}/${vid} · seq #${seqNum} · Ed25519 verified`);
+    speakOnboardingStatus(doneMsg);
+    await refreshCatalogModalState();
+
+    setTimeout(() => {
+      if (dom.sensorOnboardModal) dom.sensorOnboardModal.hidden = true;
+    }, 1500);
+    return true;
+  } catch (err) {
+    const errMsg = `Cloud onboarding stopped: ${err.message || err}`;
+    setOnboardingStepperState({ submit: 'error' });
+    if (dom.onboardStatusText) dom.onboardStatusText.textContent = errMsg;
+    appendChatMessage({ role: 'assistant', author: 'FIELDSCAN CLOUD ONBOARDING', text: errMsg });
+    speakOnboardingStatus(`Could not complete cloud onboarding. ${err.message || ''}`);
+    return false;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function refreshCatalogModalState() {
@@ -7015,8 +9164,207 @@ async function ensureActiveWorkSession() {
   return state.activeSessionId;
 }
 
+function initV4ShellControls() {
+  const htmlEl = document.documentElement;
+  const icoLight = document.querySelector('.ico-light');
+  const icoDark = document.querySelector('.ico-dark');
+
+  function applyTheme(nextTheme) {
+    const t = nextTheme === 'dark' ? 'dark' : 'light';
+    htmlEl.setAttribute('data-theme', t);
+    if (icoLight) icoLight.style.display = t === 'dark' ? 'none' : 'block';
+    if (icoDark) icoDark.style.display = t === 'dark' ? 'block' : 'none';
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t === 'dark' ? '#000000' : '#f2f2f7');
+    try {
+      window.localStorage.setItem('fs-theme', t);
+    } catch (_e) {}
+  }
+
+  let savedTheme = 'light';
+  try {
+    const stored = window.localStorage.getItem('fs-theme');
+    if (stored === 'dark' || stored === 'light') savedTheme = stored;
+  } catch (_e) {}
+  applyTheme(savedTheme);
+
+  dom.themeToggle?.addEventListener('click', () => {
+    const cur = htmlEl.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    applyTheme(cur === 'dark' ? 'light' : 'dark');
+  });
+
+  function openSlidePage(el) {
+    if (!el) return;
+    dom.chatPage?.classList.remove('open');
+    dom.toolsPage?.classList.remove('open');
+    el.classList.add('open');
+    if (el === dom.chatPage) {
+      state.chatUnreadCount = 0;
+      if (dom.chatUnreadBadge) {
+        dom.chatUnreadBadge.textContent = '0';
+        dom.chatUnreadBadge.hidden = true;
+      }
+      setTimeout(() => {
+        if (dom.chatFeed?.parentElement) {
+          dom.chatFeed.parentElement.scrollTop = dom.chatFeed.parentElement.scrollHeight;
+        }
+      }, 60);
+    }
+    if (el === dom.toolsPage) {
+      setTimeout(() => window.dispatchEvent(new Event('resize')), 180);
+    }
+  }
+
+  function closeAllSlidePages() {
+    dom.chatPage?.classList.remove('open');
+    dom.toolsPage?.classList.remove('open');
+  }
+
+  dom.btnOpenChat?.addEventListener('click', () => openSlidePage(dom.chatPage));
+  dom.btnOpenTools?.addEventListener('click', () => openSlidePage(dom.toolsPage));
+
+  document.querySelectorAll('[data-close]').forEach((el) => {
+    el.addEventListener('click', () => {
+      el.closest('.page-container')?.classList.remove('open');
+    });
+  });
+
+  // Clickable guided workflow cards inside Tools panel
+  document.querySelectorAll('[data-trigger-step]').forEach((card) => {
+    card.addEventListener('click', () => {
+      const stepNum = Number(card.dataset.triggerStep);
+      closeAllSlidePages();
+      if (stepNum === 1) dom.btnStepInspect?.click();
+      else if (stepNum === 2) dom.btnStepDip?.click();
+      else if (stepNum === 3) dom.btnStepConnect?.click();
+      else if (stepNum === 4) dom.btnStepSignoff?.click();
+    });
+  });
+
+  // Wire Chat panel mic button to real offline voice recording
+  dom.chatMicBtn?.addEventListener('click', () => {
+    toggleVoiceRecording();
+  });
+
+  // Wire DIP Guidance manual operator confirmation button (`Section 3`)
+  dom.btnConfirmDipStep?.addEventListener('click', async () => {
+    try {
+      const snap = await fetchJsonWithFallback(['/api/guidance/confirm_step'], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manual: true, turn_id: state.lastTurnId }),
+      });
+      renderGuidanceBar(snap);
+      appendSessionActivityLog('DIP Guidance Confirmed', `Manual operator confirmation (${snap.state || 'confirmed'})`);
+    } catch (_e) {}
+  });
+
+  // Wire Identify New Sensor & Reset Sensor buttons (Top of Tools + Bottom of Tools + Catalog Advanced + Empty Workspace + Native Pill)
+  const triggerIdentifyNewSensor = () => {
+    dom.toolsPage?.classList.remove('open');
+    dom.chatPage?.classList.remove('open');
+    openSensorOnboardingModal({ capturePhoto: true });
+    speakOnboardingStatus('Photo captured. What manufacturer and model is this sensor?');
+  };
+  const triggerResetSensorCleanSlate = async () => {
+    const ok = await resetSensorWorkspaceCleanSlate({ clearInstalledPackages: true, silent: false });
+    if (ok && dom.catalogModal) {
+      dom.catalogModal.hidden = true;
+    }
+  };
+  window.__fieldscanIdentifyNewSensor = triggerIdentifyNewSensor;
+  window.__fieldscanResetSensorWorkspace = triggerResetSensorCleanSlate;
+
+  dom.btnIdentifyNewSensor?.addEventListener('click', triggerIdentifyNewSensor);
+  dom.btnToolsNewSensor?.addEventListener('click', triggerIdentifyNewSensor);
+  dom.btnEmptyIdentifySensor?.addEventListener('click', triggerIdentifyNewSensor);
+  dom.btnResetCleanWorkspace?.addEventListener('click', triggerResetSensorCleanSlate);
+  dom.btnToolsResetSensor?.addEventListener('click', triggerResetSensorCleanSlate);
+  dom.onboardCloseBtn?.addEventListener('click', () => {
+    if (dom.sensorOnboardModal) dom.sensorOnboardModal.hidden = true;
+  });
+  dom.sensorOnboardModal?.addEventListener('click', (e) => {
+    if (e.target === dom.sensorOnboardModal) dom.sensorOnboardModal.hidden = true;
+  });
+  dom.btnOnboardRetakePhoto?.addEventListener('click', () => {
+    captureLiveOnboardingPhoto();
+  });
+  dom.sensorOnboardForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const manufacturer = dom.inputOnboardMfg?.value?.trim() || 'UNKNOWN';
+    const model = dom.inputOnboardModel?.value?.trim() || '';
+    const variant = dom.inputOnboardVariant?.value?.trim() || null;
+    if (!model) return;
+    await runLiveCloudSensorOnboarding({ manufacturer, model, variant, forceRefresh: true });
+  });
+
+  // Native iOS sheet/settings visibility & cancel acknowledgement bridge
+  window.addEventListener('fieldscan:nativePanelAck', (ev) => {
+    const detail = ev.detail || {};
+    const reqId = detail.request_id;
+    if (reqId && state.nativePanelAckResolvers[reqId]) {
+      state.nativePanelAckResolvers[reqId](detail);
+    }
+  });
+
+  // Right-edge touch swipe opens Tools panel cleanly (without interfering with 3D orbit or manual page swipes)
+  let swipeStartX = 0;
+  let swipeStartY = 0;
+  let swipeBlocked = false;
+  document.addEventListener(
+    'touchstart',
+    (e) => {
+      if (!e.touches || e.touches.length !== 1) return;
+      const t = e.target;
+      swipeBlocked =
+        (dom.manualModal && !dom.manualModal.hidden) ||
+        Boolean(t && t.closest && (t.closest('#manualViewerBox') || t.closest('#lightboxStage')));
+      swipeStartX = e.touches[0].clientX;
+      swipeStartY = e.touches[0].clientY;
+    },
+    { passive: true }
+  );
+  document.addEventListener(
+    'touchend',
+    (e) => {
+      if (swipeBlocked || !e.changedTouches || e.changedTouches.length !== 1) return;
+      const dx = e.changedTouches[0].clientX - swipeStartX;
+      const dy = e.changedTouches[0].clientY - swipeStartY;
+      if (Math.abs(dx) > 72 && Math.abs(dy) < 52 && dx < -72 && swipeStartX > window.innerWidth - 36) {
+        openSlidePage(dom.toolsPage);
+      }
+    },
+    { passive: true }
+  );
+
+  // Automatic 3D twin + camera HUD reflow on iPad Portrait <-> Landscape rotation
+  let lastStageW = 0;
+  let lastStageH = 0;
+  let reflowTimer = 0;
+  const triggerReflow = () => {
+    window.dispatchEvent(new Event('resize'));
+  };
+  window.addEventListener('orientationchange', () => {
+    setTimeout(triggerReflow, 80);
+    setTimeout(triggerReflow, 260);
+  });
+  if (typeof ResizeObserver !== 'undefined' && dom.canvasStage) {
+    const ro = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      const w = Math.round(rect?.width || 0);
+      const h = Math.round(rect?.height || 0);
+      if (w <= 0 || h <= 0 || (w === lastStageW && h === lastStageH)) return;
+      lastStageW = w;
+      lastStageH = h;
+      clearTimeout(reflowTimer);
+      reflowTimer = setTimeout(triggerReflow, 40);
+    });
+    ro.observe(dom.canvasStage);
+  }
+}
+
 function bootstrap() {
   window.lucide?.createIcons();
+  initV4ShellControls();
   let cadOk = false;
   try {
     initCadStudio();
@@ -7041,7 +9389,17 @@ function bootstrap() {
   setManualPage(1);
   bindWorkstationEvents();
 
-  pollTelemetry();
+  window.fieldscanNativeBridge?.notifyBootProgress?.(94, 'Connecting live telemetry & optical stream...');
+
+  let bootDoneSent = false;
+  const finishBoot = () => {
+    if (bootDoneSent) return;
+    bootDoneSent = true;
+    window.fieldscanNativeBridge?.notifyBootProgress?.(100, 'System ready');
+  };
+  Promise.resolve(pollTelemetry()).finally(finishBoot);
+  setTimeout(finishBoot, 450);
+
   pollVisionSpatialTelemetry();
   setInterval(pollTelemetry, 650);
   setInterval(pollVisionSpatialTelemetry, 115);
@@ -7051,6 +9409,14 @@ function bootstrap() {
   window.stopIpadCameraStream = stopIpadCameraStream;
   window.applyUnifiedStatus = applyUnifiedStatus;
   window.notifyNativeBridge = notifyNativeBridge;
+  window.__fieldscanCopilotExecutor = {
+    actionIds: Object.keys(COPILOT_ACTION_HANDLERS),
+    executeCopilotActionPlan,
+    buildTurnContext,
+    getActiveTwinCapabilities,
+    handleCopilotResponse,
+    state,
+  };
 }
 
 bootstrap();

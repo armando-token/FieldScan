@@ -103,6 +103,7 @@ def audit_python_dependency_dag(errors: list[str]) -> dict[str, list[str]]:
     for leaf_mod in (
         "manual_navigator",
         "twin_controller",
+        "copilot_registry",
         "scene_and_chat_router",
         "profiles_and_manual",
         "catalog_store",
@@ -113,6 +114,39 @@ def audit_python_dependency_dag(errors: list[str]) -> dict[str, list[str]]:
             _fail(errors, f"[DAG] Modular leaf `{leaf_mod}` must not import top-level orchestrators: {sorted(bad)}")
 
     return graph
+
+
+AUDITED_LOCALIZATION_FILES = {
+    "knowledge/localization/copilot_voice_es.json",
+}
+
+
+def audit_localized_voice_pack(errors: list[str]) -> None:
+    """Validate the explicitly scoped localized Spanish voice pack without weakening the EN-only code gate."""
+    pack_path = PROJECT_ROOT / "knowledge" / "localization" / "copilot_voice_es.json"
+    if not pack_path.is_file():
+        _fail(errors, "[LOC-PACK] Missing audited localized voice pack knowledge/localization/copilot_voice_es.json")
+        return
+    try:
+        raw_text = pack_path.read_text(encoding="utf-8")
+        data = json.loads(raw_text)
+    except Exception as exc:
+        _fail(errors, f"[LOC-PACK] Invalid JSON in copilot_voice_es.json: {exc}")
+        return
+    if data.get("audit_scope") != "localized_voice_pack_only" or data.get("locale") != "es":
+        _fail(errors, "[LOC-PACK] copilot_voice_es.json must declare audit_scope='localized_voice_pack_only' and locale='es'")
+    if re.search(r"<\s*script|javascript:|onerror\s*=|onload\s*=", raw_text, re.IGNORECASE):
+        _fail(errors, "[LOC-PACK] Unsafe HTML/script content detected inside copilot_voice_es.json")
+    for req_key in ("speech_locales", "tts_locales", "language_cues", "action_aliases", "responses"):
+        if not data.get(req_key):
+            _fail(errors, f"[LOC-PACK] Missing required key `{req_key}` in copilot_voice_es.json")
+    from fieldscan.copilot_registry import build_action_registry
+
+    reg_ids = {item["id"] for item in build_action_registry()}
+    alias_ids = set((data.get("action_aliases") or {}).keys())
+    unknown_ids = sorted(alias_ids - reg_ids)
+    if unknown_ids:
+        _fail(errors, f"[LOC-PACK] Unknown action IDs in copilot_voice_es.json: {unknown_ids}")
 
 
 def audit_english_only_gate(errors: list[str]) -> int:
@@ -126,10 +160,14 @@ def audit_english_only_gate(errors: list[str]) -> int:
         "build",
         "sessions",
         "fieldscan_source_delivery",
+        "UX",
     }
     checked = 0
     for path in PROJECT_ROOT.rglob("*"):
         if any(part in skip_dirs for part in path.parts) or not path.is_file():
+            continue
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        if rel in AUDITED_LOCALIZATION_FILES or rel.endswith("knowledge/localization/copilot_voice_es.json"):
             continue
         if path.name == "golden_contracts_v2_1.json" or path.name.startswith("MEGAPLAN_"):
             continue
@@ -139,7 +177,8 @@ def audit_english_only_gate(errors: list[str]) -> int:
             text = path.read_text(encoding="utf-8", errors="ignore")
             checked += 1
             if SPANISH_CHAR_RE.search(text) or SPANISH_WORD_RE.search(text):
-                _fail(errors, f"[EN-ONLY] Non-English token found in {path.relative_to(PROJECT_ROOT)}")
+                _fail(errors, f"[EN-ONLY] Non-English token found in {rel}")
+    audit_localized_voice_pack(errors)
     return checked
 
 
@@ -191,6 +230,20 @@ def audit_frontend_ptt_bargein_twin_and_manual(errors: list[str]) -> None:
     if "function applyTwinActionV1(" not in app_js or "function loadCatalogSceneFromDescriptor(" not in app_js:
         _fail(errors, "[3D-GLB] `applyTwinActionV1` or `loadCatalogSceneFromDescriptor` missing in static/app.js")
 
+    # 7. Unified Copilot Action Executor & Action Registry Handler Coverage (`Section 1 & 2`)
+    for req_fn in ("function escapeHtml(", "function buildTurnContext(", "function executeCopilotActionPlan(", "function postCopilotActionAck(", "COPILOT_ACTION_HANDLERS"):
+        if req_fn not in app_js:
+            _fail(errors, f"[COPILOT-UNIFIED] `{req_fn}` missing from static/app.js")
+    if "/api/copilot/action_ack" not in app_js:
+        _fail(errors, "[COPILOT-UNIFIED] `/api/copilot/action_ack` callback missing from static/app.js")
+
+    from fieldscan.copilot_registry import build_action_registry
+
+    for act in build_action_registry():
+        aid = act["id"]
+        if f"'{aid}':" not in app_js and f'"{aid}":' not in app_js:
+            _fail(errors, f"[COPILOT-REGISTRY] Action `{aid}` declared in copilot_registry.py has no handler in static/app.js")
+
 
 def audit_swift_voice_bargein_twin_and_xcode(errors: list[str]) -> None:
     ios_dir = PROJECT_ROOT / "ios" / "FieldScanM4"
@@ -204,6 +257,7 @@ def audit_swift_voice_bargein_twin_and_xcode(errors: list[str]) -> None:
         "FieldScanCatalogClient.swift",
         "FieldScanManualNavigator.swift",
         "FieldScanTwinController.swift",
+        "FieldScanCopilotRegistry.swift",
         "FieldScanVisionDetector.swift",
         "FieldScanConversationEngine.swift",
         "StandaloneFieldScanServer.swift",
@@ -225,10 +279,25 @@ def audit_swift_voice_bargein_twin_and_xcode(errors: list[str]) -> None:
         ('"twin_action":', "[SWIFT-3D-TWIN] `twin_action` missing from Swift `/api/diagnose` response"),
         ("host: .ipv4(.loopback)", "[SWIFT-NET] `StandaloneFieldScanServer` must bind strictly to 127.0.0.1 loopback"),
         ("simulatedVisualDipAddress", "[SWIFT-BUS] Visual DIP simulation state must remain isolated from targetSlaveId"),
+        ("/api/copilot/action_ack", "[SWIFT-COPILOT] `/api/copilot/action_ack` route missing in StandaloneFieldScanServer.swift"),
+        ("validatePinnedSessionManifest", "[SWIFT-CTX] Pinned-session authority guard missing in StandaloneFieldScanServer.swift"),
     )
     for needle, err_msg in required_markers:
         if needle not in srv_swift:
             _fail(errors, err_msg)
+
+    # Finding 2 permanent guard: `startHandsFreeVoiceMode` must NEVER assign `targetSlaveId =`
+    hf_match = re.search(r"private func startHandsFreeVoiceMode\b[\s\S]*?\n    \}\n", srv_swift)
+    if hf_match and re.search(r"\btargetSlaveId\s*=", hf_match.group(0)):
+        _fail(errors, "[SWIFT-BUS] Regression: `startHandsFreeVoiceMode` mutated `targetSlaveId`!")
+
+    # Live voice non-silence permanent guard: conversational/LLM path must NEVER pass `speakOnDevice: !deferTts`
+    if "synthesizeSpeechB64(diagnosisText, speakOnDevice: !deferTts" in srv_swift:
+        _fail(errors, "[SWIFT-VOICE] Regression: non-action-plan reply silenced by `deferTts` without UI ack!")
+    if "let capturedSceneGen = activeSceneGeneration" not in srv_swift:
+        _fail(errors, "[SWIFT-VOICE] Regression: hands-free turn must capture live `activeSceneGeneration` at turn start!")
+    if "private static func sanitizeJSONValue" not in srv_swift:
+        _fail(errors, "[SWIFT-JSON] Missing JSON sanitizer in `sendJSONResponse`!")
 
     if "es-MX" in srv_swift or "es-ES" in srv_swift:
         _fail(errors, "[SWIFT-EN] Residual Spanish recognizer/TTS locale found in StandaloneFieldScanServer.swift")

@@ -51,6 +51,9 @@ def test_zero_spanish_anywhere_in_codebase() -> None:
                 # Skip scanning the regex literal line inside this test file itself
                 if p.resolve() == Path(__file__).resolve():
                     continue
+                # Scoped localized voice resource is audited separately by audit_localized_voice_pack()
+                if p.relative_to(PROJECT_ROOT).as_posix() == "knowledge/localization/copilot_voice_es.json":
+                    continue
                 checked_files.append(p)
 
     violations: list[str] = []

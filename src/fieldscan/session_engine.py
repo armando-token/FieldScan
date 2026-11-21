@@ -458,6 +458,11 @@ class FieldScanSessionEngine:
         self._alert_last_fired_mono: dict[str, float] = {}
         self._link_transition_times: deque[float] = deque(maxlen=12)
 
+        # Evidence photo budget policy (`Section 5`: 10 auto-captures + 2 MB reduced thumbnail budget, text+keyframes default)
+        self.max_auto_captures_per_session: int = 10
+        self.thumbnail_budget_bytes: int = 2 * 1024 * 1024
+        self.keep_audio_opt_in: bool = False
+
         self._cleanup_orphan_temp_files()
         self._init_sqlite_schema()
 
@@ -543,6 +548,18 @@ class FieldScanSessionEngine:
                     supersedes_export_id TEXT,
                     manifest_json TEXT NOT NULL,
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS copilot_general_history (
+                    turn_id TEXT PRIMARY KEY,
+                    occurred_at_utc TEXT NOT NULL,
+                    input_mode TEXT NOT NULL,
+                    language TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    user_text TEXT NOT NULL,
+                    assistant_reply TEXT NOT NULL,
+                    attached_session_id TEXT,
+                    payload_json TEXT NOT NULL
                 );
                 """
             )
@@ -1241,10 +1258,10 @@ class FieldScanSessionEngine:
                         "required_frames": 5,
                         "quality": q,
                     }
-                self._auto_captured_keys.add(dedup_key)
                 capture_trigger = "auto_physical_window"
                 evidence_origin = "live_physical_camera"
             else:
+                dedup_key = None
                 capture_trigger = "manual_operator"
                 if is_sim_source:
                     evidence_origin = "simulation"
@@ -1252,6 +1269,26 @@ class FieldScanSessionEngine:
                     evidence_origin = "uploaded_file"
                 else:
                     evidence_origin = "manual_physical_camera"
+
+            state_doc = json.loads(row["state_json"])
+            ev_files_existing = list(state_doc.get("evidence_files") or [])
+            auto_count = sum(1 for item in ev_files_existing if item.get("capture_trigger") == "auto_physical_window")
+            thumb_bytes_used = sum(int(item.get("thumbnail_size_bytes") or 0) for item in ev_files_existing)
+
+            if not manual_trigger:
+                if auto_count >= self.max_auto_captures_per_session or thumb_bytes_used >= self.thumbnail_budget_bytes:
+                    return {
+                        "captured": False,
+                        "reason": "EVIDENCE_BUDGET_REACHED",
+                        "review_required": True,
+                        "auto_captures_used": auto_count,
+                        "max_auto_captures": self.max_auto_captures_per_session,
+                        "thumbnail_bytes_used": thumb_bytes_used,
+                        "thumbnail_budget_bytes": self.thumbnail_budget_bytes,
+                        "confirmed_evidence_preserved": True,
+                    }
+                if dedup_key is not None:
+                    self._auto_captured_keys.add(dedup_key)
 
             # Atomic temp-write -> validate -> rename (`Fase 6.1.2`, `EXP-03`)
             self._ensure_disk_space()
@@ -1268,6 +1305,30 @@ class FieldScanSessionEngine:
                 raise SessionDomainError("CORRUPT_PHOTO_WRITE", "Temporary photo verification failed", status_code=500)
             os.replace(orig_tmp, orig_final)
 
+            # Generate reduced preview thumbnail (`<= 480px` wide) for session budget tracking (`Section 5`)
+            thumb_name: str | None = None
+            thumb_size: int = 0
+            try:
+                bgr_thumb = cv2.imdecode(np.frombuffer(raw_jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if bgr_thumb is not None and bgr_thumb.size > 0:
+                    th, tw = bgr_thumb.shape[:2]
+                    if tw > 480:
+                        scale = 480.0 / float(tw)
+                        bgr_thumb = cv2.resize(bgr_thumb, (480, max(1, int(th * scale))), interpolation=cv2.INTER_AREA)
+                    ok_enc, enc_buf = cv2.imencode(".jpg", bgr_thumb, [int(cv2.IMWRITE_JPEG_QUALITY), 72])
+                    if ok_enc:
+                        t_bytes = enc_buf.tobytes()
+                        t_name = f"{session_id}_{photo_id}_thumb.jpg"
+                        t_tmp = self.evidence_dir / f"{t_name}.tmp"
+                        t_final = self.evidence_dir / t_name
+                        t_tmp.write_bytes(t_bytes)
+                        os.replace(t_tmp, t_final)
+                        thumb_name = t_name
+                        thumb_size = len(t_bytes)
+            except Exception:
+                thumb_name = None
+                thumb_size = 0
+
             deriv_name: str | None = None
             deriv_sha: str | None = None
             if annotated_jpeg:
@@ -1279,7 +1340,6 @@ class FieldScanSessionEngine:
                 os.replace(d_tmp, d_final)
                 deriv_name = d_name
 
-            state_doc = json.loads(row["state_json"])
             ev_record = {
                 "photo_id": photo_id,
                 "step_id": row["step_id"],
@@ -1291,6 +1351,8 @@ class FieldScanSessionEngine:
                 "roi_zone": roi_zone,
                 "original_filename": orig_name,
                 "original_sha256": digest,
+                "thumbnail_filename": thumb_name,
+                "thumbnail_size_bytes": thumb_size,
                 "annotated_filename": deriv_name,
                 "annotated_sha256": deriv_sha,
                 "width": q["width"],
@@ -1883,6 +1945,11 @@ class FieldScanSessionEngine:
                 "latest_sample_evaluation": freshness,
                 "confirmed_changes": confirmed_changes,
                 "observations": state_doc.get("observations") or [],
+                "conversation_turns": state_doc.get("conversation_turns") or [],
+                "action_receipts": state_doc.get("action_receipts") or [],
+                "guidance_history": state_doc.get("guidance_history") or [],
+                "local_drafts": state_doc.get("local_drafts") or [],
+                "evidence_policy": self.get_evidence_policy(),
                 "evidence_catalog": evidence_files,
                 "events": snap["events"],
             }
@@ -2086,7 +2153,19 @@ class FieldScanSessionEngine:
 
         ev_list = record.get("events") or []
         lines.append("")
-        lines.append(f"8. ORDERED SESSION EVENT TIMELINE ({len(ev_list)})")
+        lines.append(f"8. COPILOT TURNS, VERIFIED UI ACTIONS & GUIDANCE ({len(record.get('conversation_turns') or [])} turns)")
+        for idx, ct in enumerate(record.get("conversation_turns") or [], start=1):
+            receipts = ct.get("action_receipts") or []
+            rec_str = ", ".join(f"{r.get('action_id')}={r.get('status')}" for r in receipts) if receipts else "none"
+            lines.append(
+                f"   {idx}. [{ct.get('occurred_at_utc', '')}] ({ct.get('input_mode', 'text')}/{ct.get('language', 'en')}) "
+                f"User: {str(ct.get('user_text') or '')[:90]} | Applied: {rec_str}"
+            )
+        if not (record.get("conversation_turns") or []):
+            lines.append("   None recorded.")
+
+        lines.append("")
+        lines.append(f"9. ORDERED SESSION EVENT TIMELINE ({len(ev_list)})")
         for ev in ev_list:
             lines.append(
                 f"   seq={ev.get('seq')} | {ev.get('occurred_at_utc')} | {ev.get('kind')} | step={ev.get('step_id')} | actor={ev.get('actor')} | src={ev.get('source')}"
@@ -2210,3 +2289,361 @@ class FieldScanSessionEngine:
         }
         snap["freshness"] = self.evaluate_sample_freshness(snap)
         return snap
+
+    # ==========================================================================
+    # SECTION 5: DURABLE CONVERSATION HISTORY, UI RECEIPTS, ASSET RECALL & DRAFTS
+    # ==========================================================================
+
+    def get_evidence_policy(self) -> dict[str, Any]:
+        return {
+            "max_auto_captures_per_session": int(self.max_auto_captures_per_session),
+            "thumbnail_budget_bytes": int(self.thumbnail_budget_bytes),
+            "keep_audio_opt_in": bool(self.keep_audio_opt_in),
+            "default_retention_mode": "text_and_keyframe_photos",
+        }
+
+    def configure_evidence_policy(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            if "max_auto_captures_per_session" in payload:
+                self.max_auto_captures_per_session = max(1, min(100, int(payload["max_auto_captures_per_session"])))
+            if "thumbnail_budget_bytes" in payload:
+                self.thumbnail_budget_bytes = max(64 * 1024, min(50 * 1024 * 1024, int(payload["thumbnail_budget_bytes"])))
+            if "keep_audio_opt_in" in payload:
+                self.keep_audio_opt_in = bool(payload["keep_audio_opt_in"])
+            return self.get_evidence_policy()
+
+    def record_conversation_turn(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Persist a full copilot turn into the active session (or general history) deduplicated by `turn_id`."""
+        turn_id = str(payload.get("turn_id") or f"turn-{uuid.uuid4().hex[:10]}").strip()
+        session_id = str(payload.get("session_id") or "").strip() or None
+        user_text = str(payload.get("user_text") or "").strip()
+        assistant_reply = str(payload.get("assistant_reply") or "").strip()
+        input_mode = str(payload.get("input_mode") or "text").strip().lower()
+        language = str(payload.get("language") or self.preferred_language or "en").strip().lower()
+        provider = str(payload.get("provider") or "deterministic").strip()
+        now_utc = self._clock_utc()
+        now_mono = float(self._monotonic())
+
+        turn_entry: dict[str, Any] = {
+            "turn_id": turn_id,
+            "occurred_at_utc": now_utc,
+            "input_mode": input_mode,
+            "language": language,
+            "provider": provider,
+            "user_text": user_text,
+            "assistant_reply": assistant_reply,
+            "evidence_origin": str(payload.get("evidence_origin") or "copilot"),
+            "step_id": payload.get("step_id"),
+            "document_id": payload.get("document_id"),
+            "document_revision": payload.get("document_revision"),
+            "manual_page": payload.get("manual_page"),
+            "camera_ref": payload.get("camera_ref"),
+            "modbus_ref": payload.get("modbus_ref"),
+            "manifest_sha256": payload.get("manifest_sha256"),
+            "scene_generation": payload.get("scene_generation"),
+            "planned_actions": list(payload.get("planned_actions") or []),
+            "action_receipts": list(payload.get("action_receipts") or []),
+            "guidance_state": payload.get("guidance_state"),
+        }
+
+        with self._lock, self._connect_db() as conn:
+            if session_id:
+                row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+                if row is not None and row["status"] != "closed":
+                    state_doc = json.loads(row["state_json"])
+                    turns = list(state_doc.get("conversation_turns") or [])
+                    existing = next((t for t in turns if t.get("turn_id") == turn_id), None)
+                    if existing is not None:
+                        return {"ok": True, "deduplicated": True, "scope": "session", "session_id": session_id, "turn": existing}
+                    turn_entry["step_id"] = turn_entry["step_id"] or row["step_id"]
+                    turns.append(turn_entry)
+                    state_doc["conversation_turns"] = turns
+                    next_seq = int(row["seq"]) + 1
+                    ev_id = f"evt-{uuid.uuid4().hex[:12]}"
+                    conn.execute(
+                        """
+                        INSERT INTO session_events (
+                            session_id, seq, event_id, kind, step_id, occurred_at_utc,
+                            monotonic_s, boot_id, source, actor, simulation, payload_json
+                        ) VALUES (?, ?, ?, 'conversation.turn', ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            session_id,
+                            next_seq,
+                            ev_id,
+                            row["step_id"],
+                            now_utc,
+                            now_mono,
+                            PROCESS_BOOT_ID,
+                            input_mode,
+                            "copilot",
+                            int(row["simulation"]),
+                            json.dumps(turn_entry, default=str),
+                        ),
+                    )
+                    conn.execute(
+                        "UPDATE sessions SET seq = ?, updated_at_utc = ?, state_json = ? WHERE session_id = ?",
+                        (next_seq, now_utc, json.dumps(state_doc), session_id),
+                    )
+                    return {"ok": True, "deduplicated": False, "scope": "session", "session_id": session_id, "seq": next_seq, "turn": turn_entry}
+
+            # Persist outside an open work session in durable general copilot history
+            ex_row = conn.execute("SELECT payload_json FROM copilot_general_history WHERE turn_id = ?", (turn_id,)).fetchone()
+            if ex_row is not None:
+                return {"ok": True, "deduplicated": True, "scope": "general", "turn": json.loads(ex_row["payload_json"])}
+            conn.execute(
+                """
+                INSERT INTO copilot_general_history (
+                    turn_id, occurred_at_utc, input_mode, language, provider,
+                    user_text, assistant_reply, attached_session_id, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                """,
+                (turn_id, now_utc, input_mode, language, provider, user_text, assistant_reply, json.dumps(turn_entry, default=str)),
+            )
+            return {"ok": True, "deduplicated": False, "scope": "general", "turn": turn_entry}
+
+    def record_action_ack(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Attach verified UI execution receipts (`applied`/`unavailable`/`requires_confirmation`/`stale`) to a turn."""
+        turn_id = str(payload.get("turn_id") or "").strip()
+        if not turn_id:
+            raise SessionDomainError("MISSING_TURN_ID", "Action acknowledgement requires turn_id.", status_code=400)
+        session_id = str(payload.get("session_id") or "").strip() or None
+        receipts = list(payload.get("receipts") or [])
+        now_utc = self._clock_utc()
+        now_mono = float(self._monotonic())
+        ack_doc = {
+            "turn_id": turn_id,
+            "acked_at_utc": now_utc,
+            "scene_generation": payload.get("scene_generation"),
+            "input_mode": payload.get("input_mode") or "unknown",
+            "stale": bool(payload.get("stale", False)),
+            "receipts": receipts,
+        }
+        with self._lock, self._connect_db() as conn:
+            if session_id:
+                row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+                if row is not None and row["status"] != "closed":
+                    state_doc = json.loads(row["state_json"])
+                    all_acks = list(state_doc.get("action_receipts") or [])
+                    if any(a.get("turn_id") == turn_id and a.get("receipts") == receipts for a in all_acks):
+                        return {"ok": True, "deduplicated": True, "ack": ack_doc}
+                    all_acks.append(ack_doc)
+                    state_doc["action_receipts"] = all_acks
+                    turns = list(state_doc.get("conversation_turns") or [])
+                    for t in turns:
+                        if t.get("turn_id") == turn_id:
+                            t["action_receipts"] = receipts
+                    state_doc["conversation_turns"] = turns
+                    next_seq = int(row["seq"]) + 1
+                    ev_id = f"evt-{uuid.uuid4().hex[:12]}"
+                    conn.execute(
+                        """
+                        INSERT INTO session_events (
+                            session_id, seq, event_id, kind, step_id, occurred_at_utc,
+                            monotonic_s, boot_id, source, actor, simulation, payload_json
+                        ) VALUES (?, ?, ?, 'copilot.action_ack', ?, ?, ?, ?, 'hmi_executor', 'ui_ack', ?, ?)
+                        """,
+                        (session_id, next_seq, ev_id, row["step_id"], now_utc, now_mono, PROCESS_BOOT_ID, int(row["simulation"]), json.dumps(ack_doc, default=str)),
+                    )
+                    conn.execute(
+                        "UPDATE sessions SET seq = ?, updated_at_utc = ?, state_json = ? WHERE session_id = ?",
+                        (next_seq, now_utc, json.dumps(state_doc), session_id),
+                    )
+                    return {"ok": True, "deduplicated": False, "seq": next_seq, "ack": ack_doc}
+
+            ex = conn.execute("SELECT payload_json FROM copilot_general_history WHERE turn_id = ?", (turn_id,)).fetchone()
+            if ex is not None:
+                obj = json.loads(ex["payload_json"])
+                obj["action_receipts"] = receipts
+                conn.execute("UPDATE copilot_general_history SET payload_json = ? WHERE turn_id = ?", (json.dumps(obj, default=str), turn_id))
+            return {"ok": True, "deduplicated": False, "ack": ack_doc}
+
+    def list_general_history(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._lock, self._connect_db() as conn:
+            rows = conn.execute(
+                "SELECT payload_json, attached_session_id FROM copilot_general_history ORDER BY occurred_at_utc DESC LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
+            out = []
+            for r in rows:
+                d = json.loads(r["payload_json"])
+                d["attached_session_id"] = r["attached_session_id"]
+                out.append(d)
+            return out
+
+    def attach_general_history_to_session(self, session_id: str, turn_ids: list[str], *, confirmed: bool) -> dict[str, Any]:
+        if not confirmed:
+            raise SessionDomainError("CONFIRMATION_REQUIRED", "Associating general history with an asset session requires confirmed=true.", status_code=400)
+        attached: list[str] = []
+        with self._lock, self._connect_db() as conn:
+            row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+            if row is None:
+                raise SessionDomainError("SESSION_NOT_FOUND", f"Unknown session '{session_id}'", status_code=404)
+            state_doc = json.loads(row["state_json"])
+            turns = list(state_doc.get("conversation_turns") or [])
+            existing_ids = {t.get("turn_id") for t in turns}
+            for tid in turn_ids:
+                gr = conn.execute("SELECT payload_json FROM copilot_general_history WHERE turn_id = ?", (tid,)).fetchone()
+                if gr is None:
+                    continue
+                if tid not in existing_ids:
+                    t_obj = json.loads(gr["payload_json"])
+                    t_obj["attached_from_general_history"] = True
+                    turns.append(t_obj)
+                    existing_ids.add(tid)
+                conn.execute("UPDATE copilot_general_history SET attached_session_id = ? WHERE turn_id = ?", (session_id, tid))
+                attached.append(tid)
+            if attached:
+                state_doc["conversation_turns"] = turns
+                next_seq = int(row["seq"]) + 1
+                now_utc = self._clock_utc()
+                conn.execute(
+                    "UPDATE sessions SET seq = ?, updated_at_utc = ?, state_json = ? WHERE session_id = ?",
+                    (next_seq, now_utc, json.dumps(state_doc), session_id),
+                )
+            return {"ok": True, "session_id": session_id, "attached_turn_ids": attached}
+
+    def recall_asset_history(self, *, profile_id: str, serial_number: str) -> dict[str, Any]:
+        """Retrieve prior sessions for confirmed (profile_id, serial_number) with strictly factual episode counts."""
+        clean_sn = (serial_number or "").strip()
+        if not clean_sn:
+            return {"matched_sessions": [], "episode_counts": {}, "summary": "No confirmed serial number provided."}
+        with self._lock, self._connect_db() as conn:
+            rows = conn.execute(
+                """
+                SELECT session_id, created_at_utc, status, state_json
+                FROM sessions
+                WHERE profile_id = ? AND serial_number = ? AND asset_confirmed = 1
+                ORDER BY created_at_utc DESC
+                """,
+                (profile_id, clean_sn),
+            ).fetchall()
+            episodes = []
+            no_resp_ids: list[str] = []
+            fault_7fff_ids: list[str] = []
+            for r in rows:
+                sd = json.loads(r["state_json"])
+                as_f = sd.get("as_found") or {}
+                has_timeout_ev = conn.execute(
+                    "SELECT 1 FROM session_events WHERE session_id = ? AND kind = 'sensor.timeout' LIMIT 1",
+                    (r["session_id"],),
+                ).fetchone() is not None
+                has_no_resp = (as_f.get("communication") == "no_response") or has_timeout_ev
+                if has_no_resp:
+                    no_resp_ids.append(r["session_id"])
+                last_s = sd.get("last_valid_sample") or {}
+                has_7fff = any(m.get("quality") == "invalid_sentinel_7fff" for m in (last_s.get("measurements") or []))
+                if has_7fff:
+                    fault_7fff_ids.append(r["session_id"])
+                episodes.append(
+                    {
+                        "session_id": r["session_id"],
+                        "created_at_utc": r["created_at_utc"],
+                        "status": r["status"],
+                        "as_found_communication": as_f.get("communication"),
+                        "confirmed_changes_count": len(sd.get("confirmed_changes") or []),
+                        "conversation_turns_count": len(sd.get("conversation_turns") or []),
+                    }
+                )
+            summary = (
+                f"{len(no_resp_ids)} session(s) with no_response recorded for {profile_id} ({clean_sn}); factual episodes linked without inferring root cause."
+                if no_resp_ids
+                else f"{len(episodes)} prior confirmed session(s) found for {profile_id} ({clean_sn})."
+            )
+            return {
+                "profile_id": profile_id,
+                "serial_number": clean_sn,
+                "matched_sessions": episodes,
+                "episode_counts": {
+                    "total_sessions": len(episodes),
+                    "no_response_sessions": len(no_resp_ids),
+                    "no_response_session_ids": no_resp_ids,
+                    "fault_7fff_sessions": len(fault_7fff_ids),
+                    "fault_7fff_session_ids": fault_7fff_ids,
+                },
+                "root_cause_inferred": False,
+                "summary": summary,
+            }
+
+    def create_local_draft(self, session_id: str, *, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Prepare strictly local manufacturer or stock draft (never auto-sends externally; stock requires explicit verified counts)."""
+        clean_kind = kind.strip().lower()
+        now_utc = self._clock_utc()
+        if clean_kind == "stock":
+            sku = str(payload.get("sku") or "").strip()
+            verified_by_op = bool(payload.get("verified_by_operator", False))
+            raw_qty = payload.get("verified_quantity")
+            raw_thr = payload.get("reorder_threshold")
+            if not sku or not verified_by_op or raw_qty is None or raw_thr is None:
+                raise SessionDomainError(
+                    "UNVERIFIED_STOCK_DATA",
+                    "Stock draft requires explicit sku, verified_quantity, reorder_threshold, and verified_by_operator=true. Missing sensor readings never prove low stock.",
+                    status_code=400,
+                )
+            qty = int(raw_qty)
+            thr = int(raw_thr)
+            draft = {
+                "draft_id": f"drf-stk-{uuid.uuid4().hex[:8]}",
+                "kind": "stock_replenishment",
+                "created_at_utc": now_utc,
+                "session_id": session_id,
+                "sku": sku,
+                "verified_quantity": qty,
+                "reorder_threshold": thr,
+                "below_threshold": qty <= thr,
+                "verified_by_operator": True,
+                "local_only": True,
+                "external_sent": False,
+                "notes": str(payload.get("notes") or "").strip(),
+            }
+        elif clean_kind == "manufacturer":
+            with self._lock, self._connect_db() as conn:
+                snap = self._load_session_snapshot_unlocked(conn, session_id)
+            sd = snap["state"]
+            selected_files = list(payload.get("selected_files") or [f.get("original_filename") for f in (sd.get("evidence_files") or []) if f.get("original_filename")])
+            questions = list(payload.get("questions") or ["Please advise on bench observations and recommended corrective action."])
+            draft = {
+                "draft_id": f"drf-mfg-{uuid.uuid4().hex[:8]}",
+                "kind": "manufacturer_escalation",
+                "created_at_utc": now_utc,
+                "session_id": session_id,
+                "device_profile": snap["profile_id"],
+                "serial_number": snap.get("serial_number"),
+                "facts": {
+                    "as_found": sd.get("as_found"),
+                    "confirmed_changes": sd.get("confirmed_changes") or [],
+                    "latest_sample": snap.get("freshness"),
+                    "conversation_turns_count": len(sd.get("conversation_turns") or []),
+                },
+                "questions": questions,
+                "selected_files": selected_files,
+                "local_only": True,
+                "external_sent": False,
+            }
+        else:
+            raise SessionDomainError("UNSUPPORTED_DRAFT_KIND", f"Unsupported draft kind '{kind}'", status_code=400)
+
+        with self._lock, self._connect_db() as conn:
+            row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+            if row is None:
+                raise SessionDomainError("SESSION_NOT_FOUND", f"Unknown session '{session_id}'", status_code=404)
+            sd = json.loads(row["state_json"])
+            drafts = list(sd.get("local_drafts") or [])
+            drafts.append(draft)
+            sd["local_drafts"] = drafts
+            next_seq = int(row["seq"]) + 1
+            ev_id = f"evt-{uuid.uuid4().hex[:12]}"
+            conn.execute(
+                """
+                INSERT INTO session_events (
+                    session_id, seq, event_id, kind, step_id, occurred_at_utc,
+                    monotonic_s, boot_id, source, actor, simulation, payload_json
+                ) VALUES (?, ?, ?, 'draft.prepared', ?, ?, ?, ?, 'local_draft', 'operator', ?, ?)
+                """,
+                (session_id, next_seq, ev_id, row["step_id"], now_utc, float(self._monotonic()), PROCESS_BOOT_ID, int(row["simulation"]), json.dumps(draft, default=str)),
+            )
+            conn.execute(
+                "UPDATE sessions SET seq = ?, updated_at_utc = ?, state_json = ? WHERE session_id = ?",
+                (next_seq, now_utc, json.dumps(sd), session_id),
+            )
+        return {"ok": True, "draft": draft}
